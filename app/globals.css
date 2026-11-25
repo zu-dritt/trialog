@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0f1115;
+  --color-panel: #171a21;
+  --color-line: #262a33;
+  --color-fg: #e6e8ee;
+  --color-muted: #8b91a0;
+  --color-grok: #f0883e;
+  --color-claude: #c792ea;
+  --color-david: #4fb3ff;
+  --color-hub: #7d8590;
+  --color-ok: #3fb950;
+  --color-bad: #f85149;
+  --color-decision: #d29922;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  :root { color-scheme: dark; }
+  html, body { height: 100%; background: var(--color-bg); color: var(--color-fg); }
+  body { font: 15px/1.5 var(--font-sans); }
+  a { color: var(--color-david); }
+}
+
+/* Rendered Markdown inside a message. Tailwind's preflight resets lists, headings and margins,
+   so the few elements agents actually use get their spacing back here. */
+@layer components {
+  .md > :first-child { margin-top: 2px; }
+  .md > :last-child { margin-bottom: 0; }
+  .md p { margin: 4px 0; }
+  .md ul { list-style: disc; padding-left: 1.6em; margin: 4px 0; }
+  .md ol { list-style: decimal; padding-left: 1.6em; margin: 4px 0; }
+  .md li { margin: 2px 0; }
+  .md h1, .md h2, .md h3, .md h4 { font-weight: 700; margin: 10px 0 4px; }
+  .md h1 { font-size: 1.35em; }
+  .md h2 { font-size: 1.2em; }
+  .md h3 { font-size: 1.08em; }
+  .md a { text-decoration: underline; }
+  .md strong { font-weight: 700; }
+  .md em { font-style: italic; }
+  .md hr { border-color: var(--color-line); margin: 8px 0; }
+  .md pre {
+    background: #0a0c10; border: 1px solid var(--color-line); border-radius: 6px; padding: 10px;
+    overflow-x: auto; font-size: 13px; line-height: 1.45; margin: 6px 0;
+  }
+  .md code { font-family: var(--font-mono); font-size: 13px; }
+  .md :not(pre) > code { background: var(--color-line); padding: 1px 5px; border-radius: 4px; }
+  .md table { border-collapse: collapse; margin: 6px 0; }
+  .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; }
+  .md th { font-weight: 700; }
+  .md blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--color-line); color: var(--color-muted); }
+}

@@ -1,0 +1,5 @@
+# Files Vercel doesn't need to upload.
+.env*
+!.env.example
+.next
+node_modules

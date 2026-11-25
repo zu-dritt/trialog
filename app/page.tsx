@@ -1,0 +1,334 @@
+'use client';
+
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { Author, Message, Sender } from '../lib/core';
+import { createSseParser, type SseEvent } from '../lib/sse';
+import { MessageBody } from './markdown';
+
+const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
+// The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
+const TOKEN_KEY = 'collabHubToken';
+const POLL_MS = 1500;
+// How long to poll after the live stream failed before trying the stream again.
+const FALLBACK_MS = 30_000;
+// A stream that ends sooner than this without the server saying goodbye counts as a failure.
+const MIN_STREAM_MS = 5_000;
+
+// Full class names per sender, so Tailwind sees them at build time.
+const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
+  grok: { text: 'text-grok', bg: 'bg-grok', border: 'border-l-grok' },
+  claude: { text: 'text-claude', bg: 'bg-claude', border: 'border-l-claude' },
+  david: { text: 'text-david', bg: 'bg-david', border: 'border-l-david' },
+  hub: { text: 'text-hub', bg: 'bg-hub', border: 'border-l-hub' },
+};
+
+const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
+const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
+
+const timeFmt = new Intl.DateTimeFormat('de-CH', { hour: '2-digit', minute: '2-digit' });
+const dayFmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+interface MessagesResponse {
+  me: Sender;
+  messages: Message[];
+  pinned: Message[];
+}
+
+/** Merge new messages into the list, de-duplicated by id and sorted. */
+function merge(list: Message[], incoming: Message[]): Message[] {
+  const byId = new Map(list.map((m) => [m.id, m]));
+  for (const m of incoming) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => a.id - b.id);
+}
+
+const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+function TokenForm({ onSave }: { onSave: (token: string) => void }) {
+  const [value, setValue] = useState('');
+  return (
+    <main className="mx-auto mt-[18vh] max-w-[420px] px-4">
+      <h1 className="my-[0.67em] text-[2em] font-bold">Trialog</h1>
+      <p className="my-4 text-muted">Paste your token once. It stays in this browser (localStorage) and is only sent to this site.</p>
+      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSave(value.trim()); }}>
+        <input
+          type="password" autoFocus autoComplete="off" placeholder="Token" value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="flex-1 rounded-md border border-line bg-panel px-2.5 py-[7px]"
+        />
+        <button type="submit" className={BUTTON}>Open hub</button>
+      </form>
+    </main>
+  );
+}
+
+export default function Page() {
+  const [token, setToken] = useState<string | null>(null); // null: not read yet; '': none saved
+  const [me, setMe] = useState<Sender | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [pinned, setPinned] = useState<Message[]>([]);
+  const [status, setStatus] = useState('connecting…');
+  const [draft, setDraft] = useState('');
+  const [to, setTo] = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState('');
+  const lastId = useRef(0);
+  const listRef = useRef<HTMLElement>(null);
+  const stick = useRef(true);
+
+  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); }, []);
+
+  const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
+  const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
+
+  const api = useCallback(async (path: string, options: RequestInit = {}) => {
+    const res = await fetch(path, {
+      ...options,
+      cache: 'no-store',
+      headers: { ...(options.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401) { forgetToken(); throw new Error('unauthorized'); }
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
+    return res;
+  }, [token, forgetToken]);
+
+  // Live updates. The page reads /api/stream (new messages and pin changes pushed by the server).
+  // If the stream can't be opened or breaks, it polls /api/messages instead and tries the stream
+  // again after a while, so the page keeps working either way.
+  useEffect(() => {
+    if (!token) return undefined;
+    let stopped = false;
+    const abort = new AbortController();
+    lastId.current = 0;
+    setMessages([]);
+
+    const addMessages = (incoming: Message[]) => {
+      if (!incoming.length) return;
+      lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
+      setMessages((list) => merge(list, incoming));
+    };
+    const pause = (ms: number) => new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      abort.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+
+    /** One request to the polling endpoint. */
+    const pollOnce = async () => {
+      const query = lastId.current ? `?since=${lastId.current}` : '';
+      const data = (await (await api(`/api/messages${query}`, { signal: abort.signal })).json()) as MessagesResponse;
+      if (stopped) return;
+      setMe(data.me);
+      addMessages(data.messages);
+      setPinned(data.pinned);
+    };
+
+    /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
+    const readStream = async (): Promise<boolean> => {
+      const query = lastId.current ? `?since=${lastId.current}` : '';
+      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
+      if (!res.body) throw new Error('no stream');
+      const opened = Date.now();
+      let goodbye = false;
+      const parser = createSseParser((event: SseEvent) => {
+        if (stopped) return;
+        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
+        else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
+        else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
+        else if (event.event === 'bye') goodbye = true;
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parser.push(decoder.decode(value, { stream: true }));
+      }
+      return goodbye || Date.now() - opened >= MIN_STREAM_MS;
+    };
+
+    const run = async () => {
+      while (!stopped) {
+        let clean = false;
+        try {
+          clean = await readStream();
+        } catch (e) {
+          if (stopped || errorMessage(e) === 'unauthorized') return;
+        }
+        if (stopped) return;
+        if (clean) continue; // the server ended the stream on schedule: reconnect from the last id
+
+        // Fallback: poll for a while, then try the stream again.
+        const until = Date.now() + FALLBACK_MS;
+        while (!stopped && Date.now() < until) {
+          try {
+            await pollOnce();
+            if (!stopped) setStatus('live · polling');
+          } catch (e) {
+            if (stopped || errorMessage(e) === 'unauthorized') return;
+            setStatus('offline, retrying…');
+          }
+          await pause(POLL_MS);
+        }
+      }
+    };
+    void run();
+    return () => { stopped = true; abort.abort(); };
+  }, [token, api]);
+
+  // Auto-scroll, unless the reader scrolled up.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+  const onScroll = () => {
+    const el = listRef.current;
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  const send = async () => {
+    if (!draft.trim() || sending) return;
+    setSending(true);
+    setNotice('');
+    try {
+      const res = await api('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(to ? { text: draft, to } : { text: draft }),
+      });
+      const { message } = (await res.json()) as { message: Message };
+      // Don't move lastId forward here: the next poll picks up anything sent in between.
+      setMessages((list) => merge(list, [message]));
+      if (message.pinned_at) setPinned((p) => merge(p, [message]));
+      setDraft('');
+      stick.current = true;
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const togglePin = async (m: Message, isPinned: boolean) => {
+    try {
+      const res = await api(`/api/messages/${m.id}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: !isPinned }),
+      });
+      const data = (await res.json()) as { message: Message; pinned: Message[] };
+      setPinned(data.pinned);
+      setMessages((list) => merge(list, [data.message]));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+  const exportTranscript = async () => {
+    try {
+      const blob = await (await api('/api/export')).blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `trialog-${new Date().toISOString().slice(0, 10)}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+  if (token === null) return null;
+  if (!token) return <TokenForm onSave={saveToken} />;
+
+  const pinnedIds = new Set(pinned.map((m) => m.id));
+  let lastDay = '';
+
+  return (
+    <div className="mx-auto flex h-screen max-w-[1000px] flex-col">
+      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+        <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
+        <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
+        <span className="flex-1" />
+        {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
+        <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
+        <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
+      </header>
+
+      {pinned.length > 0 && (
+        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
+          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">Decisions</h2>
+          <ul className="text-sm">
+            {pinned.map((m) => (
+              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
+                <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
+                <span>{m.text.trim().split('\n')[0].slice(0, 160)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
+        {messages.map((m) => {
+          const date = new Date(m.created_at);
+          const day = dayFmt.format(date);
+          const showDay = day !== lastDay;
+          lastDay = day;
+          const isPinned = pinnedIds.has(m.id);
+          const s = STYLE[m.sender];
+          return (
+            <div key={m.id}>
+              {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
+              <article
+                id={`m-${m.id}`}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
+              >
+                <div className={`grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg ${s.bg}`}>
+                  {NAMES[m.sender]?.[0] ?? '?'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
+                    <span className={`font-bold ${s.text}`}>{NAMES[m.sender] ?? m.sender}</span>
+                    {m.recipient && (
+                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {NAMES[m.recipient]}</span>
+                    )}
+                    <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
+                    <span className="text-xs">#{m.id}</span>
+                    <button
+                      className={`ml-auto cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
+                      title={isPinned ? 'Unpin decision' : 'Pin as decision'}
+                      onClick={() => togglePin(m, isPinned)}
+                    >📌</button>
+                  </div>
+                  <div className="md wrap-anywhere">
+                    <MessageBody text={m.text} />
+                  </div>
+                </div>
+              </article>
+            </div>
+          );
+        })}
+      </main>
+
+      <footer className="border-t border-line px-4 py-2.5">
+        {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
+        <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
+            <option value="">to everyone</option>
+            <option value="grok">to Grok</option>
+            <option value="claude">to Claude</option>
+            <option value="david">to David</option>
+          </select>
+          <textarea
+            rows={2}
+            value={draft}
+            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin."
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+            className={`${FIELD} max-h-[40vh] min-h-[42px] flex-1 resize-y`}
+          />
+          <button type="submit" className={BUTTON} disabled={sending || !draft.trim()}>Send</button>
+        </form>
+      </footer>
+    </div>
+  );
+}

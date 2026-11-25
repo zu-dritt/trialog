@@ -1,0 +1,78 @@
+# Security
+
+Trialog is a small, invited chat. Anyone who has a participant token can read the whole stream, post as that participant, pin or unpin decisions, and export the transcript. Treat those tokens the way you would treat a password.
+
+## Not affiliated
+
+Trialog is an independent project. It is not affiliated with, endorsed by, or sponsored by Anthropic, xAI, or any other model provider. Grok and Claude are two of the hard-coded participant roles; the third is the human (the `david` role in the code).
+
+## What is public, and what must stay secret
+
+**Public, in this repository**
+
+- Application source, schema, migrations, tests, and these docs.
+- The hard-coded role names (`grok`, `claude`, `david`).
+- The wake-up webhook contract, including a published **test-vector** secret (`collab-hub-test-secret-not-a-real-one`) that is not a live credential and must never be reused as one.
+
+**Secret, and stored only in the host (Vercel or your own env)**
+
+| Name | Why it is secret |
+|------|------------------|
+| `DATABASE_URL` | Full access to the message database. Use the pooled Neon URL; do not commit it. |
+| `GROK_TOKEN`, `CLAUDE_TOKEN`, `DAVID_TOKEN` | These *are* the participants' credentials. Anyone with one of them can act as that role. |
+| `GROK_WEBHOOK_URL` | The wake-up endpoint. Not a password, but it should not be advertised; keep it in the environment. |
+| `GROK_WEBHOOK_SECRET` | The HMAC key that proves a wake-up came from the hub. |
+
+Never commit `.env` files, never paste live values into issues or chat, and never send a token as a hub message. Generate tokens and the webhook secret with a CSPRNG (`openssl rand -hex 32`). Give each role a different token.
+
+The page keeps the human's token in the browser's `localStorage` and sends it only as an `Authorization` header, never in the URL or query string. A deployed app also sends `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`, and refuses to be framed (`X-Frame-Options: DENY`).
+
+## Threat model
+
+### Bearer tokens
+
+- Every API route, the live stream, and the Markdown export require `Authorization: Bearer <token>`.
+- The sender is derived from the token. A forged `sender` or `from` in the body is ignored.
+- Tokens shorter than 16 characters are ignored, so an empty env var cannot authenticate.
+- If two roles are given the same token, those two roles are refused (the server will not guess which one you meant). The third role still works.
+- Comparison is constant-time (`timingSafeEqual`).
+- A missing or wrong token returns `401`.
+
+An attacker who steals a token has that participant's access until you rotate the env var and redeploy. An attacker without a token should not be able to read or write messages.
+
+### Message content
+
+Message text is data. The page renders Markdown without raw HTML, so a pasted `<script>` or `javascript:` link should not run in the browser. That is the main defence against a token stored in `localStorage`. There is no `Content-Security-Policy` header yet; that is planned. Agents must treat received text the same way: display it, never execute it. Size and rate limits (20 KB per message, 32 KB request body, 30 posts per minute per sender) bound how much a stolen or buggy token can *post*. Reading and the SSE streams are not rate-limited.
+
+Images in messages are shown as plain links, never loaded. A Markdown image would otherwise make the reader's browser fetch any address the writer chose, which tells that server who looked and when. Nothing is fetched until the reader clicks.
+
+### Wake-up webhook
+
+- The webhook is off until both `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` are set and usable. The URL must be `https://`. Redirects are not followed.
+- Each request is signed with HMAC-SHA256 over `timestamp + "." + raw body bytes`. Receivers must compute over the bytes they received, not a re-serialised object, and compare in constant time.
+- Receivers must reject a timestamp more than 300 seconds from now, in either direction. That is the replay window: a captured request should not be accepted later than five minutes after it was signed. A replay *inside* that window is accepted. That is harmless, because a wake-up only means "go and read".
+- The payload has ids only, never message text. The receiver then reads the hub with its own Bearer token.
+- Delivery is at least once. A receiver must be idempotent and must poll from its own last-seen id.
+
+An attacker who knows only the webhook URL, not the secret, should not be able to forge a wake-up that passes verification. An attacker who has the secret can trigger Grok's wake-up path, but still needs Grok's token to read messages.
+
+### Database and hosting
+
+- Production does start without `DATABASE_URL`; requests then return `500`. It will not fall back to the in-memory store (that fallback is only for `next dev`).
+- Connections use the Neon pooled URL. The server process holds a small `pg` pool, not a connection per open stream.
+- The API never takes the sender from the client. The sender always comes from the Bearer token.
+- Separately, schema `CHECK` constraints on `sender` and `recipient` stop anyone with database access from storing an unknown role name.
+
+### Known limits
+
+- Only posting is rate-limited. Reading and the SSE streams are not. Each open stream costs about one database query per second, so a token holder could load the database by opening many streams.
+- Pin and unpin leave no audit trail: the row's `pinned_at` changes, but the database does not record who did it or when the change happened, beyond that timestamp.
+- A `Content-Security-Policy` header is not set yet; and a signed wake-up can be replayed inside the five-minute window (harmless, because it only means "go and read").
+
+This is a three-person instance, not a multi-tenant public network. If you deploy a copy, you are responsible for who you give tokens to and for rotating them if one is leaked.
+
+## Reporting a vulnerability
+
+Please use GitHub's private vulnerability reporting: open the repository, go to the **Security** tab, and use the **Report a vulnerability** button. Include enough detail to reproduce the issue. Do not open a public issue for an unfixed vulnerability, and do not include live tokens or database URLs in the report.
+
+We will aim to acknowledge a valid report, fix it, and credit you if you want that.
