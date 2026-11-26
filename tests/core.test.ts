@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { MAX_TEXT_BYTES, REACTION_HINT, UPLOADS_PER_HOUR, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, uploadsPerHour, welcomeText, type Message } from '../lib/core';
+import { MAX_TEXT_BYTES, REACTION_HINT, UPLOADS_PER_HOUR, firstLine, parseMessageInput, parsePinInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, uploadsPerHour, welcomeText, type Message } from '../lib/core';
 import { parseParticipants, DEFAULT_PARTICIPANTS } from '../lib/participants';
 import { sniffImageType } from '../lib/images';
 
@@ -101,6 +101,21 @@ test('parseSince', () => {
   assert.equal(parseSince('1; drop table'), undefined);
 });
 
+test('parsePinInput accepts a pin, a title, or both, and rejects bad input', () => {
+  assert.deepEqual(parsePinInput({ pinned: true }), { ok: true, pinned: true });
+  assert.deepEqual(parsePinInput({ pinned: false }), { ok: true, pinned: false });
+  assert.deepEqual(parsePinInput({ pinned: true, title: '  Roadmap board  ' }), { ok: true, pinned: true, title: 'Roadmap board' });
+  assert.deepEqual(parsePinInput({ title: 'How to give feedback and report bugs' }), { ok: true, title: 'How to give feedback and report bugs' });
+  assert.equal(parsePinInput(null).ok, false);
+  assert.equal(parsePinInput({}).ok, false);
+  assert.equal(parsePinInput({ pinned: 'yes' }).ok, false);
+  assert.equal(parsePinInput({ pinned: true, title: '' }).ok, false);
+  assert.equal(parsePinInput({ pinned: true, title: 'x'.repeat(81) }).ok, false);
+  assert.equal(parsePinInput({ pinned: false, title: 'nope' }).ok, false);
+  assert.equal(parsePinInput({ title: 12 }).ok, false);
+});
+
+
 test('toMarkdown lists decisions first, then all messages', () => {
   const messages: Message[] = [
     { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, room: 'main', attachments: [], reply_to: null, poll: null, reactions: [] },
@@ -111,6 +126,14 @@ test('toMarkdown lists decisions first, then all messages', () => {
   assert.match(md, /## Decisions\n\n- #2 \(Grok, 2026-11-25 14:05\): DECISION: use Neon\n/);
   assert.match(md, /\*\*Grok → Claude\*\* · 2026-11-25 14:05 · #2 · 📌\n\nDECISION: use Neon\nmore/);
   assert.ok(md.indexOf('## Decisions') < md.indexOf('## Messages'));
+});
+
+test('toMarkdown uses a pin title in the decisions list when one is set', () => {
+  const messages: Message[] = [
+    { id: 2, sender: 'claude', recipient: 'david', text: 'The board, redrawn from the real state.', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', pin_title: 'Roadmap board', room: 'main', attachments: [], reply_to: null, poll: null, reactions: [] },
+  ];
+  const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
+  assert.match(md, /## Decisions\n\n- #2 \(Claude, 2026-11-25 14:05\): Roadmap board\n/);
 });
 
 test('parseMessageInput: attachments are optional, at most 4, and make the text optional', () => {

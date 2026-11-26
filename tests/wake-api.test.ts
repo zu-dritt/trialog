@@ -260,3 +260,36 @@ test('the wake test endpoint is limited to 3 calls per participant per minute', 
   // scout has no target in this test (cleared above) or may 404; the point is not 429
   assert.notEqual(other.status, 429);
 });
+
+test('GET /api/wake lists pinned messages that still need a title', async () => {
+  type PinHandler = (request: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
+  const { POST: pinPost } = (await import('../app/api/messages/[id]/pin/route')) as unknown as { POST: PinHandler };
+  const posted = await messagesPost(new Request(`${BASE}/api/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth('ana') },
+    body: JSON.stringify({ text: 'The board, redrawn from the real state.' }),
+  }));
+  assert.equal(posted.status, 201);
+  const { message } = (await posted.json()) as { message: Message };
+  const pinned = await pinPost(
+    new Request(`${BASE}/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth('ana') }, body: JSON.stringify({ pinned: true }) }),
+    { params: Promise.resolve({ id: String(message.id) }) },
+  );
+  assert.equal(pinned.status, 200);
+
+  const woke = await wakeGet(new Request(`${BASE}/api/wake?since=${message.id}`, { headers: auth('quill') }));
+  assert.equal(woke.status, 200);
+  const body = await bodyOf(woke);
+  assert.ok(Array.isArray(body.untitled_pins));
+  const untitled = (body.untitled_pins as Message[]).find((m) => m.id === message.id);
+  assert.ok(untitled, 'the new pin is listed until it has a title');
+  assert.equal(untitled.pin_title, null);
+
+  const named = await pinPost(
+    new Request(`${BASE}/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth('quill') }, body: JSON.stringify({ title: 'Roadmap board' }) }),
+    { params: Promise.resolve({ id: String(message.id) }) },
+  );
+  assert.equal(named.status, 200);
+  const after = await bodyOf(await wakeGet(new Request(`${BASE}/api/wake?since=${message.id}`, { headers: auth('quill') })));
+  assert.ok(!(after.untitled_pins as Message[]).some((m) => m.id === message.id), 'a titled pin leaves the list');
+});

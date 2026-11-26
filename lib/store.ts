@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import { MAX_SCALE, validScale } from './shared';
 import {
-  MAIN_ROOM, MAX_ROOMS, ROOM_NAME_MAX_LENGTH,
+  MAIN_ROOM, MAX_ROOMS, ROOM_NAME_MAX_LENGTH, PIN_TITLE_MAX_LENGTH,
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WAKE_TEST_PER_MIN, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
@@ -203,6 +203,8 @@ export interface PendingWake {
   text: string;
   /** The room the message is in. */
   room: string;
+  /** True when this wake is (also) a request to write a short title for a pin that has none. */
+  needs_pin_title: boolean;
 }
 /** What the live stream compares once a second to decide whether anything changed. */
 export interface SetStatusInput {
@@ -266,7 +268,13 @@ export interface Store {
   search(options: SearchOptions): Promise<Message[]>;
   /** The pinned messages of one room, or of every room when none is named. */
   pinned(room?: string | null): Promise<Message[]>;
-  setPinned(id: number, pinned: boolean): Promise<Message | null>;
+  /** Pins or unpins a message. `title` is set when given; unpinning always clears it. Null when the id does not exist. */
+  setPinned(id: number, pinned: boolean, title?: string): Promise<Message | null>;
+  /**
+   * Sets the title of a message that is already pinned. Null when the id does not exist;
+   * `'not-pinned'` when the message is not pinned.
+   */
+  setPinTitle(id: number, title: string): Promise<Message | null | 'not-pinned'>;
   /** Every message of one room, or of every room when none is named. */
   all(room?: string | null): Promise<Message[]>;
   /**
@@ -299,6 +307,12 @@ export interface Store {
   clearWakeTarget(participant: Sender): Promise<boolean>;
   /** Queues a pending delivery for each participant, skipping any row that already exists. */
   enqueueWakes(messageId: number, participants: readonly string[]): Promise<void>;
+  /**
+   * Queues a wake-up so an agent can write a title for a pin that has none. Re-opens a
+   * delivered or failed row, and leaves a still-pending or in-flight one as it is (that
+   * delivery already sees `needs_pin_title` from the message).
+   */
+  enqueueWakesForPinTitle(messageId: number, participants: readonly string[]): Promise<void>;
   /** Pending deliveries, oldest message first, with the text the payload needs. */
   listPendingWakes(): Promise<PendingWake[]>;
   /**
@@ -675,10 +689,23 @@ const SCHEMA = [
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$`,
+  // Pin titles (migrations/013-pin-titles.sql): a short title stored with a pinned message.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'pin_title'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN pin_title TEXT
+         CONSTRAINT messages_pin_title_length CHECK (pin_title IS NULL OR (char_length(pin_title) BETWEEN 1 AND ${PIN_TITLE_MAX_LENGTH}));
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
-const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to, room';
+const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, pin_title, reply_to, room';
 const ATTACHMENT_COLS = 'id, content_type, width, height, bytes, scale';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
 const POLL_JSON = `json_build_object(
@@ -931,6 +958,16 @@ const toRoom = (r: Row): Room => ({
   ...(r.unread == null ? {} : { unread: Number(r.unread) }),
 });
 
+const toPendingWake = (r: Row): PendingWake => ({
+  message_id: Number(r.message_id),
+  participant: String(r.participant),
+  sender: r.sender as Sender,
+  recipient: (r.recipient as Sender | null) ?? null,
+  text: String(r.text),
+  room: String(r.room ?? MAIN_ROOM),
+  needs_pin_title: r.pinned_at != null && (r.pin_title == null || r.pin_title === ''),
+});
+
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -938,6 +975,7 @@ const toMessage = (r: Row): Message => ({
   text: r.text as string,
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
+  pin_title: (r.pin_title as string | null | undefined) ?? null,
   room: (r.room as string | null | undefined) ?? MAIN_ROOM,
   attachments: toAttachments(r.attachments),
   reply_to: r.reply_to == null ? null : Number(r.reply_to),
@@ -1130,14 +1168,27 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toMessage);
     },
-    async setPinned(id, pinned) {
+    async setPinned(id, pinned, title) {
       await ensure();
       const rows = await db.query(
-        `UPDATE messages SET pinned_at = CASE WHEN $2::boolean THEN coalesce(pinned_at, now()) END
-         WHERE id = $1::bigint RETURNING ${COLS}`,
-        [id, Boolean(pinned)],
+        `UPDATE messages
+            SET pinned_at = CASE WHEN $2::boolean THEN coalesce(pinned_at, now()) END,
+                pin_title = CASE WHEN $2::boolean THEN coalesce($3::text, pin_title) END
+          WHERE id = $1::bigint RETURNING ${COLS}`,
+        [id, Boolean(pinned), title ?? null],
       );
       return rows[0] ? toMessage(rows[0]) : null;
+    },
+    async setPinTitle(id, title) {
+      await ensure();
+      const rows = await db.query(
+        `UPDATE messages SET pin_title = $2::text
+         WHERE id = $1::bigint AND pinned_at IS NOT NULL RETURNING ${COLS}`,
+        [id, title],
+      );
+      if (rows[0]) return toMessage(rows[0]);
+      const [exists] = await db.query(`SELECT id FROM messages WHERE id = $1::bigint`, [id]);
+      return exists ? 'not-pinned' : null;
     },
     async all(room = null) {
       await ensure();
@@ -1147,7 +1198,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       const [row] = await db.query(
         `SELECT (SELECT coalesce(max(id), 0) FROM messages WHERE ($1::text IS NULL OR room = $1::text)) AS last_id,
-                (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages
+                (SELECT coalesce(string_agg(id::text || ':' || coalesce(pin_title, ''), ',' ORDER BY id), '') FROM messages
                   WHERE pinned_at IS NOT NULL AND ($1::text IS NULL OR room = $1::text)) AS pins,
                 ${POLLS_FINGERPRINT_SQL} AS polls,
                 ${REACTIONS_FINGERPRINT_SQL} AS reactions,
@@ -1245,23 +1296,29 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         );
       }
     },
+    async enqueueWakesForPinTitle(messageId, participants) {
+      await ensure();
+      for (const name of participants) {
+        await db.query(
+          `INSERT INTO wake_deliveries (message_id, participant, status, attempts)
+           VALUES ($1::bigint, $2::text, 'pending', 0)
+           ON CONFLICT (message_id, participant) DO UPDATE
+             SET status = 'pending', attempts = 0, error = NULL, updated_at = now()
+             WHERE wake_deliveries.status IN ('delivered', 'failed')`,
+          [messageId, name],
+        );
+      }
+    },
     async listPendingWakes() {
       await ensure();
       const rows = await db.query(
-        `SELECT d.message_id, d.participant, m.sender, m.recipient, m.text, m.room
+        `SELECT d.message_id, d.participant, m.sender, m.recipient, m.text, m.room, m.pinned_at, m.pin_title
          FROM wake_deliveries d JOIN messages m ON m.id = d.message_id
          WHERE d.status = 'pending'
          ORDER BY d.message_id, d.participant`,
         [],
       );
-      return rows.map((r) => ({
-        message_id: Number(r.message_id),
-        participant: String(r.participant),
-        sender: r.sender as Sender,
-        recipient: (r.recipient as Sender | null) ?? null,
-        text: String(r.text),
-        room: String(r.room ?? MAIN_ROOM),
-      }));
+      return rows.map(toPendingWake);
     },
     async claimPendingWakes() {
       await ensure();
@@ -1279,18 +1336,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
            ) due
            JOIN messages m ON m.id = due.message_id
            WHERE d.message_id = due.message_id AND d.participant = due.participant
-           RETURNING d.message_id, d.participant, m.sender, m.recipient, m.text, m.room`,
+           RETURNING d.message_id, d.participant, m.sender, m.recipient, m.text, m.room, m.pinned_at, m.pin_title`,
           [],
         );
         return rows
-          .map((r) => ({
-            message_id: Number(r.message_id),
-            participant: String(r.participant),
-            sender: r.sender as Sender,
-            recipient: (r.recipient as Sender | null) ?? null,
-            text: String(r.text),
-            room: String(r.room ?? MAIN_ROOM),
-          }))
+          .map(toPendingWake)
           .sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant));
       });
     },
@@ -1694,7 +1744,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           );
         } else {
           await tx.query(
-            `UPDATE messages SET pinned_at = NULL
+            `UPDATE messages SET pinned_at = NULL, pin_title = NULL
               WHERE id = $1::bigint
                 AND pinned_at IS NOT NULL
                 AND pinned_at = (SELECT agreed_at FROM decision_cards WHERE id = $2::text)`,
@@ -1771,7 +1821,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), room: MAIN_ROOM, attachments: [], reply_to: null, poll: null, decision: null, reactions: [], ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, pin_title: null, created_at: timestamp(), room: MAIN_ROOM, attachments: [], reply_to: null, poll: null, decision: null, reactions: [], ...r };
     rows.push(m);
     return m;
   };
@@ -1985,10 +2035,23 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .reverse().slice(0, limit);
     },
     async pinned(room = null) { return rows.filter((m) => m.pinned_at).filter(inRoom(room)).map(copy); },
-    async setPinned(id, pinned) {
+    async setPinned(id, pinned, title) {
       const m = rows.find((r) => r.id === id);
       if (!m) return null;
-      m.pinned_at = pinned ? (m.pinned_at ?? timestamp()) : null;
+      if (pinned) {
+        m.pinned_at = m.pinned_at ?? timestamp();
+        if (title !== undefined) m.pin_title = title;
+      } else {
+        m.pinned_at = null;
+        m.pin_title = null;
+      }
+      return copy(m);
+    },
+    async setPinTitle(id, title) {
+      const m = rows.find((r) => r.id === id);
+      if (!m) return null;
+      if (!m.pinned_at) return 'not-pinned';
+      m.pin_title = title;
       return copy(m);
     },
     async all(room = null) { return rows.filter(inRoom(room)).map(copy); },
@@ -1996,7 +2059,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const own = rows.filter(inRoom(room));
       return {
         last_id: own.length ? own[own.length - 1].id : 0,
-        pins: own.filter((m) => m.pinned_at).map((m) => m.id).join(','),
+        pins: own.filter((m) => m.pinned_at).map((m) => `${m.id}:${m.pin_title ?? ''}`).join(','),
         polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint(room),
         rooms: roomRows.map((r) => `${r.id}:${assembleRoom(r, null, null).last_id}`).sort().join(','),
       };
@@ -2055,13 +2118,28 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         }
       }
     },
+    async enqueueWakesForPinTitle(messageId, participants) {
+      const at = timestamp();
+      for (const name of participants) {
+        const key = `${messageId}:${name}`;
+        const existing = wakeDeliveries.get(key);
+        if (!existing) {
+          wakeDeliveries.set(key, { message_id: messageId, participant: name, status: 'pending', attempts: 0, error: null, updated_at: at });
+        } else if (existing.status === 'delivered' || existing.status === 'failed') {
+          existing.status = 'pending';
+          existing.attempts = 0;
+          existing.error = null;
+          existing.updated_at = at;
+        }
+      }
+    },
     async listPendingWakes() {
       const out: PendingWake[] = [];
       for (const d of [...wakeDeliveries.values()].sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant))) {
         if (d.status !== 'pending') continue;
         const m = rows.find((r) => r.id === d.message_id);
         if (!m) continue;
-        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room });
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room, needs_pin_title: Boolean(m.pinned_at && !m.pin_title) });
       }
       return out;
     },
@@ -2075,7 +2153,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         if (!m) continue;
         d.status = 'sending';
         d.updated_at = timestamp();
-        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room });
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room, needs_pin_title: Boolean(m.pinned_at && !m.pin_title) });
       }
       return out;
     },
@@ -2280,7 +2358,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         row.agreed_at = row.agreed_at ?? timestamp();
         message.pinned_at = message.pinned_at ?? row.agreed_at;
       } else {
-        if (message.pinned_at && row.agreed_at && message.pinned_at === row.agreed_at) message.pinned_at = null;
+        if (message.pinned_at && row.agreed_at && message.pinned_at === row.agreed_at) { message.pinned_at = null; message.pin_title = null; }
         row.agreed_at = null;
       }
       const consensus = !wasAgreed && agreed ? 'agreed' as const : wasAgreed && !agreed ? 'broken' as const : null;

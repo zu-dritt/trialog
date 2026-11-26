@@ -66,8 +66,18 @@ for (const [name, make] of [['sql (PGlite)', sqlStore], ['memory', async () => c
     assert.deepEqual((await store.pinned()).map((m) => m.id), [d.id]);
     await store.setPinned(e.id, true);
     assert.deepEqual((await store.pinned()).map((m) => m.id), [d.id, e.id]);
+    const titled = must(await store.setPinned(e.id, true, 'Roadmap board'));
+    assert.equal(titled.pin_title, 'Roadmap board');
+    const before = await store.version();
+    await store.setPinTitle(e.id, 'How to give feedback');
+    const after = await store.version();
+    assert.notEqual(after.pins, before.pins, 'a title change is visible in the stream fingerprint');
+    assert.equal((await store.pinned()).find((m) => m.id === e.id)?.pin_title, 'How to give feedback');
     await store.setPinned(d.id, false);
-    assert.deepEqual((await store.pinned()).map((m) => m.id), [e.id]);
+    assert.deepEqual((await store.pinned()).map((m) => ({ id: m.id, pin_title: m.pin_title ?? null })), [{ id: e.id, pin_title: 'How to give feedback' }]);
+    const cleared = must(await store.setPinned(e.id, false));
+    assert.equal(cleared.pin_title, null);
+    assert.equal(await store.setPinTitle(e.id, 'nope'), 'not-pinned');
     assert.equal(await store.setPinned(999999, true), null);
   });
 
@@ -85,13 +95,14 @@ test('sql: messages and pins survive a restart (new connection, same database)',
     const db1 = new PGlite(dir);
     const s1 = createSqlStore(pgliteDb(db1));
     const m = must(await s1.add({ sender: 'grok', recipient: 'claude', text: 'DECISION: keep me', pinned: true }));
+    must(await s1.setPinned(m.id, true, 'Keep me'));
     await db1.close();
 
     const db2 = new PGlite(dir);
     const s2 = createSqlStore(pgliteDb(db2));
     const all = await s2.all();
     assert.deepEqual(all.map((x) => x.sender), ['hub', 'grok'], 'no second welcome, old message kept');
-    assert.deepEqual((await s2.pinned()).map((x) => x.id), [m.id]);
+    assert.deepEqual((await s2.pinned()).map((x) => [x.id, x.pin_title]), [[m.id, 'Keep me']]);
     const next = must(await s2.add({ sender: 'claude', recipient: null, text: 'after restart' }));
     assert.ok(next.id > m.id);
     await db2.close();

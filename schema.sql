@@ -274,3 +274,16 @@ DO $$
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$;
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'pin_title'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN pin_title TEXT
+         CONSTRAINT messages_pin_title_length CHECK (pin_title IS NULL OR (char_length(pin_title) BETWEEN 1 AND 80));
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;

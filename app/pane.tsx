@@ -6,11 +6,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
 import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } from '../lib/shared';
-import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, firstLine, labelOf, formatSeen, type Participant } from '../lib/shared';
+import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
-import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
+import { DecisionBadge, isDecision } from './decision';
+import { PinnedBar } from './pins';
 import { insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
@@ -663,6 +664,19 @@ export function RoomPane({
     }
   };
 
+  const savePinTitle = async (m: Message, title: string) => {
+    const res = await api(`/api/messages/${m.id}/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    const data = (await res.json()) as { message: Message; pinned: Message[] };
+    if (data.message.room === roomRef.current) {
+      setPinned(data.pinned);
+      setMessages((list) => merge(list, [data.message]));
+    }
+  };
+
   const toggleReaction = async (m: Message, emoji: string, on: boolean) => {
     try {
       const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
@@ -800,19 +814,13 @@ export function RoomPane({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-tour-pane={lead ? 'lead' : 'side'} {...dropHandlers}>
       {picker}
       {pinned.length > 0 && (
-        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
-          <ul className="text-sm">
-            {pinned.map((m) => (
-              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`} onClick={(e) => { e.preventDefault(); void goToMessage(m.id); }}>#{m.id}</a>{' '}
-                <span className="font-bold" style={{ color: color(m.sender) }}>{shown(m.sender)}</span>{' '}
-                {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
-                <span>{firstLine(m, 160)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <PinnedBar
+          pinned={pinned}
+          names={names}
+          participants={participants}
+          onJump={(id) => { void goToMessage(id); }}
+          onSaveTitle={savePinTitle}
+        />
       )}
 
       {quotable && quotedMessage && !commenting && (

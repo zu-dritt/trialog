@@ -752,3 +752,53 @@ test('--room goes out with send, read, wait, search, poll, decision and export; 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('pin --title sends the title, and unpin does not take one', async () => {
+  const empty = await hub('pin');
+  assert.equal(empty.code, 64);
+  assert.match(empty.stderr, /pin needs a message id/);
+  const untitled = await hub('pin', '107', '--title');
+  assert.equal(untitled.code, 64);
+  const tooLong = await hub('pin', '107', '--title', 'x'.repeat(81));
+  assert.equal(tooLong.code, 64);
+  assert.match(tooLong.stderr, /at most 80 characters/);
+  assert.doesNotMatch(tooLong.stderr, /fetch failed|ECONNREFUSED/);
+  const unpinTitle = await hub('unpin', '107', '--title', 'nope');
+  assert.equal(unpinTitle.code, 64);
+  assert.match(unpinTitle.stderr, /unpin does not take --title/);
+
+  const seen: { url: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ url: req.url || '', body: Buffer.concat(chunks).toString() });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        message: { id: 107, pin_title: 'Roadmap board', pinned_at: '2026-11-26T04:00:00.000Z' },
+        pinned: [],
+      }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const withTitle = await run('pin', '107', '--title', 'Roadmap board');
+    assert.equal(withTitle.code, 0);
+    assert.match(withTitle.stdout, /pinned #107 as «Roadmap board»/);
+    assert.equal(seen[0].url, '/api/messages/107/pin');
+    assert.deepEqual(JSON.parse(seen[0].body), { pinned: true, title: 'Roadmap board' });
+    const plain = await run('pin', '132');
+    assert.equal(plain.code, 0);
+    assert.deepEqual(JSON.parse(seen[1].body), { pinned: true });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

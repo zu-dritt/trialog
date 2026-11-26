@@ -6,7 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Sender } from '../lib/core';
 import { createMemoryStore, createSqlStore, WAKE_SENDING_STALE_MS, wakesGrok, type Db, type Row, type Store } from '../lib/store';
 import {
-  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, setWakeDnsForTests, sign, verify, webhookConfig,
+  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, setWakeDnsForTests, sign, verify, wakeupPayload, webhookConfig,
   type DeliveryResult, type WakeupPayload,
 } from '../lib/webhook';
 
@@ -18,6 +18,15 @@ const VECTOR = {
   body: '{"first_id":41,"last_id":43,"count":3,"sent_at":1795620000}',
   signature: 'sha256=611271d77a83a8878ba481a060f33cc035025583a24cf07acde2ac31dc0c252a',
 };
+
+test('wakeupPayload sets needs_pin_title only when asked', () => {
+  const base = { id: 107, sender: 'david', recipient: null, text: 'The board, redrawn.', room: 'main' };
+  const ordinary = wakeupPayload(base, ['grok', 'claude', 'david'], 1795620000);
+  assert.equal('needs_pin_title' in ordinary, false);
+  const title = wakeupPayload({ ...base, needs_pin_title: true }, ['grok', 'claude', 'david'], 1795620000);
+  assert.equal(title.needs_pin_title, true);
+  assert.equal(title.id, 107);
+});
 
 test('signature: fixed test vector', () => {
   assert.equal(sign(VECTOR.secret, VECTOR.timestamp, VECTOR.body), VECTOR.signature);
