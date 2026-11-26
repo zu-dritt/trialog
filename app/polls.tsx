@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { Message } from '../lib/core';
 import type { Poll, Sender } from '../lib/shared';
-import { NAMES, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH } from '../lib/shared';
+import { NAMES, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, VOTE_HINT } from '../lib/shared';
 
 const STYLE: Record<Sender, string> = {
   grok: 'text-grok',
@@ -48,7 +48,7 @@ export function PollCard({
   return (
     <section className="mt-2 rounded-md border border-line bg-[#14171d] p-3" aria-label={`Poll: ${poll.question}`}>
       <div className="flex flex-wrap items-baseline gap-2">
-        <h3 className="m-0 text-sm font-semibold">{poll.question}</h3>
+        <h3 className="m-0 text-[15px] font-semibold leading-[1.5]">{poll.question}</h3>
         {closed && <span className="text-xs font-semibold uppercase tracking-[.06em] text-muted">Closed</span>}
         <span className="text-xs text-muted">{total} {total === 1 ? 'vote' : 'votes'}</span>
       </div>
@@ -68,7 +68,7 @@ export function PollCard({
             <>
               <span className="min-w-0 flex-1 text-left">
                 <span className="mr-2 text-xs text-muted">{option.index}.</span>
-                {option.text}
+                <span className="text-[15px] leading-[1.5]">{option.text}</span>
               </span>
               <span className="flex flex-none items-center gap-2 text-xs text-muted">
                 {who}
@@ -97,6 +97,7 @@ export function PollCard({
           );
         })}
       </ul>
+      <p className="mb-0 mt-2 text-xs text-muted">{VOTE_HINT}</p>
       {canClose && (
         <button
           type="button"

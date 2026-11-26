@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PollCard, PollComposer, myVote, withPolls } from '../app/polls';
 import type { Message } from '../lib/core';
-import type { Poll } from '../lib/shared';
+import { VOTE_HINT, type Poll } from '../lib/shared';
 
 const poll: Poll = {
   id: 'poll_aaaabbbbccccddddeeeeffff',
@@ -76,4 +76,21 @@ test('PollComposer is a labelled form with a 2-option start and an add-option co
   const busy = renderToStaticMarkup(<PollComposer onCreate={() => {}} onCancel={() => {}} busy error="something went wrong" />);
   assert.match(busy, /Creating…/);
   assert.match(busy, /something went wrong/);
+});
+
+test('the poll question and options are message-sized; counts and names stay small', () => {
+  const out = renderToStaticMarkup(<PollCard poll={poll} me="grok" onVote={() => {}} onClose={() => {}} />);
+  assert.match(out, /text-\[15px\] font-semibold/);
+  assert.match(out, /text-\[15px\] leading-\[1\.5\]">Pizza/);
+  assert.match(out, /text-\[15px\] leading-\[1\.5\]">/);
+  assert.ok(!out.includes('text-sm font-semibold'), 'the question is not the smaller text-sm size');
+  // Counts and voter names stay text-xs.
+  assert.match(out, /text-xs text-muted"[^>]*>[\s\S]*Grok/);
+  assert.match(out, /tabular-nums font-semibold text-fg">1</);
+});
+
+test('the poll card has one quiet line about what a vote means', () => {
+  const out = renderToStaticMarkup(<PollCard poll={poll} me="grok" onVote={() => {}} onClose={() => {}} />);
+  assert.ok(out.includes(VOTE_HINT));
+  assert.ok(out.includes(`text-xs text-muted">${VOTE_HINT}</p>`), out);
 });
