@@ -227,7 +227,14 @@ DO $$
      ) THEN
        ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT 'main'
          CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
-       ALTER TABLE read_positions DROP CONSTRAINT read_positions_pkey;
+     END IF;
+     -- The key is checked by itself, so it is put right whatever state the column was found in.
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'read_positions'::regclass AND contype = 'p'
+         AND pg_get_constraintdef(oid) = 'PRIMARY KEY (participant, room)'
+     ) THEN
+       ALTER TABLE read_positions DROP CONSTRAINT IF EXISTS read_positions_pkey;
        ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
      END IF;
    EXCEPTION WHEN duplicate_column THEN

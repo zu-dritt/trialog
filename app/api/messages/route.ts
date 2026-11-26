@@ -68,9 +68,10 @@ export const GET = safe(async (request: Request) => {
   const [messages, pinned, polls, reactions, decisions, reads] = await Promise.all([
     store.list({ since, to, limit, room }),
     store.pinned(room),
-    includePolls ? store.listPolls() : Promise.resolve(null),
-    includeReactions ? store.listReactions() : Promise.resolve(null),
-    includeDecisions ? store.listDecisions() : Promise.resolve(null),
+    // Like the messages themselves, these lists are those of the room that was asked for.
+    includePolls ? store.listPolls(room) : Promise.resolve(null),
+    includeReactions ? store.listReactions(room) : Promise.resolve(null),
+    includeDecisions ? store.listDecisions(room) : Promise.resolve(null),
     includeReads ? store.listReads(room) : Promise.resolve(null),
   ]);
   if (markRead && messages.length) {

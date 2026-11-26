@@ -237,6 +237,44 @@ for (const [name, make] of STORES) {
 }
 
 
+for (const [name, make] of STORES) {
+  test(`${name}: the lists of polls, reactions and decision cards are those of one room`, async () => {
+    const store = await make();
+    await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
+    const roster = ['grok', 'claude', 'david'];
+    const pollMain = must(await store.createPoll({ creator: 'david', question: 'Main poll?', options: ['A', 'B'] }));
+    const pollCalm = must(await store.createPoll({ creator: 'david', question: 'Calm poll?', options: ['A', 'B'], room: 'calm' }));
+    const cardMain = must(await store.createDecision({ creator: 'claude', prompt: 'Main card?' }, roster));
+    const cardCalm = must(await store.createDecision({ creator: 'claude', prompt: 'Calm card?', room: 'calm' }, roster));
+    await store.addReaction(pollMain.message.id, 'grok', '👍');
+    await store.addReaction(pollCalm.message.id, 'grok', '🎉');
+
+    assert.deepEqual((await store.listPolls('calm')).map((p) => p.id), [pollCalm.poll.id]);
+    assert.deepEqual((await store.listPolls('main')).map((p) => p.id), [pollMain.poll.id]);
+    assert.deepEqual((await store.listPolls()).map((p) => p.id).sort(), [pollMain.poll.id, pollCalm.poll.id].sort(), 'no room named: every room');
+    assert.deepEqual((await store.listReactions('calm')).map((r) => r.message_id), [pollCalm.message.id]);
+    assert.deepEqual((await store.listReactions('main')).map((r) => r.message_id), [pollMain.message.id]);
+    assert.deepEqual((await store.listReactions()).map((r) => r.message_id), [pollMain.message.id, pollCalm.message.id]);
+    assert.deepEqual((await store.listDecisions('calm')).map((c) => c.id), [cardCalm.decision.id]);
+    assert.deepEqual((await store.listDecisions('main')).map((c) => c.id), [cardMain.decision.id]);
+    assert.deepEqual((await store.listDecisions()).map((c) => c.id).sort(), [cardMain.decision.id, cardCalm.decision.id].sort());
+    assert.deepEqual(await store.listPolls('third'), [], 'a room without any');
+  });
+
+  test(`${name}: an image belongs to its message, and so to that message's room`, async () => {
+    const store = await make();
+    await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
+    const upload = must(await store.addAttachment({ sender: 'david', content_type: 'image/png', width: 2, height: 1, data: Buffer.from('not-a-real-image') }));
+    const m = must(await store.add({ sender: 'david', recipient: null, text: 'a picture in calm', room: 'calm', attachments: [upload.id] }));
+    assert.deepEqual([m.room, m.attachments.map((a) => a.id)], ['calm', [upload.id]]);
+    assert.deepEqual((await store.list({ room: 'calm' })).at(-1)?.attachments.map((a) => a.id), [upload.id]);
+    assert.ok((await store.list({ room: 'main' })).every((x) => x.attachments.length === 0), 'main shows no image of another room');
+    assert.equal((await store.getAttachment(upload.id))?.attachment.message_id, m.id, 'the image itself is fetched by its id, with a token, whatever room it is in');
+    // An upload can be linked once: not to a second message in another room.
+    await assert.rejects(store.add({ sender: 'david', recipient: null, text: 'again, in main', attachments: [upload.id] }));
+  });
+}
+
 // --- read positions, per room -------------------------------------------------------------------
 
 for (const [name, make] of STORES) {
@@ -801,6 +839,47 @@ test('reading through the API: the position is in the room of the list or of the
   assert.equal((await put({ upTo: calm.id, room: 'Not An Id' }, 'david')).status, 400);
   assert.equal((await put({ upTo: 999_999 }, 'david')).status, 404);
   assert.ok(!(await get('?reads=1', 'grok')).reads.some((p) => p.participant === 'david'), 'david has still read nothing in main');
+});
+
+// The page's fallback asks for these lists with every poll for new messages, so a list that
+// forgets the room would hand one room's polls, reactions and cards to a reader of another.
+test('GET /api/messages?polls=1: only the polls of the room that was asked for', async () => {
+  const inMain = (await (await call(pollsRoute.POST, '/api/polls', 'david', { question: 'Leak check, main poll?', options: ['A', 'B'] })).json()) as { poll: { id: string } };
+  const inCalm = (await (await call(pollsRoute.POST, '/api/polls', 'david', { question: 'Leak check, calm poll?', options: ['A', 'B'], room: 'calm' })).json()) as { poll: { id: string } };
+  const polls = async (query: string) => ((await (await call(messages.GET, `/api/messages?polls=1&reactions=1&decisions=1${query}`, 'grok')).json()) as { polls: { id: string }[] }).polls.map((p) => p.id);
+  const calm = await polls('&room=calm');
+  assert.ok(calm.includes(inCalm.poll.id) && !calm.includes(inMain.poll.id), 'calm must not list a poll of main');
+  const main = await polls('');
+  assert.ok(main.includes(inMain.poll.id) && !main.includes(inCalm.poll.id), 'main, also when no room is named, must not list a poll of calm');
+  const all = await polls('&room=all');
+  assert.ok(all.includes(inMain.poll.id) && all.includes(inCalm.poll.id));
+});
+
+test('GET /api/messages?reactions=1: only the reactions of the room that was asked for', async () => {
+  const inMain = await posted({ text: 'leak check, a message in main' }, 'david');
+  const inCalm = await posted({ text: 'leak check, a message in calm', room: 'calm' }, 'david');
+  const store = await (await import('../lib/store')).getStore();
+  await store.addReaction(inMain.id, 'claude', '👍');
+  await store.addReaction(inCalm.id, 'claude', '🎉');
+  const reacted = async (query: string) => ((await (await call(messages.GET, `/api/messages?polls=1&reactions=1&decisions=1${query}`, 'grok')).json()) as { reactions: { message_id: number }[] }).reactions.map((r) => r.message_id);
+  const calm = await reacted('&room=calm');
+  assert.ok(calm.includes(inCalm.id) && !calm.includes(inMain.id), 'calm must not list a reaction on a message of main');
+  const main = await reacted('');
+  assert.ok(main.includes(inMain.id) && !main.includes(inCalm.id), 'main must not list a reaction on a message of calm');
+  const all = await reacted('&room=all');
+  assert.ok(all.includes(inMain.id) && all.includes(inCalm.id));
+});
+
+test('GET /api/messages?decisions=1: only the decision cards of the room that was asked for', async () => {
+  const inMain = (await (await call(decisionsRoute.POST, '/api/decisions', 'claude', { prompt: 'Leak check, main card?' })).json()) as { decision: { id: string } };
+  const inCalm = (await (await call(decisionsRoute.POST, '/api/decisions', 'claude', { prompt: 'Leak check, calm card?', room: 'calm' })).json()) as { decision: { id: string } };
+  const cards = async (query: string) => ((await (await call(messages.GET, `/api/messages?polls=1&reactions=1&decisions=1${query}`, 'grok')).json()) as { decisions: { id: string }[] }).decisions.map((c) => c.id);
+  const calm = await cards('&room=calm');
+  assert.ok(calm.includes(inCalm.decision.id) && !calm.includes(inMain.decision.id), 'calm must not list a card of main');
+  const main = await cards('');
+  assert.ok(main.includes(inMain.decision.id) && !main.includes(inCalm.decision.id), 'main must not list a card of calm');
+  const all = await cards('&room=all');
+  assert.ok(all.includes(inMain.decision.id) && all.includes(inCalm.decision.id));
 });
 
 test('a hub has at most twelve rooms', async () => {

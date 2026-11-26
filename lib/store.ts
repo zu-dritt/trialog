@@ -275,8 +275,8 @@ export interface Store {
    */
   createPoll(input: NewPoll, limitPerMin?: number): Promise<{ message: Message; poll: Poll } | null>;
   getPoll(id: string): Promise<Poll | null>;
-  /** Open polls, plus polls closed within the last 24 hours. */
-  listPolls(): Promise<Poll[]>;
+  /** Open polls, plus polls closed within the last 24 hours: those of one room, or of every room when none is named. */
+  listPolls(room?: string | null): Promise<Poll[]>;
   /** Every message that has a poll, with the current tally, oldest first. */
   listPollMessages(): Promise<Message[]>;
   /** Messages with the given ids, in id order. Missing ids are skipped. */
@@ -300,8 +300,8 @@ export interface Store {
   addReaction(messageId: number, participant: Sender, emoji: string, limitPerMin?: number): Promise<AddReactionResult>;
   /** Removes the caller's reaction. Returns null when the message does not exist. */
   removeReaction(messageId: number, participant: Sender, emoji: string): Promise<Message | null>;
-  /** Every message that currently has reactions, for since-poll and the stream. */
-  listReactions(): Promise<MessageReactions[]>;
+  /** Every message that currently has reactions, in one room or in every room when none is named. For since-poll. */
+  listReactions(room?: string | null): Promise<MessageReactions[]>;
   /**
    * Creates a message and an attached decision card. The creator is the owner of the token.
    * Returns null when the sender is over the message rate limit.
@@ -313,8 +313,8 @@ export interface Store {
    * Returns rate_limited when this sender has recorded 30 positions in the last minute (a no-op change is not counted).
    */
   recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
-  /** Every decision card, for since-poll and the stream. */
-  listDecisions(): Promise<DecisionCard[]>;
+  /** Every decision card of one room, or of every room when none is named. For since-poll. */
+  listDecisions(room?: string | null): Promise<DecisionCard[]>;
   /**
    * Moves this participant's read position in the room of message `upTo` to that message, if it
    * is a higher id than they already have there. A lower id is ignored. A participant has one
@@ -572,7 +572,14 @@ const SCHEMA = [
      ) THEN
        ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT '${MAIN_ROOM}'
          CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
-       ALTER TABLE read_positions DROP CONSTRAINT read_positions_pkey;
+     END IF;
+     -- The key is checked by itself, so it is put right whatever state the column was found in.
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'read_positions'::regclass AND contype = 'p'
+         AND pg_get_constraintdef(oid) = 'PRIMARY KEY (participant, room)'
+     ) THEN
+       ALTER TABLE read_positions DROP CONSTRAINT IF EXISTS read_positions_pkey;
        ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
      END IF;
    EXCEPTION WHEN duplicate_column THEN
@@ -707,6 +714,10 @@ const DECISIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM decision_cards) |
 const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions WHERE ($1::text IS NULL OR room = $1::text)) || '|' ||
   coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant, room) FROM read_positions
              WHERE ($1::text IS NULL OR room = $1::text)), '')`;
+// What hangs on a message (a poll, reactions, a decision card) is in that message's room. This
+// keeps a list of such things to one room ($1), or to every room when $1 is null.
+const inRoomSql = (messageId: string): string =>
+  `($1::text IS NULL OR EXISTS (SELECT 1 FROM messages m WHERE m.id = ${messageId} AND m.room = $1::text))`;
 const toRead = (r: Row): ReadPosition => ({
   participant: String(r.participant) as Sender,
   room: String(r.room ?? MAIN_ROOM),
@@ -1164,13 +1175,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const [row] = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [id]);
       return row ? toPoll(row.poll) : null;
     },
-    async listPolls() {
+    async listPolls(room = null) {
       await ensure();
       const rows = await db.query(
         `SELECT ${POLL_JSON} AS poll FROM polls p
-         WHERE p.closed_at IS NULL OR p.closed_at > now() - interval '24 hours'
+         WHERE (p.closed_at IS NULL OR p.closed_at > now() - interval '24 hours')
+           AND ${inRoomSql('p.message_id')}
          ORDER BY p.created_at, p.id`,
-        [],
+        [room],
       );
       return rows.map((r) => toPoll(r.poll)).filter((p): p is Poll => p !== null);
     },
@@ -1303,7 +1315,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const [row] = await db.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [messageId]);
       return toMessage(row);
     },
-    async listReactions() {
+    async listReactions(room = null) {
       await ensure();
       const rows = await db.query(
         `SELECT message_id,
@@ -1317,8 +1329,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
                       GROUP BY emoji
                    ) g) AS reactions
            FROM (SELECT DISTINCT message_id FROM reactions) r
+          WHERE ${inRoomSql('r.message_id')}
           ORDER BY message_id`,
-        [],
+        [room],
       );
       return rows.map(toMessageReactions);
     },
@@ -1443,9 +1456,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { status: 'ok' as const, decision: fresh, message: toMessage(row), reply: { ...toMessage(inserted[0]), attachments: [], poll: null, decision: null, reactions: [] } };
       });
     },
-    async listDecisions() {
+    async listDecisions(room = null) {
       await ensure();
-      const rows = await db.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c ORDER BY c.created_at, c.id`, []);
+      const rows = await db.query(
+        `SELECT ${DECISION_JSON} AS decision FROM decision_cards c WHERE ${inRoomSql('c.message_id')} ORDER BY c.created_at, c.id`,
+        [room],
+      );
       return rows.map((r) => toDecision(r.decision)).filter((d): d is DecisionCard => d !== null);
     },
     async setReadPosition(participant, upTo, room = null) {
@@ -1500,6 +1516,8 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   };
   const roomRows: Omit<Room, 'last_id' | 'unread'>[] = [{ id: MAIN_ROOM, name: 'Main', created_at: timestamp(), created_by: 'hub' }];
   const inRoom = (room: string | null) => (m: Message): boolean => room === null || m.room === room;
+  /** Whether what hangs on this message (a poll, reactions, a decision card) is in `room`. Null: every room. */
+  const messageInRoom = (id: number, room: string | null): boolean => room === null || rows.find((m) => m.id === id)?.room === room;
   const assembleRoom = (r: Omit<Room, 'last_id' | 'unread'>, seen: Readonly<Record<string, number>> | null, me: Sender | null): Room => {
     const own = rows.filter((m) => m.room === r.id);
     const room: Room = { ...r, last_id: own.length ? own[own.length - 1].id : 0 };
@@ -1794,10 +1812,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const row = pollRows.get(id);
       return row ? assemblePoll(row) : null;
     },
-    async listPolls() {
+    async listPolls(room = null) {
       const cutoff = now() - RECENTLY_CLOSED_MS;
       return [...pollRows.values()]
-        .filter((p) => !p.closed_at || Date.parse(p.closed_at) > cutoff)
+        .filter((p) => (!p.closed_at || Date.parse(p.closed_at) > cutoff) && messageInRoom(p.message_id, room))
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assemblePoll);
     },
@@ -1868,8 +1886,8 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (i >= 0) reactionRows.splice(i, 1);
       return copy(m);
     },
-    async listReactions() {
-      const ids = [...new Set(reactionRows.map((r) => r.message_id))].sort((a, b) => a - b);
+    async listReactions(room = null) {
+      const ids = [...new Set(reactionRows.map((r) => r.message_id))].filter((id) => messageInRoom(id, room)).sort((a, b) => a - b);
       return ids.map((message_id) => ({ message_id, reactions: reactionsOn(message_id) }));
     },
     async createDecision({ creator, prompt, recipient = null, reply_to = null, room = null }, roster = [], limitPerMin = RATE_LIMIT_PER_MIN) {
@@ -1924,8 +1942,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       });
       return { status: 'ok' as const, decision: assembleDecision(row), message: copy(message), reply: copy(reply) };
     },
-    async listDecisions() {
+    async listDecisions(room = null) {
       return [...decisionRows.values()]
+        .filter((c) => messageInRoom(c.message_id, room))
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assembleDecision);
     },
