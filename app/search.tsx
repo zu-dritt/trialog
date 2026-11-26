@@ -9,7 +9,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Message } from '../lib/core';
 import { isDecision } from '../lib/decision';
-import { colorOf, displayName, type Participant } from '../lib/shared';
+import { colorOf, displayName, type Participant, type Room } from '../lib/shared';
 import { DecisionBadge } from './decision';
 import { SEARCH_LIMIT, debounce, markMatches, matchLine, newestOnly, parseQuery } from '../lib/search';
 
@@ -30,10 +30,12 @@ export type SearchState =
 interface Look {
   /** Who takes part (GET /api/participants): for the colours, and for the rule of a decision. */
   participants: readonly Participant[];
+  /** The rooms of the hub. With more than one, each result says which room it is in. */
+  rooms?: readonly Pick<Room, 'id' | 'name'>[];
 }
 
 /** The list of results. Each one is an option of the search field's list box. */
-export function SearchResults({ listId, results, words, active, onPick, onPoint, participants }: Look & {
+export function SearchResults({ listId, results, words, active, onPick, onPoint, participants, rooms = [] }: Look & {
   listId: string;
   results: Message[];
   words: string[];
@@ -56,6 +58,7 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
             <span className="font-bold" style={{ color: colorOf(m.sender, participants) }}>{displayName(m.sender)}</span>
             <time dateTime={m.created_at}>{whenFmt.format(new Date(m.created_at))}</time>
             <span>#{m.id}</span>
+            {rooms.length > 1 && <span>in {rooms.find((r) => r.id === m.room)?.name ?? m.room}</span>}
             {/* The same two signs as in the stream: the badge for a decision, the word for a pin. */}
             {isDecision(m.text, names, m.decision) && <DecisionBadge />}
             {m.pinned_at && <span>pinned</span>}
@@ -93,7 +96,7 @@ const Magnifier = () => (
  *   search  asks the server; rejects when it could not
  *   onPick  the reader chose a result
  */
-export function SearchBox({ search, onPick, participants }: Look & {
+export function SearchBox({ search, onPick, participants, rooms }: Look & {
   search: (q: string, decisionsOnly: boolean) => Promise<Message[]>;
   onPick: (m: Message) => void;
 }) {
@@ -198,7 +201,7 @@ export function SearchBox({ search, onPick, participants }: Look & {
               Decisions only
             </label>
             {results.length > 0 && (
-              <SearchResults listId={listId} results={results} words={state.kind === 'done' ? state.words : []} active={active} onPick={pick} onPoint={setActive} participants={participants} />
+              <SearchResults listId={listId} results={results} words={state.kind === 'done' ? state.words : []} active={active} onPick={pick} onPoint={setActive} participants={participants} rooms={rooms} />
             )}
             {/* Said aloud by a screen reader when it changes: how the search stands. */}
             <p role="status" className={`m-0 px-3 text-xs text-muted ${note ? 'border-t border-line py-2' : ''}`}>
