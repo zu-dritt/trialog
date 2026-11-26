@@ -22,6 +22,7 @@
   .wrap { max-width: 1040px; margin: 0 auto; padding: 16px; }
   header h1 { font-size: 22px; margin: 4px 0 2px; }
   header p { margin: 0; color: var(--muted); }
+  header p.roles { margin-top: 6px; font-size: 14px; }
   .note { display: inline-block; margin-top: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   .grid { display: grid; gap: 12px; margin-top: 12px; grid-template-columns: 1fr; }
@@ -113,7 +114,8 @@
 <div class="wrap">
   <header>
     <h1>How a message travels through Trialog</h1>
-    <p>One chat for a human and two AI agents. Send a message and watch where it goes.</p>
+    <p>One chat for the human orchestrator and two AI agents. Send a message and watch where it goes.</p>
+    <p class="roles"><b style="color:var(--human)">Orchestrator</b> sets the goal, makes it safe to try, decides, says “Ship it!”. <b style="color:var(--claude)">Claude</b> and <b style="color:var(--grok)">Grok</b> build and review.</p>
     <span class="note" id="privacy">A simulation in your browser. Nothing you type is sent anywhere.</span>
   </header>
 
@@ -137,7 +139,7 @@
       </form>
 
       <svg id="diagram" viewBox="0 0 360 400" role="img" aria-labelledby="diagram-title">
-        <title id="diagram-title">The human's browser, Claude and Grok above; Trialog in the middle; Postgres below.</title>
+        <title id="diagram-title">The orchestrator's browser, Claude and Grok above; Trialog in the middle; Postgres below.</title>
         <line class="edge" id="e-human" x1="60" y1="70" x2="60" y2="170"></line>
         <line class="edge" id="e-claude" x1="180" y1="70" x2="180" y2="170"></line>
         <line class="edge" id="e-grok" x1="300" y1="70" x2="300" y2="170"></line>
@@ -145,7 +147,7 @@
 
         <g class="node" id="n-human" style="--c: var(--human)">
           <rect x="10" y="12" width="100" height="58" rx="10"></rect>
-          <text class="name" x="60" y="36">Human</text>
+          <text class="name" x="60" y="36" style="font-size:13px">Orchestrator</text>
           <text x="60" y="55">the page</text>
         </g>
         <g class="node" id="n-claude" style="--c: var(--claude)">
@@ -223,7 +225,7 @@
         </div>
         <table class="matrix" aria-label="Every combination. Tap one to try it.">
           <thead><tr><th></th><th scope="col" colspan="4">for</th></tr>
-          <tr><th class="rowh">from</th><th scope="col">Everyone</th><th scope="col">Human</th><th scope="col">Claude</th><th scope="col">Grok</th></tr></thead>
+          <tr><th class="rowh">from</th><th scope="col">Everyone</th><th scope="col">Orchestrator</th><th scope="col">Claude</th><th scope="col">Grok</th></tr></thead>
           <tbody id="matrix"></tbody>
         </table>
         <div class="legend"><span class="dot" style="background:var(--claude)"></span> Claude woken &nbsp; <span class="dot" style="background:var(--grok)"></span> Grok woken &nbsp; <span class="none">–</span> nobody</div>
@@ -255,7 +257,7 @@ var ROSTER = [
 function notToSelf(sender, recipient) {
   return recipient == null || recipient === sender ? null : recipient;
 }
-// A message from a human wakes every agent, whoever it is for. A message from an agent wakes
+// A message from a human (the orchestrator) wakes every agent, whoever it is for. A message from an agent wakes
 // only the agents it addresses (everyone means every other agent), never the sender.
 function whoToWake(message, roster) {
   if (message.sender === 'hub') return [];
@@ -277,7 +279,7 @@ function wokenFor(sender, to) {
 <script>
 (function () {
   'use strict';
-  var NAMES = { human: 'Human', claude: 'Claude', grok: 'Grok' };
+  var NAMES = { human: 'Orchestrator', claude: 'Claude', grok: 'Grok' };
   var COLOR = { human: 'var(--human)', claude: 'var(--claude)', grok: 'var(--grok)' };
   var POS = { human: [60, 41], claude: [180, 41], grok: [300, 41], api: [180, 210], db: [180, 344] };
   var AGENTS = ['claude', 'grok'];
@@ -309,10 +311,10 @@ function wokenFor(sender, to) {
   }
   function renderComposer() {
     buildSeg($('from'), 'from', [
-      { value: 'human', label: 'Human' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+      { value: 'human', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
     ], state.from, function (v) { state.from = v; renderRule(); });
     buildSeg($('to'), 'to', [
-      { value: null, label: 'Everyone' }, { value: 'human', label: 'Human' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+      { value: null, label: 'Everyone' }, { value: 'human', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
     ], state.to, function (v) { state.to = v; renderRule(); });
   }
   function syncComposer() {
@@ -326,10 +328,10 @@ function wokenFor(sender, to) {
     var stored = notToSelf(from, to);
     var woken = wokenFor(from, to).indexOf(agent) >= 0;
     var self = to === from ? ' It was addressed to its own sender, so it is stored as a message to everyone.' : '';
-    if (from === 'human') return 'A message from a human wakes every agent, whoever it is for.' + self;
+    if (from === 'human') return 'A message from the orchestrator (a human) wakes every agent, whoever it is for.' + self;
     if (agent === from) return 'An agent is never woken by its own message.' + self;
     if (woken) return (stored === null ? 'For everyone, so every other agent is addressed.' : 'It is addressed to ' + NAMES[agent] + '.') + self;
-    if (stored === 'human') return 'From an agent, only for the human: no agent is woken.';
+    if (stored === 'human') return 'From an agent, only for the orchestrator: no agent is woken.';
     return 'From an agent, and not addressed to ' + NAMES[agent] + '.';
   }
   function renderRule() {
