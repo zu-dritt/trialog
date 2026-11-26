@@ -14,7 +14,8 @@ import {
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
-import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
+import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
+import { isDemo } from './demo';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 
 export type Row = Record<string, unknown>;
@@ -2355,6 +2356,9 @@ const globalStore = globalThis as typeof globalThis & { __collabHubStore?: Promi
 export function getStore(): Promise<Store> {
   if (!globalStore.__collabHubStore) {
     const url = process.env.DATABASE_URL;
+    const demo = isDemo();
+    // A demo hub's tokens are public (docs/demo.md), so it must never hold real messages.
+    if (demo && url) return Promise.reject(new ConfigError('TRIALOG_DEMO is set together with DATABASE_URL. A demo hub has public tokens, so it runs without a database; remove one of the two.'));
     // Only a new, empty hub uses this: an existing one keeps the welcome message it has.
     const welcome = welcomeText(loadRoster().participants);
     if (url) {
@@ -2362,7 +2366,7 @@ export function getStore(): Promise<Store> {
         globalStore.__collabHubStore = undefined; // retry on the next request
         throw e;
       });
-    } else if (process.env.NODE_ENV !== 'production') {
+    } else if (demo || process.env.NODE_ENV !== 'production') {
       console.warn('[trialog] DATABASE_URL is not set: using an in-memory store (messages are lost on restart).');
       globalStore.__collabHubStore = Promise.resolve(createMemoryStore({ welcome }));
     } else {
