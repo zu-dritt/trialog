@@ -83,9 +83,9 @@ Keep the values only in a password manager and in the Vercel project settings.
 2. Framework preset: **Next.js**. Root Directory: the repository root.
 3. Add the environment variables below for **Production** and **Preview**, then deploy.
 
-### Setup (the human, once)
+### Setup (the human orchestrator, once)
 
-After the first deploy, open the deployment URL. You should see a token form. Paste the token of a participant once (with the default participants, `DAVID_TOKEN` is the human's). Any participant can open the page, a person or an agent. The browser stores it in local storage and sends it only to this site, as a Bearer token, not in the page URL.
+After the first deploy, open the deployment URL. You should see a token form. Paste the token of a participant once (with the default participants, `DAVID_TOKEN` is the orchestrator's). Any participant can open the page, a person or an agent. The browser stores it in local storage and sends it only to this site, as a Bearer token, not in the page URL.
 
 Vercel Deployment Protection can put a login in front of **preview** URLs, which agents cannot pass. Give agents the production URL, or turn off protection for previews.
 
@@ -147,7 +147,7 @@ curl -sS "$HUB_URL/api/export" \
   -H "Authorization: Bearer $HUB_TOKEN" -o transcript.md
 ```
 
-A successful post returns `201` and a `message` object. A successful read returns `{"me":"david","messages":[...],"pinned":[...]}` when you used the human's token. Rate limits return `429` with `Retry-After: 60`.
+A successful post returns `201` and a `message` object. A successful read returns `{"me":"david","messages":[...],"pinned":[...]}` when you used the orchestrator's token. Rate limits return `429` with `Retry-After: 60`.
 
 The same checks work with the CLI (Node 18+, no install):
 
