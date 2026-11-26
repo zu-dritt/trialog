@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import {
   MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
-  type Attachment, type Author, type ImageType, type Message, type Sender,
+  type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Sender,
 } from './core';
 
 export type Row = Record<string, unknown>;
@@ -65,6 +65,11 @@ export interface WakeupClaim {
   previous_id: number;
 }
 /** What the live stream compares once a second to decide whether anything changed. */
+export interface SetStatusInput {
+  participant: Sender;
+  text: string;
+  ttlSeconds: number;
+}
 export interface StreamVersion {
   last_id: number;
   pins: string;
@@ -104,6 +109,12 @@ export interface Store {
   claimWakeup(): Promise<WakeupClaim | null>;
   /** After a failed delivery: puts the watermark back, unless a later claim has moved it on. */
   releaseWakeup(claim: WakeupClaim): Promise<boolean>;
+  /** Sets or replaces the caller's active working status with a TTL in seconds. */
+  setStatus(input: SetStatusInput): Promise<ParticipantStatus>;
+  /** Clears the caller's working status; returns true if a row existed. */
+  clearStatus(participant: Sender): Promise<boolean>;
+  /** Active (non-expired) statuses for all participants; lazily drops expired rows. */
+  listStatuses(): Promise<ParticipantStatus[]>;
 }
 
 const SCHEMA = [
@@ -143,6 +154,14 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS attachments_message_id ON attachments (message_id)`,
   `CREATE INDEX IF NOT EXISTS attachments_sender_created_at ON attachments (sender, created_at)`,
+  // Participant working status (migrations/003-status.sql).
+  `CREATE TABLE IF NOT EXISTS participant_status (
+     participant TEXT PRIMARY KEY CHECK (participant IN ('grok', 'claude', 'david')),
+     text        TEXT NOT NULL CHECK (char_length(text) BETWEEN 1 AND 80),
+     expires_at  TIMESTAMPTZ NOT NULL,
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -180,6 +199,12 @@ const toAttachments = (v: unknown): Attachment[] => {
   const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
   return Array.isArray(list) ? (list as Row[]).map(toAttachment) : [];
 };
+const toStatus = (r: Row): ParticipantStatus => ({
+  participant: r.participant as Sender,
+  text: r.text as string,
+  expires_at: iso(r.expires_at) as string,
+  updated_at: iso(r.updated_at) as string,
+});
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -369,6 +394,40 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       );
       return rows.length > 0;
     },
+    async setStatus({ participant, text, ttlSeconds }) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO participant_status (participant, text, expires_at, updated_at)
+         VALUES ($1::text, $2::text, now() + $3::int * interval '1 second', now())
+         ON CONFLICT (participant) DO UPDATE
+           SET text = EXCLUDED.text,
+               expires_at = EXCLUDED.expires_at,
+               updated_at = EXCLUDED.updated_at
+         RETURNING participant, text, expires_at, updated_at`,
+        [participant, text, ttlSeconds],
+      );
+      return toStatus(row);
+    },
+    async clearStatus(participant) {
+      await ensure();
+      const rows = await db.query(
+        `DELETE FROM participant_status WHERE participant = $1::text RETURNING participant`,
+        [participant],
+      );
+      return rows.length > 0;
+    },
+    async listStatuses() {
+      await ensure();
+      await db.query(`DELETE FROM participant_status WHERE expires_at <= now()`, []);
+      const rows = await db.query(
+        `SELECT participant, text, expires_at, updated_at
+         FROM participant_status
+         WHERE expires_at > now()
+         ORDER BY updated_at DESC, participant`,
+        [],
+      );
+      return rows.map(toStatus);
+    },
   };
 }
 
@@ -392,6 +451,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
   const copy = (m: Message): Message => ({ ...m, attachments: m.attachments.map((a) => ({ ...a })) });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
+  const statuses = new Map<Sender, ParticipantStatus>();
   const meta = ({ id, content_type, width, height, bytes }: Attachment): Attachment => ({ id, content_type, width, height, bytes });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -457,6 +517,29 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       if (lastNotifiedId !== claim.last_id) return false;
       lastNotifiedId = claim.previous_id;
       return true;
+    },
+    async setStatus({ participant, text, ttlSeconds }) {
+      const current = now();
+      const status: ParticipantStatus = {
+        participant,
+        text,
+        expires_at: new Date(current + ttlSeconds * 1000).toISOString(),
+        updated_at: new Date(current).toISOString(),
+      };
+      statuses.set(participant, status);
+      return { ...status };
+    },
+    async clearStatus(participant) {
+      return statuses.delete(participant);
+    },
+    async listStatuses() {
+      const current = now();
+      for (const [participant, status] of statuses) {
+        if (Date.parse(status.expires_at) <= current) statuses.delete(participant);
+      }
+      return [...statuses.values()]
+        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || a.participant.localeCompare(b.participant))
+        .map((s) => ({ ...s }));
     },
   };
 }

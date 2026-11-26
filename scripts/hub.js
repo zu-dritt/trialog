@@ -8,6 +8,8 @@
 //   node scripts/hub.js get att_… > shot.png              (or: get att_… --out shot.png)
 //   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]
 //   node scripts/hub.js wait [--to claude] [--since <id>] [--timeout 600] [--json]
+//   node scripts/hub.js status "reviewing pull request 7" [--ttl 600] [--json]
+//   node scripts/hub.js status --clear [--json]
 //   node scripts/hub.js pin <id> | unpin <id>
 //   node scripts/hub.js export > transcript.md
 //
@@ -25,7 +27,7 @@ const NAMES = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | pin <id> | unpin <id> | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | pin <id> | unpin <id> | export');
   process.exit(64);
 }
 
@@ -35,6 +37,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
+    else if (a === '--clear') opts.clear = true;
     else if (a === '--attach') {
       const v = argv[++i];
       if (v === undefined) usage('--attach needs a file');
@@ -192,6 +195,37 @@ async function main() {
     }
     console.error(`hub: no new message within ${timeoutMs / 1000}s. next: --since ${since}`);
     process.exit(2);
+  }
+
+
+  if (cmd === 'status') {
+    if (opts.clear) {
+      if (args.length || opts.ttl !== undefined) usage('status --clear takes no text or --ttl');
+      const data = await (await call('/api/status', { method: 'DELETE' })).json();
+      console.log(opts.json ? JSON.stringify(data) : (data.cleared ? 'status cleared' : 'no active status to clear'));
+      return;
+    }
+    if (!args.length) {
+      if (opts.ttl !== undefined) usage('status --ttl requires text');
+      const data = await (await call('/api/status')).json();
+      if (opts.json) console.log(JSON.stringify(data.statuses));
+      else if (!data.statuses.length) console.log('no active status');
+      else for (const s of data.statuses) console.log(`${NAMES[s.participant] ?? s.participant}: ${s.text} (expires ${s.expires_at})`);
+      return;
+    }
+    const text = args.join(' ').replace(/[\r\n\t]+/g, ' ').trim();
+    if (!text) usage('status needs non-empty text or --clear');
+    if ([...text].length > 80) fail(`status text must be at most 80 characters (got ${[...text].length})`);
+    const body = { text };
+    if (opts.ttl !== undefined) {
+      if (!/^\d+$/.test(opts.ttl)) usage('--ttl must be a whole number of seconds (30–1800)');
+      body.ttlSeconds = Number(opts.ttl);
+    }
+    const { status } = await (await call('/api/status', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    console.log(opts.json ? JSON.stringify(status) : `status set: ${status.text} (expires ${status.expires_at})`);
+    return;
   }
 
   if (cmd === 'pin' || cmd === 'unpin') {

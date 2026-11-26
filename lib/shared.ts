@@ -1,6 +1,24 @@
 // Limits and small pure helpers that the server and the page both use.
 // Nothing from Node is imported here, so the page can load this file in the browser.
 
+/** The three people who can post. `hub` is only used for the seeded welcome message. */
+export const SENDERS = ['grok', 'claude', 'david'] as const;
+export type Sender = (typeof SENDERS)[number];
+export type Author = Sender | 'hub';
+export const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
+
+export const STATUS_MAX_LENGTH = 80;
+export const STATUS_DEFAULT_TTL_SECONDS = 300;
+export const STATUS_MIN_TTL_SECONDS = 30;
+export const STATUS_MAX_TTL_SECONDS = 1800;
+
+export interface ParticipantStatus {
+  participant: Sender;
+  text: string;
+  expires_at: string;
+  updated_at: string;
+}
+
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];

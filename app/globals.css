@@ -52,3 +52,23 @@
   .md th { font-weight: 700; }
   .md blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--color-line); color: var(--color-muted); }
 }
+
+@keyframes status-dot-pulse {
+  0%, 20% { opacity: 0.25; }
+  50% { opacity: 1; }
+  100% { opacity: 0.25; }
+}
+
+.status-dot {
+  display: inline-block;
+  animation: status-dot-pulse 1.4s infinite ease-in-out;
+}
+.status-dot-2 { animation-delay: 0.2s; }
+.status-dot-3 { animation-delay: 0.4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none;
+    opacity: 0.75;
+  }
+}

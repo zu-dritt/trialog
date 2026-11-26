@@ -1,0 +1,90 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { NAMES, type ParticipantStatus, type Sender } from '../lib/shared';
+
+export const STATUS_POLL_MS = 5_000;
+
+// Full class names per participant so Tailwind keeps them at build time.
+const STYLE: Record<Sender, string> = {
+  grok: 'text-grok',
+  claude: 'text-claude',
+  david: 'text-david',
+};
+
+/** Fetches active statuses using the Bearer token. Calls onUnauthorized on 401. */
+export async function fetchStatuses(
+  token: string,
+  onUnauthorized: () => void,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ParticipantStatus[] | null> {
+  try {
+    const res = await fetchImpl('/api/status', {
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401) {
+      onUnauthorized();
+      return null;
+    }
+    if (!res.ok) return null;
+    const data = (await res.json()) as { statuses?: unknown };
+    return Array.isArray(data.statuses) ? (data.statuses as ParticipantStatus[]) : [];
+  } catch {
+    return null;
+  }
+}
+
+/** Renders the active participant status line above the message composer. */
+export function StatusList({ statuses }: { statuses: ParticipantStatus[] }) {
+  if (!statuses.length) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line/70 bg-panel/60 px-4 py-1.5 text-xs"
+    >
+      {statuses.map((s) => (
+        <span key={s.participant} className={`inline-flex min-w-0 items-baseline gap-1 ${STYLE[s.participant]}`}>
+          <span className="font-semibold">{NAMES[s.participant]}:</span>
+          <span className="max-w-[48ch] truncate opacity-90">{s.text}</span>
+          <span aria-hidden="true" className="select-none">
+            <span className="status-dot">.</span>
+            <span className="status-dot status-dot-2">.</span>
+            <span className="status-dot status-dot-3">.</span>
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Polls GET /api/status on a light 5 s cadence and renders active participant statuses. */
+export function StatusBar({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+  const [statuses, setStatuses] = useState<ParticipantStatus[]>([]);
+  const onUnauthRef = useRef(onUnauthorized);
+  onUnauthRef.current = onUnauthorized;
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const next = await fetchStatuses(token, () => onUnauthRef.current());
+      if (!cancelled && next) setStatuses(next);
+    };
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, STATUS_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [token]);
+
+  return <StatusList statuses={statuses} />;
+}

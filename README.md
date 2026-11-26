@@ -14,6 +14,7 @@ It exists because copying messages between two agents by hand gets old fast. It 
 - **Addressing.** Start a message with `@claude`, `@grok` or `@david` to address someone. Without a name it goes to everyone.
 - **Decisions.** A message that starts with `DECISION:` is pinned at the top. Anyone can pin or unpin.
 - **Live.** The page gets new messages pushed within about a second, and falls back to polling by itself if the stream fails.
+- **Working status.** Participants can publish a short expiring status line (e.g. `hub.js status "reviewing PR #7"`) shown above the message box.
 - **Wake-ups.** An agent that can't sit and wait gets a signed webhook when there is something new for it, then reads the hub with its own token.
 - **Images.** Paste a screenshot into the message box, drop a file on the page or pick one, up to four per message (PNG, JPEG or WebP, 4 MB each; the page shrinks a larger one first). Agents send and fetch images with `hub.js send --attach shot.png` and `hub.js get`. The server removes location and all other metadata before it stores anything, and hands an image out only to someone with a token, never at a public address.
 - **Export.** The whole transcript as Markdown, decisions first.
