@@ -6,7 +6,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { draftKey, draftScope, readDraft, writeDraft } from '../app/composer';
-import { RoomTabs, addressForRoom, readSeen, roomFromSearch, roomNameProblem, seenKey, tabLabel, unreadLabel, withSeen, writeSeen } from '../app/rooms';
+import { RoomTabs, addressForRoom, heldBack, markSeen, settled, readSeen, roomFromSearch, roomNameProblem, seenElsewhere, seenKey, tabLabel, unreadLabel, withSeen, withSeenApplied, writeSeen } from '../app/rooms';
 import { SearchResults } from '../app/search';
 import type { Message } from '../lib/core';
 import { formatSeen, type Room } from '../lib/shared';
@@ -58,6 +58,58 @@ test('what was seen is kept per participant, only moves forward, and survives a 
   const off = { getItem: () => { throw new Error('storage is off'); }, setItem: () => { throw new Error('storage is off'); } };
   assert.deepEqual(readSeen(off, 'david'), {});
   assert.doesNotThrow(() => writeSeen(off, 'david', seen));
+});
+
+test('two windows on two rooms share one list of what was seen, and never undo each other', () => {
+  // Both windows belong to the same browser, so they write the same entry. Window A has main open,
+  // window B has calm open. Each only ever moves its own room, from what is stored at that moment.
+  const s = storage();
+  markSeen(s, 'david', 'main', 10); // A
+  markSeen(s, 'david', 'calm', 5); // B
+  markSeen(s, 'david', 'calm', 20); // B reads on
+  markSeen(s, 'david', 'main', 11); // A reads on: it must not put calm back to what A last knew
+  assert.deepEqual(readSeen(s, 'david'), { main: 11, calm: 20 });
+  markSeen(s, 'david', 'main', 3); // an older message arriving late moves nothing
+  assert.deepEqual(readSeen(s, 'david'), { main: 11, calm: 20 });
+  const writes: string[] = [];
+  const counting = { ...s, setItem: (k: string, v: string) => { writes.push(k); s.setItem(k, v); } };
+  markSeen(counting, 'david', 'main', 11);
+  assert.deepEqual(writes, [], 'nothing new, nothing written: the other window gets no storage event for it');
+  // Nothing about which room is open is stored anywhere: only this list, the token and the drafts.
+  assert.deepEqual([...s.kept.keys()], [seenKey('david')]);
+
+  // What a window compares to know whether its stream's counts still fit: everything but its own room.
+  assert.deepEqual(seenElsewhere({ main: 11, calm: 20, dev: 3 }, 'main'), { calm: 20, dev: 3 });
+  assert.deepEqual(seenElsewhere({ main: 11 }, 'main'), {});
+});
+
+test('a tab shows no count for a room this browser has seen to its end, whoever did the seeing', () => {
+  const list = [room('main', 'Main', 0), { ...room('calm', 'Calm talk', 2), last_id: 20 }, { ...room('dev', 'Dev', 4), last_id: 30 }];
+  // The other window has calm open and has seen #20. The count of 2 was worked out a moment before that.
+  const shown = withSeenApplied(list, { main: 11, calm: 20, dev: 25 });
+  assert.deepEqual(shown.map((r) => [r.id, r.unread]), [['main', 0], ['calm', 0], ['dev', 4]]);
+  assert.equal(shown[2], list[2], 'a room with news that nobody has seen is left as it came');
+  assert.deepEqual(withSeenApplied(list, {}).map((r) => r.unread), [0, 2, 4], 'nothing seen: the counts as they came');
+});
+
+test('a count that goes up waits a moment; one that goes down, a new room and a new name are shown at once', () => {
+  const counts = (list: Room[]) => list.map((r) => [r.id, r.unread]);
+  const shown = [room('main', 'Main', 0), room('calm', 'Calm talk', 2), room('dev', 'Dev', 5)];
+  const list = [room('main', 'Main', 1), room('calm', 'Calm talk', 0), room('dev', 'Dev renamed', 7), room('new', 'New', 3)];
+  const now = heldBack(shown, list);
+  assert.deepEqual(counts(now), [['main', 0], ['calm', 0], ['dev', 5], ['new', 0]], 'nothing goes up yet; calm goes down at once');
+  assert.deepEqual(now.map((r) => r.name), ['Main', 'Calm talk', 'Dev renamed', 'New'], 'the rest of the list is shown as it came');
+  // The moment has passed and nothing newer arrived: the list as it came.
+  assert.deepEqual(counts(settled(now, list, list)), counts(list));
+  // Meanwhile another window read main and dev (a newer list says 0 and 5): the count never showed.
+  const newer = [room('main', 'Main', 0), room('calm', 'Calm talk', 0), room('dev', 'Dev renamed', 5), room('new', 'New', 4)];
+  const afterNewer = heldBack(now, newer);
+  assert.deepEqual(counts(settled(afterNewer, list, newer)), [['main', 0], ['calm', 0], ['dev', 5], ['new', 3]], 'what the older list said counts only as far as the newest still says it');
+  assert.deepEqual(counts(settled(settled(afterNewer, list, newer), newer, newer)), counts(newer), 'and the newest list settles in its own time');
+  // A list without counts (the caller said nothing about what it has seen) passes through.
+  const plain = [room('main', 'Main'), room('calm', 'Calm talk')];
+  assert.deepEqual(heldBack(shown, plain), plain);
+  assert.deepEqual(settled(shown, plain, plain), plain);
 });
 
 test('each room has its own draft, and the draft of main is where it always was', () => {

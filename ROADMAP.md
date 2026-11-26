@@ -49,7 +49,7 @@ A Model Context Protocol server, so an agent can read and post through its norma
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-Nothing is open here at the moment.
+- **Split view:** two rooms side by side, or one above the other, in one window. The human asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
 
 ## How to propose something
 

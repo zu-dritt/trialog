@@ -19,7 +19,7 @@ import {
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
-import { RoomTabs, addressForRoom, readSeen, roomFromSearch, withSeen, writeSeen, type Seen } from './rooms';
+import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
 import { NewVersionPill, useWaitingLong } from './version';
@@ -30,6 +30,10 @@ const TOKEN_KEY = 'collabHubToken';
 const POLL_MS = 1500;
 // How long to poll after the live stream failed before trying the stream again.
 const FALLBACK_MS = 30_000;
+// A count on a tab that goes up is shown this much later (app/rooms.tsx: heldBack, settled). If
+// another window of this browser has that room open, it has noted the message as seen by then,
+// and the tab here never shows a count for it.
+const ROOMS_SETTLE_MS = 1200;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
 // Going to a message that is older than what the page holds loads the messages in between, in
@@ -98,8 +102,7 @@ export default function Page() {
   const [rooms, setRooms] = useState<Room[]>(ONLY_MAIN);
   const roomRef = useRef(MAIN_ROOM);
   roomRef.current = room;
-  // What this browser has seen in each room (app/rooms.tsx), and whose list it is.
-  const seen = useRef<{ owner: Sender | null; ids: Seen }>({ owner: null, ids: {} });
+  const [, setSeenChanged] = useState(0); // another window of this browser has seen something: draw the tabs again
   const streamToken = useRef<string | null>(null); // the token the stream last ran with
   const replies = useRef(new Map<string, Message>()); // the reply marker of each room that is not open
   const jumpAfterSwitch = useRef<{ room: string; id: number } | null>(null); // a message to go to once its room is open
@@ -161,19 +164,6 @@ export default function Page() {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-
-  /** The list of what `who` has seen, read from this browser the first time it is needed. */
-  const seenBy = (who: Sender): Seen => {
-    if (seen.current.owner !== who) seen.current = { owner: who, ids: readSeen(localStorage, who) };
-    return seen.current.ids;
-  };
-  /** Notes that `who` has seen message `id` in `inRoom`. */
-  const markSeen = (who: Sender, inRoom: string, id: number) => {
-    const next = withSeen(seenBy(who), inRoom, id);
-    if (next === seen.current.ids) return;
-    seen.current.ids = next;
-    writeSeen(localStorage, who, next);
-  };
 
   /** Opens another room. The address follows, so a reload stays there and the link can be shared. */
   const openRoom = useCallback((id: string) => {
@@ -300,7 +290,7 @@ export default function Page() {
       if (!incoming.length) return;
       lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
       // What arrives while a room is open counts as seen there.
-      if (who) markSeen(who, room, lastId.current);
+      if (who) markSeen(localStorage, who, room, lastId.current);
       setMessages((list) => merge(list, incoming));
       setPinned((list) => replaceMatching(list, incoming));
     };
@@ -313,8 +303,41 @@ export default function Page() {
       setRoom(MAIN_ROOM);
       return true;
     };
+    // What this browser has seen is read from its storage every time, never from a copy: another
+    // window may have another room open and be moving that room's entry.
     /** `seen=…` for a request that should come back with the counts of the other rooms. */
-    const seenParam = (): string | null => (who ? formatSeen(seenBy(who)) : null);
+    const seenParam = (): string | null => (who ? formatSeen(readSeen(localStorage, who)) : null);
+    /** What is known about the rooms that are not open here, as one string to compare. */
+    const seenOfOthers = (): string => (who ? formatSeen(seenElsewhere(readSeen(localStorage, who), room)) : '');
+    let toldStream = ''; // seenOfOthers() as the stream was told when it was opened
+    let latestRooms: Room[] | null = null;
+    /** Shows a list of rooms: at once, except that a count which went up waits a moment. */
+    const showRooms = (list: Room[]) => {
+      if (stopped) return;
+      latestRooms = list;
+      setRooms((shown) => heldBack(shown, list));
+      setTimeout(() => { if (!stopped && latestRooms) { const latest = latestRooms; setRooms((shown) => settled(shown, list, latest)); } }, ROOMS_SETTLE_MS);
+    };
+    /** Asks for the rooms with counts that fit what this browser has seen right now. */
+    const refreshRooms = async () => {
+      try {
+        const mine = seenParam();
+        const res = await api(`/api/rooms${mine === null ? '' : `?${new URLSearchParams({ seen: mine })}`}`, { signal: abort.signal });
+        showRooms(((await res.json()) as { rooms: Room[] }).rooms);
+      } catch { /* the tabs keep what they have; the next change asks again */ }
+    };
+    /** The stream's list of rooms. Its counts fit what the stream was told at the start; if another window has read on since, ask again. */
+    const takeRooms = (list: Room[]) => {
+      if (seenOfOthers() === toldStream) showRooms(list);
+      else void refreshRooms();
+    };
+    // Another window of this browser has seen something (it writes the same entry): the counts here follow.
+    const onStorage = (e: StorageEvent) => {
+      if (!who || e.key !== seenKey(who)) return;
+      setSeenChanged((n) => n + 1);
+      void refreshRooms();
+    };
+    window.addEventListener('storage', onStorage);
     const pause = (ms: number) => new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, ms);
       abort.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -333,7 +356,7 @@ export default function Page() {
           .then((res) => res.json() as Promise<{ rooms: Room[] }>, () => null),
       ]);
       if (stopped) return;
-      if (list) setRooms(list.rooms);
+      if (list) showRooms(list.rooms);
       who = data.me;
       setMe(data.me);
       addMessages(data.messages);
@@ -357,6 +380,8 @@ export default function Page() {
       // What this browser has seen in each room, so the answer can count what is new in the others.
       const mine = seenParam();
       if (mine !== null) params.set('seen', mine);
+      toldStream = seenOfOthers();
+      let firstRooms = true;
       const query = params.toString() ? `?${params}` : '';
       const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
       if (!res.body) throw new Error('no stream');
@@ -374,7 +399,12 @@ export default function Page() {
         }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
-        else if (event.event === 'rooms') setRooms(JSON.parse(event.data) as Room[]);
+        else if (event.event === 'rooms') {
+          const list = JSON.parse(event.data) as Room[];
+          // The list at the start fits what the stream was just told, and is shown as it is.
+          if (firstRooms) { firstRooms = false; latestRooms = list; setRooms(list); }
+          else takeRooms(list);
+        }
         else if (event.event === 'bye') goodbye = true;
       });
       const reader = res.body.getReader();
@@ -415,8 +445,7 @@ export default function Page() {
       }
     };
     void run();
-    return () => { stopped = true; abort.abort(); };
-    // (seenBy and markSeen are left out of the list: they only touch refs and this browser's storage.)
+    return () => { stopped = true; abort.abort(); window.removeEventListener('storage', onStorage); };
   }, [token, api, room]);
 
   // The reply marker belongs to its room: it waits there while another room is open.
@@ -862,10 +891,12 @@ export default function Page() {
   const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
   const reload = () => window.location.reload();
   const openRoomInfo = rooms.find((r) => r.id === room);
+  // A room this browser has seen to its end shows no count, also when another window did the seeing.
+  const shownRooms = me ? withSeenApplied(rooms, readSeen(localStorage, me)) : rooms;
   // The tabs: in the header on a wide screen, in a row of their own under it on a narrower one.
   // (The page is at most 1000 points wide, and below that the header has no room for them.)
   const tabs = (className: string) => (
-    <RoomTabs rooms={rooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
+    <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
   );
 
   return (

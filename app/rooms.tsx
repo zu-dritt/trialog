@@ -8,6 +8,10 @@
 // per participant, and never leaves it except as the "seen" list the page sends when it asks for
 // the counts. The address carries the room (`?room=calm`), so a reload and a shared link land in
 // the right one; `main` needs nothing in the address.
+//
+// Which room is open is a matter of the window alone: it is in that window's address and nowhere
+// else. So two windows side by side can show two rooms, and neither follows the other. What they
+// share is the list of what was seen, and each window only ever moves its own open room in it.
 import { useEffect, useRef, useState } from 'react';
 import { MAIN_ROOM, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, roomIdFromName, type Room } from '../lib/shared';
 
@@ -48,6 +52,56 @@ export function readSeen(storage: SeenStorage, participant: string): Seen {
   } catch {
     return {};
   }
+}
+
+/**
+ * Notes that `participant` has seen message `id` in `room`. The stored list is read again right
+ * before it is written, and only this one room is moved, forward: two windows of the same browser,
+ * each on its own room, write to the same entry and must never undo each other's progress.
+ */
+export function markSeen(storage: SeenStorage, participant: string, room: string, id: number): void {
+  const stored = readSeen(storage, participant);
+  const next = withSeen(stored, room, id);
+  if (next !== stored) writeSeen(storage, participant, next);
+}
+
+/** `seen` without one room: what a window knows about the rooms it does not have open. */
+export function seenElsewhere(seen: Seen, openRoom: string): Seen {
+  const rest: Seen = {};
+  for (const [room, id] of Object.entries(seen)) if (room !== openRoom) rest[room] = id;
+  return rest;
+}
+
+/**
+ * The rooms as the tabs show them. A room whose newest message this browser has already seen has
+ * nothing new, whatever count came with the list: the list may have been counted a moment before
+ * another window of this browser read that room.
+ */
+export function withSeenApplied(rooms: readonly Room[], seen: Seen): Room[] {
+  return rooms.map((room) => (room.unread && (seen[room.id] ?? 0) >= room.last_id ? { ...room, unread: 0 } : room));
+}
+
+// A count that goes up is shown a moment late (the page waits ROOMS_SETTLE_MS). If another
+// window of this browser has that room open, it has noted the message as seen by then, and the
+// tab here never shows a count for it. A count that goes down, a new room and a new name are
+// shown at once.
+const unreadOf = (rooms: readonly Room[], id: string): number => rooms.find((r) => r.id === id)?.unread ?? 0;
+
+/** A new list as it is shown at once: everything from the list, but no count higher than the one shown now. */
+export function heldBack(shown: readonly Room[], list: readonly Room[]): Room[] {
+  return list.map((room) => (room.unread === undefined ? room : { ...room, unread: Math.min(room.unread, unreadOf(shown, room.id)) }));
+}
+
+/**
+ * The moment has passed for the list `waited`: the newest list, with each count raised to what
+ * `waited` said, as far as the newest list still says so. Nothing shown goes down by this.
+ */
+export function settled(shown: readonly Room[], waited: readonly Room[], latest: readonly Room[]): Room[] {
+  return latest.map((room) => {
+    if (room.unread === undefined) return room;
+    const now = Math.min(unreadOf(shown, room.id), room.unread);
+    return { ...room, unread: Math.max(now, Math.min(unreadOf(waited, room.id), room.unread)) };
+  });
 }
 
 /** `seen` with message `id` seen in `room`. The same object when that is nothing new. */
