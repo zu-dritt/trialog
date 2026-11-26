@@ -17,6 +17,7 @@ import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../li
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
 import { PaneRoomBar, SplitToggle, useSplitFits } from './split-ui';
 import { TourButton, TourPanel, useTour } from './tour';
+import { MoreMenu } from './more-menu';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
@@ -236,12 +237,15 @@ export default function Page() {
   };
 
   return (
-    <div className={`mx-auto flex h-screen flex-col ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
+    // dvh is the height that is really visible: on a phone 100vh is taller, and the page would scroll
+    // the header up under the clock. The safe-area padding keeps everything clear of the notch
+    // (layout.tsx lets the page reach the screen's edges); on a computer it is 0.
+    <div className={`mx-auto flex h-dvh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
       {DEMO_BUILD && <DemoBanner />}
       {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
-      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
-        <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
-        <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
+      <header className={`relative flex min-w-0 items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
+        <h1 className="m-0 flex-none text-[17px] font-bold">Trialog</h1>
+        <span className={`min-w-0 truncate text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
         <SoundToggle on={sound.on} onToggle={sound.toggle} />
         {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
@@ -262,9 +266,14 @@ export default function Page() {
           participants={participants}
           rooms={rooms}
         />
-        {me && <span className="text-[13px] font-semibold">You: {shown(me)}</span>}
-        <button className={BUTTON} onClick={() => { void exportTranscript(); }}>Export .md</button>
-        <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
+        {/* On a phone there is no room for these three: «You» is left out, the two buttons go into «⋯». */}
+        {me && <span className="min-w-0 truncate text-[13px] font-semibold max-sm:hidden">You: {shown(me)}</span>}
+        <button className={`${BUTTON} flex-none max-sm:hidden`} onClick={() => { void exportTranscript(); }}>Export .md</button>
+        <button className={`${BUTTON} flex-none bg-transparent max-sm:hidden`} onClick={forgetToken}>Switch token</button>
+        <MoreMenu
+          className="sm:hidden"
+          items={[{ label: 'Export .md', onPick: () => { void exportTranscript(); } }, { label: 'Switch token', onPick: forgetToken }]}
+        />
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
       <div className={`flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden ${splitVisible ? 'hidden' : ''}`}>

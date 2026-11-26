@@ -844,7 +844,8 @@ export function RoomPane({
                   {shown(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
+                  {/* It wraps only when the line is too long, as on a phone; then the actions go to a second line. */}
+                  <div className="flex flex-wrap items-baseline gap-2 text-[13px] text-muted">
                     <span className="font-bold" style={{ color: own }}>{shown(m.sender)}</span>
                     {m.recipient && (
                       <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {shown(m.recipient)}</span>

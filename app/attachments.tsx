@@ -171,7 +171,7 @@ function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) 
   const info = viewedInfo(size, viewed.bytes);
   return (
     <div role="dialog" aria-modal="true" aria-label="Image, full size" onClick={onClose}
-      className="fixed inset-0 z-50 flex flex-col bg-black/90">
+      className="fixed inset-0 z-50 flex flex-col bg-black/90 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center gap-3 px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
         <span>{info}</span>
         <span className="flex-1" />

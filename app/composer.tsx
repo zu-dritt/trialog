@@ -191,11 +191,12 @@ export interface ComposerToolsProps {
  * follow in the order they are used, the most frequent first: emoji, image, decision, poll.
  * Then the size of the box, the guard's ring (leading pane only), the keyboard hint and, at the right, Send. The keyboard goes through
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
+ * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
 export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, fieldClassName, toolClassName }: ComposerToolsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={fieldClassName}>
+      <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={`${fieldClassName} min-w-0 max-w-full`}>
         <option value="">to everyone</option>
         {recipients.map((r) => <option key={r.name} value={r.name}>to {r.label}</option>)}
       </select>
@@ -215,7 +216,7 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
       <ExpandButton expanded={expand.expanded} onToggle={expand.onToggle} className={toolClassName} />
       {guard}
       <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
-      <button type="submit" className={`${toolClassName} ml-auto md:ml-0`} disabled={send.disabled}>{send.label}</button>
+      <button type="submit" className={`${toolClassName} ml-auto flex-none md:ml-0`} disabled={send.disabled}>{send.label}</button>
     </div>
   );
 }
