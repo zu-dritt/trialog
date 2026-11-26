@@ -16,6 +16,7 @@ import {
 import { decisionSqlPattern, isDecision } from './decision';
 import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
+import type { ActivityRow } from './guard';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -385,7 +386,18 @@ export interface Store {
   setReadPosition(participant: Sender, upTo: number, room?: string | null): Promise<ReadPosition>;
   /** The read positions of one room, or of every room when none is named. For the opt-in list and the stream. */
   listReads(room?: string | null): Promise<ReadPosition[]>;
+  /**
+   * The messages of every room created at or after `since` (milliseconds), in id order, as much
+   * as the loop and cost guard needs of them (lib/guard.ts): id, sender, time, and the start of
+   * the text for the hub's own messages. At most ACTIVITY_LIMIT rows, the newest.
+   */
+  recentActivity(since: number): Promise<ActivityRow[]>;
 }
+
+/** The most rows recentActivity returns. Far more than any guard limit, so the counts that matter are always complete. */
+export const ACTIVITY_LIMIT = 10_000;
+/** How much of a hub message's text recentActivity includes: enough to recognise a guard notice. */
+export const ACTIVITY_HEAD_CHARS = 40;
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
 const MIGRATION_LOCK_ID = 7230420;
@@ -411,8 +423,9 @@ const SCHEMA = [
      pinned_at  TIMESTAMPTZ
    )`,
   `CREATE INDEX IF NOT EXISTS messages_sender_created_at ON messages (sender, created_at)`,
-  // At most one welcome message, even if two instances start at once.
-  `CREATE UNIQUE INDEX IF NOT EXISTS messages_one_welcome ON messages (sender) WHERE sender = 'hub'`,
+  // There used to be a unique index here that allowed the hub one message, its welcome. The
+  // guard's notices are messages of the hub too, so migrations/013-guard.sql drops that index,
+  // and init() keeps the welcome to one with a lock instead.
   // v2 PR 2 (migrations/001-webhook-state.sql): one row holding the last message id Grok was woken for.
   `CREATE TABLE IF NOT EXISTS webhook_state (
      id               INT PRIMARY KEY CHECK (id = 1),
@@ -678,6 +691,10 @@ const SCHEMA = [
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$`,
+  // The loop and cost guard (migrations/013-guard.sql). The hub may now post more than its
+  // welcome message, and the guard counts the messages of the last 24 hours by their time.
+  `DROP INDEX IF EXISTS messages_one_welcome`,
+  `CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -960,12 +977,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
   let ready: Promise<void> | null = null;
   async function init() {
     for (const stmt of SCHEMA) await db.query(stmt, []);
-    await db.query(
-      `INSERT INTO messages (sender, text)
-       SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)
-       ON CONFLICT (sender) WHERE sender = 'hub' DO NOTHING`,
-      [welcome],
-    );
+    // Only an empty hub gets the welcome. The lock is the one every new message takes, so two
+    // instances that start at once can't both find the hub empty and both welcome it.
+    await db.transaction(async (tx) => {
+      await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
+      await tx.query(`INSERT INTO messages (sender, text) SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)`, [welcome]);
+    });
   }
   function ensure(): Promise<void> {
     if (!ready) {
@@ -1759,6 +1776,22 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toRead);
     },
+    async recentActivity(since) {
+      await ensure();
+      // The newest rows first, so the cap cuts off the oldest; messages_created_at keeps it to the window.
+      const rows = await db.query(
+        `SELECT id, sender, created_at, CASE WHEN sender = 'hub' THEN left(text, ${ACTIVITY_HEAD_CHARS}) END AS head
+         FROM messages WHERE created_at >= $1::timestamptz
+         ORDER BY id DESC LIMIT ${ACTIVITY_LIMIT}`,
+        [new Date(since).toISOString()],
+      );
+      return rows.reverse().map((r) => ({
+        id: Number(r.id),
+        sender: String(r.sender),
+        created_at: iso(r.created_at) as string,
+        head: r.head == null ? null : String(r.head),
+      }));
+    },
   };
 }
 
@@ -2318,6 +2351,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .filter((r) => room === null || r.room === room)
         .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
         .map((r) => ({ ...r }));
+    },
+    async recentActivity(since) {
+      return rows
+        .filter((m) => Date.parse(m.created_at) >= since)
+        .slice(-ACTIVITY_LIMIT)
+        .map((m) => ({ id: m.id, sender: m.sender, created_at: m.created_at, head: m.sender === 'hub' ? m.text.slice(0, ACTIVITY_HEAD_CHARS) : null }));
     },
   };
 }

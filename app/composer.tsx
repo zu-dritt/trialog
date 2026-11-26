@@ -7,7 +7,7 @@
 // that. A button switches it to a tall writing area and back. The text of an unsent message is
 // kept in this browser per participant, so a reload doesn't lose it. Only the text: no images,
 // and nothing leaves the browser.
-import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode, type RefObject } from 'react';
 import { EmojiPicker } from './emoji';
 import { parseQuotes, type Quote } from './quote';
 
@@ -179,6 +179,8 @@ export interface ComposerToolsProps {
   poll: { open: boolean; onToggle: () => void };
   expand: { expanded: boolean; onToggle: () => void };
   send: { disabled: boolean; label: string };
+  /** The loop and cost guard's ring (app/guard.tsx), after the size button. Only the leading pane has one. */
+  guard?: ReactNode;
   /** The look of the recipient picker, and of every button in the row. */
   fieldClassName: string;
   toolClassName: string;
@@ -187,10 +189,10 @@ export interface ComposerToolsProps {
 /**
  * The row under the message box. The recipient picker stays first, at the left. The actions
  * follow in the order they are used, the most frequent first: emoji, image, decision, poll.
- * Then the size of the box, the keyboard hint and, at the right, Send. The keyboard goes through
+ * Then the size of the box, the guard's ring (leading pane only), the keyboard hint and, at the right, Send. The keyboard goes through
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, fieldClassName, toolClassName }: ComposerToolsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={fieldClassName}>
@@ -211,6 +213,7 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
         aria-pressed={poll.open} aria-expanded={poll.open} aria-controls={poll.open ? 'poll-composer' : undefined}
       >Poll</button>
       <ExpandButton expanded={expand.expanded} onToggle={expand.onToggle} className={toolClassName} />
+      {guard}
       <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
       <button type="submit" className={`${toolClassName} ml-auto md:ml-0`} disabled={send.disabled}>{send.label}</button>
     </div>

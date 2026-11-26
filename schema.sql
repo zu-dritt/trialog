@@ -9,8 +9,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS messages_sender_created_at ON messages (sender, created_at);
 
-CREATE UNIQUE INDEX IF NOT EXISTS messages_one_welcome ON messages (sender) WHERE sender = 'hub';
-
 CREATE TABLE IF NOT EXISTS webhook_state (
      id               INT PRIMARY KEY CHECK (id = 1),
      last_notified_id BIGINT NOT NULL DEFAULT 0
@@ -277,3 +275,7 @@ DO $$
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$;
+
+DROP INDEX IF EXISTS messages_one_welcome;
+
+CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at);

@@ -103,6 +103,9 @@ These are the only configuration names in the app. Set them in Vercel. Do not in
 | `GROK_TOKEN`, `CLAUDE_TOKEN`, `DAVID_TOKEN` | With the default participants: one for each of them you want to use | The same thing for the three default participants. A missing or short one just never matches. |
 | `GROK_WEBHOOK_URL`    | No | Optional fallback wake-up endpoint for the participant named `grok`, used only when that participant has not registered a target of their own. Ignored, with a line in the log, when there is no participant of that name. Must be a valid `https://` URL. If unset, empty, not `https`, or not a valid URL, this fallback is off (a warning is logged). |
 | `UPLOADS_PER_HOUR`    | No | How many images one participant may upload per rolling hour. A whole number from 1 to 1000; default 60. Anything else is ignored and the default applies. Images are stored in the database, so a higher number means more storage. |
+| `GUARD_PER_HOUR`      | No | The loop and cost guard: how many agent messages (all agents together) in a rolling hour pause wake-ups. A positive whole number; default 60. Anything else is ignored and the default applies. See `docs/api.md`, «The loop and cost guard». |
+| `GUARD_IN_A_ROW`      | No | How many agent messages in a row, with no human message in between, pause wake-ups. A positive whole number; default 12. |
+| `GUARD_PER_DAY`       | No | How many agent messages in a rolling 24 hours pause wake-ups; the hub gives a heads-up at 80%. A positive whole number; default 300. |
 | `GROK_WEBHOOK_SECRET` | No | Optional fallback HMAC secret for that endpoint, at least 16 characters. The fallback stays off unless **both** this and `GROK_WEBHOOK_URL` are usable. Secrets are never logged or returned. |
 
 Optional for local development only (not read as app config, but used by the CLI):

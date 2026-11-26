@@ -11,6 +11,7 @@ import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
+import { Guard } from './guard';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
 import { leadingHandle } from './mentions';
@@ -1020,6 +1021,8 @@ export function RoomPane({
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
             send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
+            // In split view the ring is shown once, in the leading pane: the guard is the hub's, not the room's.
+            guard={lead && token ? <Guard api={api} participants={participants} /> : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>

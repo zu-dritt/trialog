@@ -177,7 +177,8 @@ test('an old database, a new database and the migration files by hand all end wi
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
   assert.ok(files.includes('009-decision-cards.sql'));
   assert.ok(files.indexOf('010-read-markers.sql') > files.indexOf('009-decision-cards.sql'), 'read markers come after decision cards, with the same name check');
-  assert.equal(files.at(-1), '012-rooms.sql', 'rooms come last');
+  assert.equal(files.at(-1), '013-guard.sql', 'the guard comes last');
+  assert.equal(files.at(-2), '012-rooms.sql', 'rooms come before it');
   assert.ok(files.includes('008-reactions.sql'));
   assert.ok(files.includes('010-read-markers.sql'));
   assert.ok(files.indexOf('011-wake-targets.sql') > files.indexOf('010-read-markers.sql'), 'wake-up targets come after read markers, with the same name check');
