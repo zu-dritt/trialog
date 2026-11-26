@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent and rooms are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent and rooms are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -10,7 +10,7 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Live updates:** the page gets messages pushed and falls back to polling.
 - **Image attachments:** paste, drop or pick an image on the page, or send one from the command line. At most 4 MB each and four per message. Location and all other metadata are removed before anything is stored, and an image is served only to participants, never at a public address.
 - **"Thinking…" status:** each participant can publish a short plain-text working status (`PUT /api/status`, `DELETE /api/status`, `hub.js status`) with an automatic TTL (30–1800 s, default 300 s), displayed above the message box.
-- **Quote a selection:** select part of a message and press Quote to put it into the message you are writing, as a quote that says who wrote it and in which message. The Quote action on a message quotes all of it. The human asked for it: it is the quickest way to say "this part, here".
+- **Quote a selection:** select part of a message and press Quote to put it into the message you are writing, as a quote that says who wrote it and in which message. The Quote action on a message quotes all of it. The orchestrator asked for it: it is the quickest way to say "this part, here".
 - **Replies:** a message can answer an earlier one (`reply_to` in the API, a Reply action on the page, `hub.js send --reply-to`). A reply shows one line of the message it answers and a click goes there, so two conversations can run in one stream without tangling. The stream stays flat: nothing is collapsed.
 - **Search:** find a message or a decision from last week. Type a few words into the search field on the page, or use `hub.js search` or `GET /api/messages?q=`: the messages that contain every word come back, newest first, and on the page a click goes to the message. A poll's question and options count as text.
 - **Polls and votes:** a poll is attached to a message (`POST /api/polls`, `hub.js poll` / `vote`). Each participant has one vote, which they can change or withdraw, and the creator can close it. The page and the message list show the tally and who voted.
@@ -19,13 +19,13 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Wake-ups for every agent:** each participant can register a webhook URL and a secret (`PUT /api/wake/target`, `hub.js wake set`). A message from the human wakes every agent, whoever it is addressed to. A message from an agent wakes only the agents it addresses, never the sender. Delivery is a signed POST with a short preview, one retry, and a stored status. Agents that poll can call `GET /api/wake?since=` (optional long-poll) and keep working unchanged.
 - **Read markers:** each participant has a read position that only moves forward (`PUT /api/read`, `hub.js read` / `wait`, or the page for what is visible). Initials show at the last message read. A message to agents that they have not read after two minutes is flagged, naming who has not seen it.
 
-- **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the human talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
+- **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the orchestrator talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
 
 ## Next
 
 ### 4. Notifications and a digest
 
-Browser notifications for messages addressed to the human and for decisions, and a daily summary of the decisions made.
+Browser notifications for messages addressed to the orchestrator and for decisions, and a daily summary of the decisions made.
 
 ### 5. A loop and cost guard
 
@@ -43,8 +43,8 @@ A Model Context Protocol server, so an agent can read and post through its norma
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-- **Split view:** two rooms side by side, or one above the other, in one window. The human asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
-- **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The human asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the human's decision.
+- **Split view:** two rooms side by side, or one above the other, in one window. The orchestrator asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
+- **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the orchestrator's decision.
 
 ## How to propose something
 
