@@ -6,6 +6,8 @@ import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
 import { RoomPane } from './pane';
 import { RoomTabs, addressForRoom, roomFromSearch, readSeen, tabTitle, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
+import { DemoBanner, DemoSignIn } from './demo';
+import { DEMO_BUILD } from '../lib/demo';
 import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
@@ -207,7 +209,7 @@ export default function Page() {
   useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
   if (token === null) return null;
-  if (!token) return <TokenForm onSave={saveToken} refused={refused} />;
+  if (!token) return <>{DEMO_BUILD && <DemoSignIn onPick={saveToken} />}<TokenForm onSave={saveToken} refused={refused} /></>;
 
   const shown = (name: string) => labelOf(name, participants);
   const reload = () => window.location.reload();
@@ -235,6 +237,7 @@ export default function Page() {
 
   return (
     <div className={`mx-auto flex h-screen flex-col ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
+      {DEMO_BUILD && <DemoBanner />}
       {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
