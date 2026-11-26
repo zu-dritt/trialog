@@ -66,13 +66,20 @@ test('a wake-up target must be https, with a secret, and the error never repeats
     [{ url: 'https://scout.example/wake', secret: 'short' }, /between 16 and 256/],
     [{ url: 'https://user:pass@scout.example/wake', secret }, /must not include a username or a password/],
     [{ url: 'https://localhost/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://0.0.0.0/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://0.1.2.3/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://127.0.0.1/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://100.64.0.1/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://100.127.255.255/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://10.0.0.5/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://192.168.1.8/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://172.16.0.1/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://172.31.255.1/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://169.254.1.2/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://[::]/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://[::1]/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://[::ffff:0.0.0.0]/wake', secret }, /must not point at an internal host/],
+    [{ url: 'https://[::ffff:100.64.0.1]/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://[fc00::1]/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://[fd12:3456::1]/wake', secret }, /must not point at an internal host/],
     [{ url: 'https://[fe80::1]/wake', secret }, /must not point at an internal host/],
@@ -90,6 +97,8 @@ test('a wake-up target must be https, with a secret, and the error never repeats
     }
   }
   assert.equal(parseWakeTarget({ url: 'https://172.32.0.1/wake', secret }).ok, true, '172.32.0.0/8 is not private');
+  assert.equal(parseWakeTarget({ url: 'https://100.63.255.255/wake', secret }).ok, true, 'just below CGNAT');
+  assert.equal(parseWakeTarget({ url: 'https://100.128.0.1/wake', secret }).ok, true, 'just above CGNAT');
   assert.equal(parseWakeTarget({ url: 'https://8.8.8.8/wake', secret }).ok, true);
   assert.equal(wakeTargetHost('https://scout.example/wake?token=abc'), 'scout.example');
 });
@@ -119,10 +128,10 @@ test('the env fallback is still only for the participant named grok, when that n
 });
 
 test('isInternalHostname covers reserved names and internal IP literals, including a trailing dot', () => {
-  for (const host of ['localhost', 'localhost.', 'Foo.Localhost', 'printer.local', 'db.internal.', '127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.4.1', '169.254.0.1', '::1', 'fc00::1', 'fd00::2', 'fe80::3', '::ffff:10.0.0.1']) {
+  for (const host of ['localhost', 'localhost.', 'Foo.Localhost', 'printer.local', 'db.internal.', '0.0.0.0', '0.1.2.3', '127.0.0.1', '10.1.2.3', '100.64.0.1', '100.127.255.255', '192.168.0.1', '172.16.4.1', '169.254.0.1', '::', '::1', 'fc00::1', 'fd00::2', 'fe80::3', '::ffff:10.0.0.1', '::ffff:0.0.0.0']) {
     assert.equal(isInternalHostname(host), true, host);
   }
-  for (const host of ['scout.example', '8.8.8.8', '172.32.0.1', '2001:4860:4860::8888']) {
+  for (const host of ['scout.example', '8.8.8.8', '172.32.0.1', '100.63.255.255', '100.128.0.1', '2001:4860:4860::8888']) {
     assert.equal(isInternalHostname(host), false, host);
   }
 });
