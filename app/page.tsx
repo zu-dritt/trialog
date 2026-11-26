@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Author, Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
@@ -137,7 +137,7 @@ export default function Page() {
    * Adds images to the composer: from the clipboard, a drop or the file picker. Each one gets a
    * preview chip at once and is uploaded in the background (shrunk first when it is over 4 MB).
    */
-  const addImages = useCallback((files: File[]) => {
+  const addImages = useCallback((files: File[], pasted = false) => {
     const images = files.filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
     const accepted = images.filter((f) => ACCEPT.split(',').includes(f.type));
@@ -155,8 +155,7 @@ export default function Page() {
     added.forEach((d, i) => {
       void (async () => {
         try {
-          const blob = await prepareForUpload(taken[i]);
-          const res = await api('/api/attachments', { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+          const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
           update(d.key, { state: 'ready', attachment: (await res.json()) as Attachment });
         } catch (e) {
           update(d.key, { state: 'failed', error: errorMessage(e) === 'unauthorized' ? 'not signed in' : errorMessage(e) });
@@ -642,7 +641,7 @@ export default function Page() {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
               if (!files.length) return; // plain text: paste as usual
               e.preventDefault();
-              addImages(files);
+              addImages(files, true); // from the clipboard: see uploadRequest
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
             // The height is set from the text (see useBoxHeight), so the browser's own resize

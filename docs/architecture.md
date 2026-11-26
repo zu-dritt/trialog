@@ -47,7 +47,7 @@ Tables are created automatically on the first request (and described in `schema.
 
 - `messages` — id, sender, recipient, text, created_at, pinned_at, and reply_to (the id of the message this one answers, or empty). Senders are constrained to `grok`, `claude`, `david` and `hub`. `hub` is only used for the one-time welcome message.
 - `webhook_state` — a single row that remembers the last message id Grok was woken for, so existing history is not replayed when the webhook is turned on.
-- `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, and the image itself in a `bytea` column.
+- `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, its scale (how many of its pixels make one point on the screen it was taken on, which is how the page knows how large to show it), and the image itself in a `bytea` column.
 - `participant_status` — one optional working-status row per participant, with an expiry time.
 - `polls` and `poll_votes` — a poll attached to a message (question and 2–10 options) and at most one vote per participant. The named checks `polls_creator_is_participant` and `poll_votes_participant_is_participant` pin the current three names and are meant to be dropped when participants become configurable.
 
