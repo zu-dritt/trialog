@@ -65,10 +65,11 @@ export function markSeen(storage: SeenStorage, participant: string, room: string
   if (next !== stored) writeSeen(storage, participant, next);
 }
 
-/** `seen` without one room: what a window knows about the rooms it does not have open. */
-export function seenElsewhere(seen: Seen, openRoom: string): Seen {
+/** `seen` without the rooms that are open here: what this window knows about the others. */
+export function seenElsewhere(seen: Seen, ...openRooms: string[]): Seen {
   const rest: Seen = {};
-  for (const [room, id] of Object.entries(seen)) if (room !== openRoom) rest[room] = id;
+  const open = new Set(openRooms);
+  for (const [room, id] of Object.entries(seen)) if (!open.has(room)) rest[room] = id;
   return rest;
 }
 

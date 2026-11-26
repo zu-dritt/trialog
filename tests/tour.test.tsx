@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Message } from '../lib/core';
 import type { DecisionCard, Participant } from '../lib/shared';
 import {
-  NEW_TOUR, TOUR_STEPS, TourPanel, agreedBy, currentStep, hideTour, readTour, shouldOffer, skipStep, startTour, stepOf, stepText,
+  NEW_TOUR, TOUR_STEPS, TourPanel, agreedBy, currentStep, findTarget, leadPane, hideTour, readTour, shouldOffer, skipStep, startTour, stepOf, stepText,
   toggleTour, tourKey, withEvent, writeTour, type Tour, type TourEvent, type TourState,
 } from '../app/tour';
 
@@ -236,4 +236,26 @@ test('the recap shows what was done in the page\'s colours, with the label, who 
   assert.doesNotMatch(skippedAll, /<line/);
   assert.doesNotMatch(skippedAll, />woken</);
   assert.match(skippedAll, /A message from Orchestrator to everyone wakes Scout, Quill\./);
+});
+
+test('with two rooms side by side, the tour points into the left pane only; the room tabs are the page\'s', () => {
+  type Fake = { name: string; getClientRects: () => object[] };
+  const el = (name: string, visible = true): Fake => ({ name, getClientRects: () => (visible ? [{}] : []) });
+  const leftBox = el('left box');
+  const rightBox = el('right box');
+  const hiddenLeft = el('hidden', false);
+  const tabs = el('tabs');
+  const lists: Record<string, Fake[]> = { '[data-tour="box"]': [hiddenLeft, leftBox], '[data-tour="rooms"]': [] };
+  const lead = { querySelector: () => null, querySelectorAll: (sel: string) => lists[sel] ?? [] };
+  const page = {
+    querySelector: (sel: string) => (sel === '[data-tour-pane="lead"]' ? lead : null),
+    querySelectorAll: (sel: string) => ({ '[data-tour="box"]': [leftBox, rightBox], '[data-tour="rooms"]': [tabs] } as Record<string, Fake[]>)[sel] ?? [],
+  };
+  const find = (selectors: string[], root: unknown) => findTarget(selectors, root as ParentNode) as unknown as Fake | null;
+  assert.equal(find(['[data-tour="box"]'], leadPane(page as unknown as ParentNode)), leftBox, 'the left pane\'s box, the visible one');
+  assert.equal(find(['[data-tour="box"]'], page), rightBox, 'the whole page would have picked the right pane\'s');
+  assert.equal(find(['[data-tour="rooms"]'], page), tabs);
+  const noPanes = { querySelector: () => null };
+  assert.equal(leadPane(noPanes as unknown as ParentNode), noPanes, 'no pane: the whole page');
+  assert.deepEqual(TOUR_STEPS.filter((s) => s.scope === 'page').map((s) => s.id), ['room'], 'only the room tabs are outside the pane');
 });

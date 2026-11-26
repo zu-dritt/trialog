@@ -1,81 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
-import type { Message, Poll, Sender } from '../lib/core';
-import type { DecisionCard, DecisionStance, ReadPosition } from '../lib/shared';
-import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ROOMS, attachmentLabel, colorOf, firstLine, labelOf, formatSeen, type Attachment, type Participant, type Room } from '../lib/shared';
-import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
-import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
-import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
-import { insertAtCursor } from './emoji';
-import { MessageBody } from './markdown';
-import { ChipRow } from './chips';
-import { PollCard, PollComposer, withPolls } from './polls';
-import { DecisionCardView, DecisionComposer, withDecisions } from './decisions';
-import {
-  MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteCommentBox, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
-  composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
-} from './quote';
-import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
-import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
-import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
-import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Message, Sender } from '../lib/core';
+import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
+import { RoomPane, RoomPicker } from './pane';
+import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { SoundToggle, useSoundMode } from './sound';
 import { StatusBar } from './status';
-import { TourButton, TourPanel, agreedBy, useTour } from './tour';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
+import { defaultSecondRoom, readSplit, writeSplit } from './split';
+import { SplitToggle, useSplitFits } from './split-ui';
+import { TourButton, TourPanel, useTour } from './tour';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
-const POLL_MS = 1500;
-// How long to poll after the live stream failed before trying the stream again.
-const FALLBACK_MS = 30_000;
-// A count on a tab that goes up is shown this much later (app/rooms.tsx: heldBack, settled). If
-// another window of this browser has that room open, it has noted the message as seen by then,
-// and the tab here never shows a count for it.
-const ROOMS_SETTLE_MS = 1200;
-// A stream that ends sooner than this without the server saying goodbye counts as a failure.
-const MIN_STREAM_MS = 5_000;
-// Going to a message that is older than what the page holds loads the messages in between, in
-// requests of this size, and at most this many of them.
-const OLDER_PAGE_SIZE = 500;
-const OLDER_PAGES = 20;
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
-const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
-// The buttons in the row under the message box: a little narrower on a phone, so the row fits.
-const TOOL = `${BUTTON} max-sm:px-2`;
 
-const timeFmt = new Intl.DateTimeFormat('de-CH', { hour: '2-digit', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-interface MessagesResponse {
-  me: Sender;
-  messages: Message[];
-  pinned: Message[];
-  polls?: Poll[];
-  reactions?: { message_id: number; reactions: Message['reactions'] }[];
-  decisions?: DecisionCard[];
-  reads?: ReadPosition[];
-}
-/** GET /api/participants: who takes part here. The page has no names of its own. */
-interface ParticipantsResponse {
-  me: Sender;
-  participants: ParticipantWithWake[];
-}
 /** Until the server has said which rooms there are, the page shows the one that always exists. */
 const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
-
-/** Merge new messages into the list, de-duplicated by id and sorted. */
-function merge(list: Message[], incoming: Message[]): Message[] {
-  const byId = new Map(list.map((m) => [m.id, m]));
-  for (const m of incoming) byId.set(m.id, m);
-  return [...byId.values()].sort((a, b) => a.id - b.id);
-}
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -100,76 +46,42 @@ function TokenForm({ onSave }: { onSave: (token: string) => void }) {
 export default function Page() {
   const [token, setToken] = useState<string | null>(null); // null: not read yet; '': none saved
   const [me, setMe] = useState<Sender | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [pinned, setPinned] = useState<Message[]>([]);
-  const [reads, setReads] = useState<ReadPosition[]>([]);
-  // The room that is open. The stream, the composer and the pinned list are this room's.
+  // The room that is open in the leading pane. The address follows this room, so a reload stays there.
   const [room, setRoom] = useState(MAIN_ROOM);
   const [rooms, setRooms] = useState<Room[]>(ONLY_MAIN);
   const roomRef = useRef(MAIN_ROOM);
   roomRef.current = room;
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
   const [, setSeenChanged] = useState(0); // another window of this browser has seen something: draw the tabs again
-  const streamToken = useRef<string | null>(null); // the token the stream last ran with
-  const replies = useRef(new Map<string, Message>()); // the reply marker of each room that is not open
-  const jumpAfterSwitch = useRef<{ room: string; id: number } | null>(null); // a message to go to once its room is open
-  const keepNotice = useRef(false); // the notice says why this room was opened: it stays through the change
   const [status, setStatus] = useState('connecting…');
-  // The open room's first messages have arrived. What came before is history: sound mode stays quiet for it.
-  const [primed, setPrimed] = useState(false);
   const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
-  // The server runs another build than this page was loaded with. The page says so and waits for a click.
   const newVersion = isOtherBuild(BUILD_ID, serverBuild);
   const newVersionWaitsLong = useWaitingLong(newVersion);
-  const [draft, setDraft] = useState('');
-  const [to, setTo] = useState('');
-  const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState('');
   const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
-  const participantsRef = useRef<Participant[]>([]);
-  participantsRef.current = participants;
-  // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
-  const names = useMemo(() => participants.map((p) => p.name), [participants]);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
-  const [drafts, setDrafts] = useState<Draft[]>([]); // images waiting in the composer
-  const [dragging, setDragging] = useState(false);
-  const lastId = useRef(0);
-  const listRef = useRef<HTMLElement>(null);
-  const stick = useRef(true);
-  const nextDraftKey = useRef(1);
-  const draftsRef = useRef<Draft[]>([]);
-  const dragDepth = useRef(0);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [pollOpen, setPollOpen] = useState(false);
-  const [pollBusy, setPollBusy] = useState(false);
-  const [pollError, setPollError] = useState('');
-  const [decisionOpen, setDecisionOpen] = useState(false);
-  const [decisionBusy, setDecisionBusy] = useState(false);
-  const [decisionError, setDecisionError] = useState('');
-  const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
-  const cursorAfterInsert = useRef<number | null>(null);
-  const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [expanded, setExpanded] = useState(false); // the tall writing area
-  const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer, in the room that is open
-  const replyToRef = useRef<Message | null>(null);
-  const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
-  const pendingJump = useRef<number | null>(null); // a message to go to as soon as it is on the page
-  const draftOwner = useRef<string | null>(null); // whose text is in the message box, and for which room (draftScope)
-  const [quotes, setQuotes] = useState<QuoteChip[]>([]); // quotes waiting above the message box
-  const quotesRef = useRef<QuoteChip[]>([]);
-  const draftRef = useRef('');
-  const nextQuoteKey = useRef(1);
-  quotesRef.current = quotes;
-  draftRef.current = draft;
-  replyToRef.current = replyTo;
-  const viewportHeight = useViewportHeight();
-  draftsRef.current = drafts;
-  // Sound mode: off until the speaker button next to «● live» switches it on (app/sound.tsx).
-  const sound = useSoundMode({ messages, me, participants, primed, newVersion });
-  // Learn by doing: the guided tour. The page reports the person's own actions to it (tour.note).
-  // It is offered only once the latest messages of the open room are in (primed), so the page can
-  // tell whether the person has written here before.
-  const tour = useTour({ me, participants, loaded: primed, history: messages });
+  const [pageNotice, setPageNotice] = useState('');
+  const [splitOn, setSplitOn] = useState(false);
+  const [secondRoom, setSecondRoom] = useState(MAIN_ROOM);
+  const [splitReady, setSplitReady] = useState(false);
+  const [seek, setSeek] = useState<{ room: string; id: number } | null>(null);
+  const [leadHeard, setLeadHeard] = useState<{ messages: Message[]; primed: boolean }>({ messages: [], primed: false });
+  const [sideHeard, setSideHeard] = useState<{ messages: Message[]; primed: boolean }>({ messages: [], primed: false });
+  const fits = useSplitFits();
+  const splitVisible = splitOn && fits;
+  const heardMessages = useMemo(() => {
+    const byId = new Map(leadHeard.messages.map((m) => [m.id, m]));
+    if (splitVisible) for (const m of sideHeard.messages) byId.set(m.id, m);
+    return [...byId.values()].sort((a, b) => a.id - b.id);
+  }, [leadHeard.messages, sideHeard.messages, splitVisible]);
+  const primed = leadHeard.primed && (!splitVisible || sideHeard.primed);
+  const sound = useSoundMode({ messages: heardMessages, me, participants, primed, newVersion });
+  const onLeadHeard = useCallback((messages: Message[], next: boolean) => setLeadHeard({ messages, primed: next }), []);
+  const onSideHeard = useCallback((messages: Message[], next: boolean) => setSideHeard({ messages, primed: next }), []);
+  // Learn by doing: the guided tour. Both panes report the person's own actions to it (tour.note).
+  // It is offered only once the leading pane's latest messages are in, so the page can tell whether
+  // the person has written there before.
+  const tour = useTour({ me, participants, loaded: leadHeard.primed, history: heardMessages });
   const noteTour = tour.note;
 
   // The address says which room to open. Read together with the token, so the page opens once, in that room.
@@ -182,7 +94,41 @@ export default function Page() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  /** Opens another room. The address follows, so a reload stays there and the link can be shared. */
+  // The stored split choice is per participant, and starts off when none has been kept.
+  useEffect(() => {
+    if (!me) {
+      setSplitReady(false);
+      setSplitOn(false);
+      setSecondRoom(MAIN_ROOM);
+      return undefined;
+    }
+    const pref = readSplit(localStorage, me);
+    setSplitOn(pref.open);
+    setSecondRoom(pref.room);
+    setSplitReady(true);
+  }, [me]);
+
+  useEffect(() => {
+    if (!me || !splitReady) return undefined;
+    writeSplit(localStorage, me, { open: splitOn, room: secondRoom });
+    return undefined;
+  }, [me, splitOn, secondRoom, splitReady]);
+
+  // Two panes of the same room are not useful: if the left is opened onto the right, pick another.
+  useEffect(() => {
+    if (!splitOn || secondRoom !== room) return undefined;
+    const next = defaultSecondRoom(rooms, room);
+    if (next !== secondRoom) setSecondRoom(next);
+    return undefined;
+  }, [splitOn, room, secondRoom, rooms]);
+
+  useEffect(() => {
+    if (splitVisible) return undefined;
+    setSideHeard({ messages: [], primed: false });
+    return undefined;
+  }, [splitVisible]);
+
+  /** Opens another room in the leading pane. The address follows, so a reload stays there and the link can be shared. */
   const openRoom = useCallback((id: string) => {
     if (id === roomRef.current) return;
     window.history.pushState(null, '', addressForRoom(window.location.href, id));
@@ -204,555 +150,7 @@ export default function Page() {
     return res;
   }, [token, forgetToken]);
 
-  const loadImage = useImageLoader(token, forgetToken);
-
-  // Release the local previews when the page goes away.
-  useEffect(() => () => { for (const d of draftsRef.current) URL.revokeObjectURL(d.preview); }, []);
-
-  /**
-   * Adds images to the composer: from the clipboard, a drop or the file picker. Each one gets a
-   * preview chip at once and is uploaded in the background (shrunk first when it is over 4 MB).
-   */
-  const addImages = useCallback((files: File[], pasted = false) => {
-    const images = files.filter((f) => f.type.startsWith('image/'));
-    if (!images.length) return;
-    const accepted = images.filter((f) => ACCEPT.split(',').includes(f.type));
-    const room = MAX_ATTACHMENTS_PER_MESSAGE - draftsRef.current.length;
-    const taken = accepted.slice(0, Math.max(0, room));
-    if (accepted.length < images.length) setNotice('Only PNG, JPEG and WebP images can be attached.');
-    else if (taken.length < accepted.length) setNotice(`A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} images.`);
-    else setNotice('');
-
-    const added: Draft[] = taken.map((file) => ({ key: nextDraftKey.current++, name: file.name || 'image', preview: URL.createObjectURL(file), state: 'uploading' }));
-    if (!added.length) return;
-    draftsRef.current = [...draftsRef.current, ...added]; // so a second paste right away counts these
-    setDrafts((list) => [...list, ...added]);
-    const update = (key: number, change: Partial<Draft>) => setDrafts((list) => list.map((d) => (d.key === key ? { ...d, ...change } : d)));
-    added.forEach((d, i) => {
-      // For the full-size view of the chip: at which scale the file is shown, as far as the page can tell.
-      void localScale(taken[i], pasted).then((scale) => { if (scale) update(d.key, { scale }); }, () => {});
-      void (async () => {
-        try {
-          const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
-          update(d.key, { state: 'ready', attachment: (await res.json()) as Attachment });
-        } catch (e) {
-          update(d.key, { state: 'failed', error: errorMessage(e) === 'unauthorized' ? 'not signed in' : errorMessage(e) });
-        }
-      })();
-    });
-  }, [api]);
-
-  const removeDraft = (key: number) => {
-    // An upload that is removed here is never linked; the server deletes it within the hour.
-    setDrafts((list) => list.filter((d) => {
-      if (d.key === key) URL.revokeObjectURL(d.preview);
-      return d.key !== key;
-    }));
-  };
-
-  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
-  const dropHandlers = {
-    onDragEnter: (e: React.DragEvent) => { if (hasFiles(e)) { e.preventDefault(); dragDepth.current += 1; setDragging(true); } },
-    onDragOver: (e: React.DragEvent) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } },
-    onDragLeave: (e: React.DragEvent) => { if (hasFiles(e)) { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); } },
-    onDrop: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault(); // otherwise the browser leaves the page to show the dropped file
-      dragDepth.current = 0;
-      setDragging(false);
-      addImages(Array.from(e.dataTransfer.files));
-    },
-  };
-
-  // Live updates. The page reads /api/stream (new messages and pin changes pushed by the server).
-  // If the stream can't be opened or breaks, it polls /api/messages instead and tries the stream
-  // again after a while, so the page keeps working either way.
-  useEffect(() => {
-    if (!token) return undefined;
-    let stopped = false;
-    const abort = new AbortController();
-    lastId.current = 0;
-    setMessages([]);
-    setPinned([]);
-    setReads([]); // read positions are per room: the other room's say nothing here
-    setPrimed(false);
-    stick.current = true;
-    // Another token is another participant: forget who took part. Another room changes none of that.
-    if (streamToken.current !== token) {
-      streamToken.current = token;
-      setParticipants([]);
-      setSetupError('');
-      setRooms(ONLY_MAIN);
-    }
-    let who: Sender | null = null; // the participant this token belongs to, once the server has said so
-
-    /**
-     * Asks who takes part and who this token belongs to: the names, the recipient picker and the
-     * colours all come from the answer. Asked again whenever the stream reconnects, so a change to
-     * the server's setting shows up without a reload. A failure here stops nothing: messages are
-     * still shown, in the neutral colour, until an answer arrives.
-     */
-    const loadParticipants = async () => {
-      try {
-        const data = (await (await api('/api/participants', { signal: abort.signal })).json()) as ParticipantsResponse;
-        if (stopped) return;
-        who = data.me;
-        setParticipants(data.participants);
-        setMe(data.me);
-        setSetupError('');
-      } catch (e) {
-        if (errorMessage(e) === 'unauthorized') throw e; // the token was refused: the caller stops
-        if (!stopped && errorMessage(e).startsWith('Configuration error')) setSetupError(errorMessage(e));
-      }
-    };
-
-    const addMessages = (incoming: Message[]) => {
-      if (!incoming.length) return;
-      lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
-      // What arrives while a room is open counts as seen there.
-      if (who) markSeen(localStorage, who, room, lastId.current);
-      setMessages((list) => merge(list, incoming));
-      setPinned((list) => replaceMatching(list, incoming));
-    };
-    /** The room in the address is not a room of this hub (an old link, a typing mistake): open main. */
-    const leaveMissingRoom = (e: unknown): boolean => {
-      if (room === MAIN_ROOM || !/^Room ".*" does not exist/.test(errorMessage(e))) return false;
-      keepNotice.current = true; // the change of room that follows must not wipe this
-      setNotice(`There is no room "${room}" here. This is Main.`);
-      window.history.replaceState(null, '', addressForRoom(window.location.href, MAIN_ROOM));
-      setRoom(MAIN_ROOM);
-      return true;
-    };
-    // What this browser has seen is read from its storage every time, never from a copy: another
-    // window may have another room open and be moving that room's entry.
-    /** `seen=…` for a request that should come back with the counts of the other rooms. */
-    const seenParam = (): string | null => (who ? formatSeen(readSeen(localStorage, who)) : null);
-    /** What is known about the rooms that are not open here, as one string to compare. */
-    const seenOfOthers = (): string => (who ? formatSeen(seenElsewhere(readSeen(localStorage, who), room)) : '');
-    let toldStream = ''; // seenOfOthers() as the stream was told when it was opened
-    let latestRooms: Room[] | null = null;
-    /** Shows a list of rooms: at once, except that a count which went up waits a moment. */
-    const showRooms = (list: Room[]) => {
-      if (stopped) return;
-      latestRooms = list;
-      setRooms((shown) => heldBack(shown, list));
-      setTimeout(() => { if (!stopped && latestRooms) { const latest = latestRooms; setRooms((shown) => settled(shown, list, latest)); } }, ROOMS_SETTLE_MS);
-    };
-    /** Asks for the rooms with counts that fit what this browser has seen right now. */
-    const refreshRooms = async () => {
-      try {
-        const mine = seenParam();
-        const res = await api(`/api/rooms${mine === null ? '' : `?${new URLSearchParams({ seen: mine })}`}`, { signal: abort.signal });
-        showRooms(((await res.json()) as { rooms: Room[] }).rooms);
-      } catch { /* the tabs keep what they have; the next change asks again */ }
-    };
-    /** The stream's list of rooms. Its counts fit what the stream was told at the start; if another window has read on since, ask again. */
-    const takeRooms = (list: Room[]) => {
-      if (seenOfOthers() === toldStream) showRooms(list);
-      else void refreshRooms();
-    };
-    // Another window of this browser has seen something (it writes the same entry): the counts here follow.
-    const onStorage = (e: StorageEvent) => {
-      if (!who || e.key !== seenKey(who)) return;
-      setSeenChanged((n) => n + 1);
-      void refreshRooms();
-    };
-    window.addEventListener('storage', onStorage);
-    const pause = (ms: number) => new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      abort.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-    });
-
-    /** One request to the polling endpoint. */
-    const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1', reactions: '1', decisions: '1', reads: '1' });
-      if (lastId.current) params.set('since', String(lastId.current));
-      if (room !== MAIN_ROOM) params.set('room', room);
-      const mine = seenParam();
-      const [data, list] = await Promise.all([
-        api(`/api/messages?${params}`, { signal: abort.signal }).then((res) => res.json() as Promise<MessagesResponse>),
-        // The tabs and their counts. Without them the page still works, so a failure here is not one.
-        api(`/api/rooms${mine === null ? '' : `?${new URLSearchParams({ seen: mine })}`}`, { signal: abort.signal })
-          .then((res) => res.json() as Promise<{ rooms: Room[] }>, () => null),
-      ]);
-      if (stopped) return;
-      if (list) showRooms(list.rooms);
-      who = data.me;
-      setMe(data.me);
-      addMessages(data.messages);
-      setPinned(data.pinned);
-      if (data.polls?.length) setMessages((list) => withPolls(list, data.polls ?? []));
-      if (data.reactions) {
-        setMessages((list) => applyReactionList(list, data.reactions ?? []));
-        setPinned((list) => applyReactionList(list, data.reactions ?? []));
-      }
-      if (data.decisions) {
-        setMessages((list) => withDecisions(list, data.decisions ?? []));
-        setPinned((list) => withDecisions(list, data.decisions ?? []));
-      }
-      if (data.reads) setReads((list) => applyReads(list, data.reads ?? []));
-      setPrimed(true);
-    };
-
-    /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
-    const readStream = async (): Promise<boolean> => {
-      const params = new URLSearchParams();
-      if (lastId.current) params.set('since', String(lastId.current));
-      if (room !== MAIN_ROOM) params.set('room', room);
-      // What this browser has seen in each room, so the answer can count what is new in the others.
-      const mine = seenParam();
-      if (mine !== null) params.set('seen', mine);
-      toldStream = seenOfOthers();
-      let firstRooms = true;
-      const query = params.toString() ? `?${params}` : '';
-      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
-      if (!res.body) throw new Error('no stream');
-      const opened = Date.now();
-      let goodbye = false;
-      const parser = createSseParser((event: SseEvent) => {
-        if (stopped) return;
-        if (event.event === 'hello') {
-          // Every (re)connect of the stream says who we are and which build the server runs.
-          const hello = JSON.parse(event.data) as { me: Sender; build?: unknown };
-          who = hello.me;
-          setMe(hello.me);
-          if (typeof hello.build === 'string') setServerBuild(hello.build);
-          setStatus('live');
-        }
-        else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
-        // The stream sends the pins right after its first messages: from here on, what arrives is new.
-        else if (event.event === 'pins') { setPinned(JSON.parse(event.data) as Message[]); setPrimed(true); }
-        else if (event.event === 'reads') setReads((list) => applyReads(list, JSON.parse(event.data) as ReadPosition[]));
-        else if (event.event === 'rooms') {
-          const list = JSON.parse(event.data) as Room[];
-          // The list at the start fits what the stream was just told, and is shown as it is.
-          if (firstRooms) { firstRooms = false; latestRooms = list; setRooms(list); }
-          else takeRooms(list);
-        }
-        else if (event.event === 'bye') goodbye = true;
-      });
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parser.push(decoder.decode(value, { stream: true }));
-      }
-      return goodbye || Date.now() - opened >= MIN_STREAM_MS;
-    };
-
-    const run = async () => {
-      while (!stopped) {
-        let clean = false;
-        try {
-          await loadParticipants();
-          if (stopped) return;
-          clean = await readStream();
-        } catch (e) {
-          if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
-        }
-        if (stopped) return;
-        if (clean) continue; // the server ended the stream on schedule: reconnect from the last id
-
-        // Fallback: poll for a while, then try the stream again.
-        const until = Date.now() + FALLBACK_MS;
-        while (!stopped && Date.now() < until) {
-          try {
-            await pollOnce();
-            if (!stopped) setStatus('live · polling');
-          } catch (e) {
-            if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
-            setStatus('offline, retrying…');
-          }
-          await pause(POLL_MS);
-        }
-      }
-    };
-    void run();
-    return () => { stopped = true; abort.abort(); window.removeEventListener('storage', onStorage); };
-  }, [token, api, room]);
-
-  // The reply marker belongs to its room: it waits there while another room is open.
-  const replyRoom = useRef(MAIN_ROOM);
-  useEffect(() => {
-    if (replyRoom.current === room) return;
-    const left = replyRoom.current;
-    replyRoom.current = room;
-    if (replyToRef.current) replies.current.set(left, replyToRef.current); else replies.current.delete(left);
-    setReplyTo(replies.current.get(room) ?? null);
-    // Both rooms were just looked at: neither has anything new until the server says so.
-    setRooms((list) => list.map((r) => (r.id === left || r.id === room ? { ...r, unread: 0 } : r)));
-    // What was open for the other room is closed, so nothing is sent to the wrong one by a slip.
-    setCommenting(null);
-    setPollOpen(false);
-    setDecisionOpen(false);
-    if (keepNotice.current) keepNotice.current = false; else setNotice('');
-  }, [room]);
-
-  // A recipient who is no longer a participant can't stay selected.
-  useEffect(() => {
-    if (to && participants.length && !participants.some((p) => p.name === to)) setTo('');
-  }, [to, participants]);
-
-  // Auto-scroll, unless the reader scrolled up.
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-  // The stream also changes height when the message box below it grows or shrinks, or the window
-  // does. A reader who was at the newest message stays there.
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    let heightBefore = el.clientHeight;
-    const observer = new ResizeObserver(() => {
-      const wasAtEnd = stick.current || el.scrollHeight - el.scrollTop - heightBefore < 80;
-      heightBefore = el.clientHeight;
-      if (wasAtEnd) { el.scrollTop = el.scrollHeight; stick.current = true; }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [token]);
-
-  // The box grows with its text up to a share of the window, or is the tall writing area.
-  useBoxHeight(boxRef, draft, expanded, viewportHeight);
-
-  // An unsent draft survives a reload: the text and the quotes, never the images, per participant,
-  // in this browser. (This effect comes first on purpose. In the render where `me` changes, the
-  // composer still holds the previous draft, and it must not be saved under the new name.)
-  // Each room has its own draft (draftScope): the text and the quotes of one room never show up in another.
-  useEffect(() => {
-    if (me && draftOwner.current === draftScope(me, room)) writeDraft(localStorage, draftScope(me, room), { text: draft, quotes });
-  }, [draft, quotes, me, room]);
-  // Once the page knows who is signed in, that participant's draft comes back. The same when
-  // another room is opened: its own draft comes back, and may be empty.
-  useEffect(() => {
-    if (!me) return;
-    const scope = draftScope(me, room);
-    if (draftOwner.current === scope) return;
-    const owner = draftOwner.current;
-    draftOwner.current = scope;
-    const current = { text: draftRef.current, quotes: quotesRef.current };
-    const next = draftFor(current, owner, scope, readDraft(localStorage, scope));
-    if (next === current) return;
-    setDraft(next.text);
-    setQuotes(next.quotes.map((q) => ({ ...q, key: nextQuoteKey.current++ })));
-  }, [me, room]);
-  const onScroll = () => {
-    const el = listRef.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-
-  /** Puts an emoji into the message box at the cursor, replacing a selection. The box keeps its place. */
-  const insertEmoji = useCallback((char: string, focusBox: boolean) => {
-    const box = boxRef.current;
-    if (!box) return;
-    const next = insertAtCursor(box.value, box.selectionStart, box.selectionEnd, char);
-    cursorAfterInsert.current = next.cursor;
-    setDraft(next.text);
-    if (focusBox) box.focus();
-  }, []);
-  // React puts the cursor at the end when it writes the new text into the box. Move it back
-  // behind the emoji, so the next one, or the next key, lands where the reader expects.
-  useLayoutEffect(() => {
-    const at = cursorAfterInsert.current;
-    if (at === null) return;
-    cursorAfterInsert.current = null;
-    const box = boxRef.current;
-    if (!box) return;
-    box.setSelectionRange(at, at);
-    // Something long, like a quote, can put the cursor below what the box shows. Bring it into view.
-    if (at >= box.value.length) box.scrollTop = box.scrollHeight;
-  }, [draft]);
-
-  // Quote a selection: text selected inside one message becomes a quote chip above the message box.
-  const [quotable, clearQuotable] = useQuotableSelection();
-  // A quote that is waiting for its comment. `key` null: a new quote, not a chip yet. `at`: the
-  // box floats at that spot (the selection, or a Quote button); without it the box stands above
-  // the message box, where the comment of a chip is changed.
-  const [commenting, setCommenting] = useState<{ quote: Quote; key: number | null; at: { top: number; left: number } | null } | null>(null);
-  /**
-   * Starts a quote of `selected` from message `m`, or of the whole message when `selected` is
-   * null: the small box opens at `at`, where the writer can add a comment, and Enter there makes
-   * the chip.
-   */
-  const startQuote = useCallback((m: Message, selected: string | null, at: { top: number; left: number }) => {
-    const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
-    const text = selected ?? source;
-    if (text.trim() === '') return;
-    const quote: Quote = { author: labelOf(m.sender, participantsRef.current), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
-    clearQuotable();
-    // The same words are a chip already: its comment opens, instead of a second chip.
-    const chip = quotesRef.current.find((q) => sameQuote(q, quote));
-    if (!chip && quotesRef.current.length >= MAX_QUOTES) { setNotice(quoteNotice('full')); return; }
-    setNotice('');
-    setCommenting(chip ? { quote: chip, key: chip.key, at } : { quote, key: null, at });
-  }, [clearQuotable]);
-  /** The comment box was confirmed: a new quote becomes a chip, a chip gets its comment changed. */
-  const finishQuote = (comment: string) => {
-    const open = commenting;
-    if (!open) return;
-    setCommenting(null);
-    if (open.key === null) {
-      const result = withQuote(quotesRef.current, withComment<QuoteChip>({ ...open.quote, key: nextQuoteKey.current++ }, comment));
-      setNotice(quoteNotice(result.refused));
-      quotesRef.current = result.quotes; // so a second quote right away counts this one
-      setQuotes(result.quotes);
-      if (!result.refused) noteTour({ kind: 'quoted' });
-    } else {
-      const next = quotesRef.current.map((q) => (q.key === open.key ? withComment(q, comment) : q));
-      quotesRef.current = next;
-      setQuotes(next);
-    }
-    boxRef.current?.focus(); // the box stays free for what the writer wants to say
-  };
-  const cancelQuote = (how: 'escape' | 'outside') => {
-    setCommenting(null);
-    // After Escape the cursor goes back to the message box. A press elsewhere keeps what it pressed.
-    if (how === 'escape') boxRef.current?.focus();
-  };
-  /** Opens the comment of a chip, above the message box. */
-  const editQuote = (key: number) => {
-    const chip = quotesRef.current.find((q) => q.key === key);
-    if (chip) setCommenting({ quote: chip, key, at: null });
-  };
-  const removeQuote = (key: number) => {
-    setQuotes((list) => list.filter((q) => q.key !== key));
-    setCommenting((open) => (open?.key === key ? null : open));
-    boxRef.current?.focus();
-  };
-  const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
-
-  const uploading = drafts.some((d) => d.state === 'uploading');
-  const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
-  // What will be sent: the quotes written out as Markdown, then the typed text. The 20 KB limit is
-  // the server's and counts all of it, so the writer is told before sending, not after.
-  const composed = composeMessage(quotes, draft);
-  const overLimit = tooLong(composed, quotes.length);
-  // While a comment is being written it is not part of the message yet, so sending waits for it.
-  const canSend = !sending && !uploading && !overLimit && !commenting && (draft.trim() !== '' || ready.length > 0 || quotes.length > 0);
-
-  const send = async () => {
-    if (!canSend) return;
-    setSending(true);
-    setNotice('');
-    setEmojiOpen(false);
-    try {
-      const sentQuotes = quotes; // the quotes that go out with this message, as they are right now
-      const body: { text: string; to?: string; attachments?: string[]; reply_to?: number; room?: string } = { text: composed };
-      // The message goes to the room that is open. `main` is what the server takes when none is named.
-      if (room !== MAIN_ROOM) body.room = room;
-      // The server looks for "@name" and "DECISION:" at the start of the message, where a quote
-      // now stands. So the page reads what the writer meant (composedIntent: "@name" only from
-      // the message box, never from a quote or a comment) and asks for the recipient here, and
-      // for the pin below.
-      const typed = sentQuotes.length ? composedIntent(sentQuotes, draft, names) : { to: null, decision: false };
-      if (to) body.to = to;
-      else if (typed.to) body.to = typed.to;
-      if (replyTo) body.reply_to = replyTo.id;
-      const sent = ready; // the images that go out with this message, as they are right now
-      if (sent.length) body.attachments = sent.map((d) => d.attachment!.id);
-      const res = await api('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      let { message } = (await res.json()) as { message: Message };
-      noteTour({ kind: 'sent', message });
-      sound.sent();
-      if (typed.decision && !message.pinned_at) {
-        try {
-          const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
-          message = ((await pinnedNow.json()) as { message: Message }).message;
-        } catch (e) {
-          if (errorMessage(e) !== 'unauthorized') setNotice(`The message was sent, but it could not be pinned: ${errorMessage(e)}`);
-        }
-      }
-      // Don't move lastId forward here: the next poll picks up anything sent in between.
-      // If another room was opened while the message was on its way, it is not shown here.
-      if (message.room === roomRef.current) {
-        setMessages((list) => merge(list, [message]));
-        if (message.pinned_at) setPinned((p) => merge(p, [message]));
-      }
-      setDraft(''); // which also removes the stored draft and lets the box shrink back
-      // Only what was sent leaves the composer: a quote added while the message was on its way stays.
-      setQuotes((list) => list.filter((q) => !sentQuotes.some((sentQuote) => sentQuote.key === q.key)));
-      setExpanded(false);
-      setReplyTo(null);
-      // Only what was sent leaves the composer. An image added while the message was on its way stays.
-      for (const d of sent) URL.revokeObjectURL(d.preview);
-      setDrafts((list) => withoutSent(list, sent));
-      stick.current = true;
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  /** Starts a reply to `m`: the composer shows whom it answers, and the cursor goes to the message box. */
-  const startReply = (m: Message) => {
-    setReplyTo(m);
-    boxRef.current?.focus();
-  };
-  /** Goes to a message in the stream and marks it for a moment, so the eye finds it. */
-  const jumpTo = (id: number) => {
-    const target = document.getElementById(`m-${id}`);
-    if (!target) return;
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    target.focus({ preventScroll: true }); // for a screen reader, and so Tab goes on from there
-    setMarked(id);
-    clearTimeout(markTimer.current);
-    markTimer.current = setTimeout(() => setMarked(null), 2000);
-  };
-  // A message that had to be loaded first is on the page now: go to it.
-  useEffect(() => {
-    const id = pendingJump.current;
-    if (id === null || !document.getElementById(`m-${id}`)) return;
-    pendingJump.current = null;
-    jumpTo(id);
-  });
-
-  /**
-   * Goes to a message wherever it is. If it is older than what the page holds, the messages from
-   * it up to the oldest one on the page are loaded first, so the stream has no hole in it.
-   */
-  const goToMessage = async (id: number, inRoom: string = room) => {
-    // A message in another room: open that room first, and go on from there once it is on the page.
-    if (inRoom !== room) {
-      jumpAfterSwitch.current = { room: inRoom, id };
-      openRoom(inRoom);
-      return;
-    }
-    if (document.getElementById(`m-${id}`)) { jumpTo(id); return; }
-    const oldest = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
-    try {
-      const older: Message[] = [];
-      let since = id - 1;
-      for (let page = 0; page < OLDER_PAGES && since < oldest - 1; page++) {
-        const data = (await (await api(`/api/messages?since=${since}&limit=${OLDER_PAGE_SIZE}${room === MAIN_ROOM ? '' : `&room=${room}`}`)).json()) as MessagesResponse;
-        older.push(...data.messages.filter((m) => m.id < oldest));
-        if (data.messages.length < OLDER_PAGE_SIZE) break;
-        since = data.messages[data.messages.length - 1].id;
-      }
-      if (!older.some((m) => m.id === id)) { setNotice(`Message #${id} is no longer there.`); return; }
-      stick.current = false; // the reader is going somewhere: don't pull the stream to its end
-      pendingJump.current = id;
-      setMessages((list) => merge(list, older));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(`Could not load message #${id}: ${errorMessage(e)}`);
-    }
-  };
-
-  // The room a search result is in has been opened and its messages are here: go to the result.
-  useEffect(() => {
-    const waiting = jumpAfterSwitch.current;
-    if (!waiting || waiting.room !== room || !messages.length || messages[0].room !== room) return;
-    jumpAfterSwitch.current = null;
-    void goToMessage(waiting.id, room);
-  });
-
-  /** Creates a room and opens it. Resolves to '' when that worked, or to what went wrong. */
+  /** Creates a room and opens it in the leading pane. Resolves to '' when that worked, or to what went wrong. */
   const createRoom = async (name: string): Promise<string> => {
     try {
       const res = await api('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
@@ -772,37 +170,9 @@ export default function Page() {
     return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
   }, [api]);
 
-  const togglePin = async (m: Message, isPinned: boolean) => {
-    try {
-      const res = await api(`/api/messages/${m.id}/pin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pinned: !isPinned }),
-      });
-      const data = (await res.json()) as { message: Message; pinned: Message[] };
-      setPinned(data.pinned);
-      setMessages((list) => merge(list, [data.message]));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
-
-  const toggleReaction = async (m: Message, emoji: string, on: boolean) => {
-    try {
-      const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
-      const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
-      const data = (await res.json()) as { message: Message };
-      if (on) noteTour({ kind: 'reacted' });
-      setMessages((list) => merge(list, [data.message]));
-      setPinned((list) => replaceMatching(list, [data.message]));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
-
   const exportTranscript = async () => {
     try {
-      // The transcript of the room that is open.
+      // The transcript of the room in the leading pane (the one the address names).
       const blob = await (await api(`/api/export${room === MAIN_ROOM ? '' : `?room=${room}`}`)).blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -811,146 +181,61 @@ export default function Page() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+      if (errorMessage(e) !== 'unauthorized') setPageNotice(errorMessage(e));
     }
   };
 
-  const applyPoll = (poll: Poll) => {
-    setMessages((list) => withPolls(list, [poll]));
-    setPinned((list) => withPolls(list, [poll]));
-  };
-
-  const createPoll = async (question: string, options: string[]) => {
-    setPollBusy(true);
-    setPollError('');
-    try {
-      const body: { question: string; options: string[]; to?: string; room?: string } = { question, options };
-      if (to) body.to = to;
-      if (room !== MAIN_ROOM) body.room = room;
-      const res = await api('/api/polls', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = (await res.json()) as { message: Message; poll: Poll };
-      sound.sent();
-      if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
-      setPollOpen(false);
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setPollError(errorMessage(e));
-    } finally {
-      setPollBusy(false);
-    }
-  };
-
-  const voteOnPoll = async (pollId: string, option: number | null) => {
-    try {
-      if (option === null) {
-        const data = (await (await api(`/api/polls/${pollId}/vote`, { method: 'DELETE' })).json()) as { poll: Poll };
-        applyPoll(data.poll);
-      } else {
-        const data = (await (await api(`/api/polls/${pollId}/vote`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ option }),
-        })).json()) as { poll: Poll };
-        applyPoll(data.poll);
-      }
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
-
-  const closePoll = async (pollId: string) => {
-    try {
-      const data = (await (await api(`/api/polls/${pollId}/close`, { method: 'POST' })).json()) as { poll: Poll; message: Message | null };
-      applyPoll(data.poll);
-      if (data.message) setMessages((list) => merge(list, [data.message!]));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
-
-  const applyDecision = (card: DecisionCard, message?: Message) => {
-    setMessages((list) => {
-      const next = message ? merge(list, [message]) : list;
-      return withDecisions(next, [card]);
-    });
-    setPinned((list) => {
-      const next = message ? (message.pinned_at ? merge(list, [message]) : list.filter((m) => m.id !== message.id)) : list;
-      return withDecisions(next, [card]);
+  const toggleSplit = () => {
+    setSplitOn((on) => {
+      if (on) return false;
+      setSecondRoom((cur) => (cur === roomRef.current ? defaultSecondRoom(roomsRef.current, roomRef.current) : cur));
+      return true;
     });
   };
 
-  const createDecision = async (prompt: string) => {
-    setDecisionBusy(true);
-    setDecisionError('');
-    try {
-      const body: { prompt: string; to?: string; room?: string } = { prompt };
-      if (to) body.to = to;
-      if (room !== MAIN_ROOM) body.room = room;
-      const res = await api('/api/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = (await res.json()) as { message: Message; decision: DecisionCard };
-      if (agreedBy(data.decision, data.message.sender)) noteTour({ kind: 'agreed' });
-      sound.sent();
-      if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
-      setDecisionOpen(false);
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setDecisionError(errorMessage(e));
-    } finally {
-      setDecisionBusy(false);
-    }
-  };
+  const onMissingPrimary = useCallback((_missing: string) => {
+    window.history.replaceState(null, '', addressForRoom(window.location.href, MAIN_ROOM));
+    setRoom(MAIN_ROOM);
+  }, []);
 
-  const recordDecisionPosition = async (cardId: string, stance: DecisionStance, note: string | null) => {
-    try {
-      const data = (await (await api(`/api/decisions/${cardId}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stance, note }),
-      })).json()) as { decision: DecisionCard; message: Message; reply: Message | null };
-      applyDecision(data.decision, data.message);
-      if (me && agreedBy(data.decision, me)) noteTour({ kind: 'agreed' });
-      if (data.reply) setMessages((list) => merge(list, [data.reply!]));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
+  const onMissingSecond = useCallback((missing: string) => {
+    setSecondRoom(() => defaultSecondRoom(roomsRef.current.filter((r) => r.id !== missing), roomRef.current === missing ? MAIN_ROOM : roomRef.current));
+  }, []);
 
-
-
-  const unseenNow = useUnseenClock(messages);
-  const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
-  useVisibleReadMarker(listRef, messageIds, Boolean(token && me), (upTo) => {
-    void (async () => {
-      try {
-        const data = (await (await api('/api/read', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo }),
-        })).json()) as { read: ReadPosition };
-        // The answer may arrive after another room was opened; its position belongs to the room it names.
-        if (data.read && data.read.room === roomRef.current) setReads((list) => applyReads(list, [data.read]));
-      } catch {
-        /* a failed mark is retried when the next visible batch is reported */
-      }
-    })();
-  });
+  const openRooms = useMemo(
+    () => (splitVisible ? [room, secondRoom] : [room]),
+    [splitVisible, room, secondRoom],
+  );
 
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
 
-  const pinnedIds = new Set(pinned.map((m) => m.id));
-  const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
-  let lastDay = '';
-  // A name the server doesn't list (the hub's welcome, a former participant) gets the neutral colour.
-  const color = (name: string) => colorOf(name, participants);
-  // How a name is shown: the participant's label (david:human:Orchestrator), else the name with a capital.
   const shown = (name: string) => labelOf(name, participants);
-  const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
-  const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
   const reload = () => window.location.reload();
-  const openRoomInfo = rooms.find((r) => r.id === room);
-  // A room this browser has seen to its end shows no count, also when another window did the seeing.
   const shownRooms = me ? withSeenApplied(rooms, readSeen(localStorage, me)) : rooms;
-  // The tabs: in the header on a wide screen, in a row of their own under it on a narrower one.
-  // (The page is at most 1000 points wide, and below that the header has no room for them.)
   const tabs = (className: string) => (
     <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
   );
+  const statusBar = (
+    <StatusBar participants={participants} token={token} onUnauthorized={forgetToken} />
+  );
+  const paneShared = {
+    token,
+    api,
+    me,
+    setMe,
+    participants,
+    setParticipants,
+    setRooms,
+    setSeenChanged,
+    openRooms,
+    onUnauthorized: forgetToken,
+    soundSent: sound.sent,
+    onTour: noteTour,
+  };
 
   return (
-    <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
+    <div className={`mx-auto flex h-screen flex-col ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
       {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
@@ -966,10 +251,16 @@ export default function Page() {
         </span>
         {/* The rooms come after the state of the page: the open one marked, the others with what is new there. */}
         {tabs('hidden lg:flex lg:max-w-[42%]')}
+        <SplitToggle on={splitOn} onToggle={toggleSplit} disabled={!fits} />
         {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
-        <SearchBox search={runSearch} onPick={(m) => void goToMessage(m.id, m.room)} participants={participants} rooms={rooms} />
+        <SearchBox
+          search={runSearch}
+          onPick={(m) => { if (m.room !== room) openRoom(m.room); setSeek({ room: m.room, id: m.id }); }}
+          participants={participants}
+          rooms={rooms}
+        />
         {me && <span className="text-[13px] font-semibold">You: {shown(me)}</span>}
-        <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
+        <button className={BUTTON} onClick={() => { void exportTranscript(); }}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
@@ -979,212 +270,58 @@ export default function Page() {
       </div>
       <TourPanel tour={tour} me={me} participants={participants} />
       <WakeTargetsLine me={me} participants={participants} />
+      {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
+      {splitVisible && statusBar}
 
-      {pinned.length > 0 && (
-        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          {/* Every pinned message is listed here. A decision carries its badge; a message pinned by hand does not. */}
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
-          <ul className="text-sm">
-            {pinned.map((m) => (
-              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{shown(m.sender)}</span>{' '}
-                {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
-                <span>{firstLine(m, 160)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {quotable && quotedMessage && !commenting && (
-        <QuoteSelectionButton at={quotable} onQuote={() => startQuote(quotedMessage, quotable.text, { top: quotable.top, left: quotable.left })} />
-      )}
-      {/* A new quote gets its comment right where it was picked. */}
-      {commenting?.at && (
-        <QuoteCommentBox
-          key={`${commenting.quote.messageId}:${commenting.quote.kind}:${commenting.quote.text}`}
-          quote={commenting.quote} at={commenting.at} editing={commenting.key !== null} onSubmit={finishQuote} onCancel={cancelQuote}
+      {splitVisible ? (
+        <div className="flex min-h-0 flex-1">
+          <RoomPane
+            {...paneShared}
+            lead
+            room={room}
+            roomInfo={rooms.find((r) => r.id === room)}
+            setServerBuild={setServerBuild}
+            setStatus={setStatus}
+            setSetupError={setSetupError}
+            setupError={setupError}
+            onMissingRoom={onMissingPrimary}
+            seek={seek}
+            onJumped={() => setSeek(null)}
+            onHeard={onLeadHeard}
+          />
+          <div className="w-px shrink-0 bg-line" aria-hidden="true" />
+          <RoomPane
+            {...paneShared}
+            room={secondRoom}
+            roomInfo={rooms.find((r) => r.id === secondRoom)}
+            onMissingRoom={onMissingSecond}
+            onHeard={onSideHeard}
+            picker={
+              <RoomPicker
+                rooms={shownRooms}
+                current={secondRoom}
+                onPick={(id) => { setSecondRoom(id); noteTour({ kind: 'room' }); }}
+              />
+            }
+          />
+        </div>
+      ) : (
+        <RoomPane
+          {...paneShared}
+          lead
+          room={room}
+          roomInfo={rooms.find((r) => r.id === room)}
+          setServerBuild={setServerBuild}
+          setStatus={setStatus}
+          setSetupError={setSetupError}
+          setupError={setupError}
+          onMissingRoom={onMissingPrimary}
+          seek={seek}
+          onJumped={() => setSeek(null)}
+          onHeard={onLeadHeard}
+          statusBar={statusBar}
         />
       )}
-
-      <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
-        {/* A room nobody has written in yet (the server says so) is not a page that failed to load. */}
-        {messages.length === 0 && openRoomInfo && openRoomInfo.id !== MAIN_ROOM && openRoomInfo.last_id === 0 && (
-          <p className="mt-[18vh] text-center text-sm text-muted">Nothing in {openRoomInfo.name} yet. The first message is yours.</p>
-        )}
-        {messages.map((m) => {
-          const date = new Date(m.created_at);
-          const day = dayFmt.format(date);
-          const showDay = day !== lastDay;
-          lastDay = day;
-          const isPinned = pinnedIds.has(m.id);
-          const own = color(m.sender);
-          return (
-            <div key={m.id}>
-              {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
-              <article
-                id={`m-${m.id}`}
-                tabIndex={-1}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`}
-                style={{ borderLeftColor: own }}
-              >
-                <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
-                  {shown(m.sender)[0] ?? '?'}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
-                    <span className="font-bold" style={{ color: own }}>{shown(m.sender)}</span>
-                    {m.recipient && (
-                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {shown(m.recipient)}</span>
-                    )}
-                    <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
-                    <span className="text-xs">#{m.id}</span>
-                    {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
-                    {isDecision(m.text, names, m.decision) && <DecisionBadge className="max-sm:hidden" />}
-                    <div className="ml-auto flex items-baseline gap-0">
-                      <ReplyButton
-                        messageId={m.id}
-                        onReply={() => startReply(m)}
-                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-                      />
-                      <QuoteMessageButton
-                        messageId={m.id}
-                        // With text selected in this message, the button quotes that text; otherwise the whole message.
-                        onQuote={(at) => { const pick = pickSelection(window.getSelection()); startQuote(m, pick?.messageId === m.id ? pick.text : null, at); }}
-                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-                      />
-                      <button
-                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
-                        // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
-                        title={isPinned ? 'Unpin this message' : 'Pin this message'}
-                        aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
-                        aria-pressed={isPinned}
-                        onClick={() => togglePin(m, isPinned)}
-                      >📌</button>
-                      <ReactButton
-                        message={m}
-                        me={me}
-                        onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }}
-                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-                      />
-                    </div>
-                  </div>
-                  {isDecision(m.text, names, m.decision) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
-                  {m.reply_to != null && (() => {
-                    const parent = byId.get(m.reply_to);
-                    return (
-                      <ReplyContext
-                        replyTo={m.reply_to} parent={parent} onJump={jumpTo}
-                        author={parent ? shown(parent.sender) : undefined}
-                        authorColor={parent ? color(parent.sender) : undefined}
-                      />
-                    );
-                  })()}
-                  {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
-                    <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
-                      <MessageBody text={m.text} />
-                    </div>
-                  )}
-                  {m.poll && (
-                    <PollCard
-                      poll={m.poll}
-                      me={me}
-                      participants={participants}
-                      onVote={(pollId, option) => { void voteOnPoll(pollId, option); }}
-                      onClose={(pollId) => { void closePoll(pollId); }}
-                    />
-                  )}
-                  {m.decision && (
-                    <DecisionCardView
-                      card={m.decision}
-                      me={me}
-                      participants={participants}
-                      onPosition={(cardId, stance, note) => { void recordDecisionPosition(cardId, stance, note); }}
-                    />
-                  )}
-                  <MessageImages attachments={m.attachments ?? []} load={loadImage} />
-                  <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
-                  <ReadReceipts messageId={m.id} reads={reads} participants={participants} me={me} />
-                  <UnseenFlag message={m} reads={reads} participants={participants} now={unseenNow} />
-                </div>
-              </article>
-            </div>
-          );
-        })}
-      </main>
-
-      <StatusBar token={token} onUnauthorized={forgetToken} participants={participants} />
-
-      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-accent bg-panel' : 'border-line'}`}>
-        {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
-        {setupError && <div role="alert" className="mb-1.5 text-[13px] text-bad">{setupError}</div>}
-        {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
-        {overLimit && <div className="mb-1.5 text-[13px] text-bad" role="alert">{overLimit}</div>}
-        {/* Everything that goes with the next message, in one row: the message it answers, quotes, images. */}
-        {(replyTo || quotes.length > 0 || drafts.length > 0) && (
-          <ChipRow>
-            {replyTo && <ReplyingTo parent={replyTo} author={shown(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
-            <QuoteChips quotes={quotes} onRemove={removeQuote} onEdit={editQuote} />
-            <DraftChips drafts={drafts} onRemove={removeDraft} />
-          </ChipRow>
-        )}
-        {/* The comment of a chip is changed in place, above the message box. */}
-        {commenting && !commenting.at && (
-          <QuoteCommentBox key={commenting.key} quote={commenting.quote} editing onSubmit={finishQuote} onCancel={cancelQuote} />
-        )}
-        {pollOpen && (
-          <PollComposer
-            busy={pollBusy}
-            error={pollError}
-            onCancel={() => { setPollOpen(false); setPollError(''); }}
-            onCreate={(question, options) => { void createPoll(question, options); }}
-          />
-        )}
-        {decisionOpen && (
-          <DecisionComposer
-            busy={decisionBusy}
-            error={decisionError}
-            onCancel={() => { setDecisionOpen(false); setDecisionError(''); }}
-            onCreate={(prompt) => { void createDecision(prompt); }}
-          />
-        )}
-        {/* The message box has the full width on every screen. The controls sit in one row below it. */}
-        <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-          <textarea
-            ref={boxRef}
-            rows={2}
-            value={draft}
-            aria-label="Message"
-            data-tour="box"
-            placeholder={`Message (Markdown). ${addressHint}, DECISION: to pin. Paste or drop an image to attach it.`}
-            onChange={(e) => setDraft(e.target.value)}
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
-              if (!files.length) return; // plain text: paste as usual
-              e.preventDefault();
-              addImages(files, true); // from the clipboard: see uploadRequest
-            }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            // The height is set from the text (see useBoxHeight), so the browser's own resize
-            // handle is switched off: at the bottom of the window there is nowhere to drag it.
-            className={`${FIELD} block min-h-[60px] w-full resize-none`}
-          />
-          <input
-            ref={fileInput} type="file" accept={ACCEPT} multiple hidden
-            onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-          />
-          <ComposerTools
-            to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: shown(p.name) }))}
-            emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
-            image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
-            decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
-            poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
-            expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
-            send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
-            fieldClassName={FIELD} toolClassName={TOOL}
-          />
-        </form>
-      </footer>
     </div>
   );
 }

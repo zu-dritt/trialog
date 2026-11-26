@@ -15,16 +15,21 @@ export interface TourStep {
   icon: string;
   /** Where the step points: CSS selectors, tried in order. The last visible match of the first that matches wins. */
   targets: readonly string[];
+  /**
+   * Where to look: in the leading pane only (with two rooms side by side, the left one), or in the
+   * whole page (the room tabs in the header).
+   */
+  scope: 'pane' | 'page';
 }
 
 export const TOUR_STEPS: readonly TourStep[] = [
-  { id: 'everyone', icon: '💬', targets: ['[data-tour="box"]'] },
-  { id: 'address', icon: '@', targets: ['[data-tour="box"]'] },
-  { id: 'quote', icon: '❝', targets: ['[data-message-text]'] },
-  { id: 'react', icon: '☺', targets: ['button[aria-label="Add a reaction"]'] },
+  { id: 'everyone', icon: '💬', targets: ['[data-tour="box"]'], scope: 'pane' },
+  { id: 'address', icon: '@', targets: ['[data-tour="box"]'], scope: 'pane' },
+  { id: 'quote', icon: '❝', targets: ['[data-message-text]'], scope: 'pane' },
+  { id: 'react', icon: '☺', targets: ['button[aria-label="Add a reaction"]'], scope: 'pane' },
   // A card that waits for the person's Agree; without one, the Decision button makes one.
-  { id: 'decide', icon: '⚖', targets: ['[data-tour="agree"]:not([aria-pressed="true"])', '[data-tour="decision"]'] },
-  { id: 'room', icon: '#', targets: ['[data-tour="rooms"]'] },
+  { id: 'decide', icon: '⚖', targets: ['[data-tour="agree"]:not([aria-pressed="true"])', '[data-tour="decision"]'], scope: 'pane' },
+  { id: 'room', icon: '#', targets: ['[data-tour="rooms"]'], scope: 'page' },
 ];
 
 /** The line of a step. `agent` is the name of an agent to address, if there is one. */
@@ -227,6 +232,9 @@ export function useTour({ me, participants, loaded, history }: {
   };
 }
 
+/** The leading pane: the left one when two rooms are side by side. The whole page if there is no pane. */
+export const leadPane = (root: ParentNode = document): ParentNode => root.querySelector('[data-tour-pane="lead"]') ?? root;
+
 /** The element a step points at: the last visible match of the first selector that has one. */
 export function findTarget(selectors: readonly string[], root: ParentNode = document): HTMLElement | null {
   for (const selector of selectors) {
@@ -259,7 +267,7 @@ export function TourPanel({ tour, me, participants }: { tour: Tour; me: Sender |
   // Looked for after every render, because the control may appear later (a decision card).
   useEffect(() => {
     if (view !== 'step' || !step) return undefined;
-    const target = findTarget(step.targets);
+    const target = findTarget(step.targets, step.scope === 'pane' ? leadPane() : document);
     if (!target) return undefined;
     target.setAttribute('data-tour-target', '');
     return () => target.removeAttribute('data-tour-target');
