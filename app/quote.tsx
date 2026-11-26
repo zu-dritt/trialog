@@ -1,17 +1,23 @@
 'use client';
 
-// Quote a selection: select part of a message in the stream, press Quote, and the selected text
-// lands in the message box as a Markdown quote that says who wrote it and in which message.
+// Quote a selection: select part of a message in the stream and press Quote. The quote becomes a
+// chip above the message box, next to images and the "Replying to" marker, and the box stays
+// free for what the writer wants to say. Several quotes can be collected.
+//
+// When the message is sent, the chips are written out as Markdown in front of the typed text:
 //
 //   > **Grok** in #45:
 //   >
 //   > the selected text
 //
-// Two things matter here. The quote is built as text and put into a text box: nothing from a
-// message is ever turned into markup or run. And what was selected is what the reader saw, not
-// the Markdown behind it, so it is escaped: a quoted "*" stays a star and a quoted "<b>" stays
-// those three characters when the new message is shown.
+// So a message with quotes is ordinary Markdown text for the server, the API, the command-line
+// client and every agent that reads it. Two things matter here. A quote is text from start to
+// end: nothing from a message is ever turned into markup or run. And what was selected is what
+// the reader saw, not the Markdown behind it, so it is escaped: a quoted "*" stays a star and a
+// quoted "<b>" stays those three characters when the new message is shown.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MAX_TEXT_BYTES } from '../lib/shared';
+import { Chip } from './chips';
 
 /** Marks the element that holds one message's text. Its value is the message id. */
 export const MESSAGE_TEXT_ATTRIBUTE = 'data-message-text';
@@ -101,20 +107,125 @@ export function quoteMessage(author: string, id: number, source: string): string
   return [HEADER(author, id), '>', ...lines.map((line) => (line === '' ? '>' : `> ${line}`))].join('\n');
 }
 
+// --- quotes as chips ------------------------------------------------------------------------
+
+/** At most this many quotes travel with one message. */
+export const MAX_QUOTES = 5;
+
+/** One quote waiting above the message box. */
+export interface Quote {
+  /** The display name of the writer of the quoted message, as it was shown. */
+  author: string;
+  messageId: number;
+  /** 'selection': text as the reader saw it, to be escaped. 'message': a whole message, in its own Markdown. */
+  kind: 'selection' | 'message';
+  text: string;
+}
+/** A quote on the page, with a key that tells two chips apart. */
+export interface QuoteChip extends Quote { key: number }
+
+const sameQuote = (a: Quote, b: Quote) => a.messageId === b.messageId && a.kind === b.kind && a.text === b.text;
+
 /**
- * Puts a quote into the message box at the cursor (replacing a selection there). The quote gets
- * a paragraph of its own, and an empty line follows it; the cursor ends up after that line, on a
- * line of its own. Text that stood behind the cursor follows as its own paragraph, so what is
- * typed next never runs into it.
+ * The list of quotes after one more was asked for. The same quote twice is kept once, and beyond
+ * MAX_QUOTES nothing is added: `refused` says which of the two happened, so the page can say so.
  */
-export function insertQuote(text: string, start: number, end: number, quote: string): { text: string; cursor: number } {
-  const from = Math.max(0, Math.min(start, end, text.length));
-  const to = Math.min(text.length, Math.max(start, end, 0));
-  const before = text.slice(0, from).replace(/[ \t]+$/, '');
-  const after = text.slice(to).replace(/^[ \t]+/, '').replace(/^\n+/, '');
-  const lead = before === '' || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
-  const head = `${before}${lead}${quote}\n\n`;
-  return { text: head + (after === '' ? '' : `\n\n${after}`), cursor: head.length };
+export function addQuote<Q extends Quote>(quotes: Q[], quote: Q, max: number = MAX_QUOTES): { quotes: Q[]; refused: 'duplicate' | 'full' | null } {
+  if (quotes.some((q) => sameQuote(q, quote))) return { quotes, refused: 'duplicate' };
+  if (quotes.length >= max) return { quotes, refused: 'full' };
+  return { quotes: [...quotes, quote], refused: null };
+}
+
+/** One quote as Markdown. */
+export const quoteMarkdown = (q: Quote): string => (q.kind === 'message' ? quoteMessage(q.author, q.messageId, q.text) : quoteSelection(q.author, q.messageId, q.text));
+
+/**
+ * The text that is sent: every quote in order, each followed by an empty line, then what was
+ * typed. With no quotes it is exactly what was typed, so a plain message is untouched.
+ */
+export function composeMessage(quotes: Quote[], typed: string): string {
+  if (!quotes.length) return typed;
+  const quoted = quotes.map(quoteMarkdown).join('\n\n');
+  return typed.trim() === '' ? quoted : `${quoted}\n\n${typed}`;
+}
+
+/** The size of a text as the server counts it: bytes of UTF-8. */
+export const textBytes = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * Says so when the composed message is over the limit, and by how much it helps to know. Null
+ * when it fits. The server would refuse it too; this is for telling the writer before sending.
+ */
+export function tooLong(composed: string, quoteCount: number, max: number = MAX_TEXT_BYTES): string | null {
+  const bytes = textBytes(composed);
+  if (bytes <= max) return null;
+  // Rounded up, so a message that is only just too long is not reported as being exactly at the limit.
+  const size = (Math.ceil((bytes / 1024) * 10) / 10).toFixed(1);
+  const limit = `${max / 1024} KB`;
+  return quoteCount > 0
+    ? `With its quote${quoteCount === 1 ? '' : 's'} this message is ${size} KB. The limit is ${limit}: remove a quote or shorten the text.`
+    : `This message is ${size} KB. The limit is ${limit}.`;
+}
+
+/**
+ * What the typed text asks for by the way it starts: "@name" addresses someone, "DECISION:" pins.
+ * The server reads both from the start of the message text. With quotes in front, the typed text
+ * no longer is that start, so the page reads them here and asks for the same things explicitly.
+ */
+export function typedIntent(typed: string, names: readonly string[]): { to: string | null; decision: boolean } {
+  const group = names.map((n) => n.replace(/[^A-Za-z0-9_-]/g, '')).filter(Boolean).join('|');
+  if (!group) return { to: null, decision: /^\s*DECISION:/.test(typed) };
+  // The same two rules as the server's (lib/core.ts): the name in any case, DECISION: in capitals.
+  const mention = new RegExp(`^\\s*@(${group})\\b`, 'i').exec(typed);
+  const decision = new RegExp(`^\\s*(?:@(?:${group})\\b[\\s,:]*)?DECISION:`).test(typed);
+  return { to: mention ? mention[1].toLowerCase() : null, decision };
+}
+
+/**
+ * A few words of a quote for its chip: white space folded, cut with an ellipsis. A whole message
+ * is kept as its Markdown source; for the chip, the backslashes of its escapes are left out, so
+ * the few words read the way the message did.
+ */
+export function quoteExcerpt(text: string, max = 60, kind: Quote['kind'] = 'selection'): string {
+  const shown = kind === 'message' ? text.replace(/\\([!-/:-@[-`{-~])/g, '$1') : text;
+  const flat = shown.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
+/**
+ * Reads quotes that were kept in storage. Whatever is there is checked piece by piece, and
+ * anything that is not a quote is dropped, so a changed or broken value can't break the page.
+ */
+export function parseQuotes(value: unknown, max: number = MAX_QUOTES): Quote[] {
+  if (!Array.isArray(value)) return [];
+  const quotes: Quote[] = [];
+  for (const item of value as Partial<Quote>[]) {
+    if (!item || typeof item !== 'object') continue;
+    const { author, messageId, kind, text } = item;
+    if (typeof author !== 'string' || author.trim() === '' || author.length > 80) continue;
+    if (typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId < 1) continue;
+    if (kind !== 'selection' && kind !== 'message') continue;
+    if (typeof text !== 'string' || text.trim() === '') continue;
+    const quote: Quote = { author, messageId, kind, text };
+    if (!quotes.some((q) => sameQuote(q, quote)) && quotes.length < max) quotes.push(quote);
+  }
+  return quotes;
+}
+
+/** The quotes above the message box, as chips. */
+export function QuoteChips({ quotes, onRemove }: { quotes: QuoteChip[]; onRemove: (key: number) => void }) {
+  return (
+    <>
+      {quotes.map((q) => (
+        <Chip
+          key={q.key} visual="↳" title={q.text.length > 1200 ? `${q.text.slice(0, 1200)}…` : q.text}
+          onRemove={() => onRemove(q.key)} removeLabel={`Remove the quote from ${q.author}, #${q.messageId}`}
+        >
+          <span className="font-bold">{q.author}</span>, #{q.messageId} <span className="text-muted">“{quoteExcerpt(q.text, 60, q.kind)}”</span>
+        </Chip>
+      ))}
+    </>
+  );
 }
 
 /** The parts of a browser Selection this needs; tests pass a plain object. */

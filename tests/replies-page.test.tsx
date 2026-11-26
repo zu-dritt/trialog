@@ -60,9 +60,9 @@ test('a reply to a message that is not loaded shows its number and no button', (
 
 test('the composer says whom the reply answers and offers a way out', () => {
   const out = renderToStaticMarkup(<ReplyingTo parent={parent} author="Grok" onCancel={() => {}} />);
-  assert.match(out, /role="group" aria-label="Reply"/);
+  assert.match(out, /^<li /, 'a chip in the row above the message box');
   assert.match(out, /Replying to <span class="font-bold">Grok<\/span>, #45/);
-  assert.match(out, /Which storage do we use\?/);
+  assert.match(out, /“Which storage do we use\?”/);
   assert.match(out, /<button type="button" aria-label="Cancel the reply" title="Cancel the reply"[^>]*>×<\/button>/);
 });
 

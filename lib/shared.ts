@@ -32,6 +32,7 @@ export interface Attachment {
   bytes: number;
 }
 
+export const MAX_TEXT_BYTES = 20 * 1024; // 20 KB per message
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4 MB per image, on every path (upload and storage)
 export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 /** The page shrinks an image that is over the size limit until its long edge is at most this many pixels. */
@@ -40,9 +41,14 @@ export const DOWNSIZE_LONG_EDGE = 2560;
 /** How an image appears in the export and in the CLI: "[image: att_…, 1170×2532]". */
 export const attachmentLabel = (a: Pick<Attachment, 'id' | 'width' | 'height'>): string => `[image: ${a.id}, ${a.width}×${a.height}]`;
 
-/** The first line of a message, for the list of decisions. An image-only message shows its images instead. */
+/**
+ * The first line of a message, for the list of decisions. A message that opens with quotes is
+ * shown by the first line its writer wrote, not by the quote; only when there is nothing but
+ * quotes is it the quote's first line. An image-only message shows its images instead.
+ */
 export function firstLine(m: { text: string; attachments?: Pick<Attachment, 'id' | 'width' | 'height'>[] }, max: number): string {
-  const line = m.text.trim().split('\n')[0].slice(0, max);
+  const lines = m.text.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  const line = (lines.find((l) => !l.startsWith('>')) ?? lines[0] ?? '').slice(0, max);
   return line || (m.attachments ?? []).map(attachmentLabel).join(' ');
 }
 

@@ -7,6 +7,7 @@
 // The excerpt is shown as plain text. It is never rendered as Markdown, so nothing in the
 // answered message can turn into markup here.
 import { attachmentLabel, type Attachment } from '../lib/shared';
+import { Chip } from './chips';
 
 /** What this file needs to know about a message. */
 export interface ReplyParent {
@@ -65,17 +66,12 @@ export function ReplyContext({ replyTo, parent, author, authorClass, onJump }: {
   );
 }
 
-/** In the composer while a reply is being written: whom it answers, and a way out. */
+/** In the composer while a reply is being written: whom it answers, and a way out. A chip like the others in that row. */
 export function ReplyingTo({ parent, author, onCancel }: { parent: ReplyParent; author: string; onCancel: () => void }) {
+  const excerpt = replyExcerpt(parent);
   return (
-    <div className="mb-2 flex items-center gap-2 rounded-md border border-line bg-panel py-1 pl-2.5 pr-1.5 text-[13px]" role="group" aria-label="Reply">
-      <span className="min-w-0 flex-1 truncate">
-        Replying to <span className="font-bold">{author}</span>, #{parent.id}<span className="text-muted">: {replyExcerpt(parent)}</span>
-      </span>
-      <button
-        type="button" onClick={onCancel} aria-label="Cancel the reply" title="Cancel the reply"
-        className="cursor-pointer rounded border-none bg-transparent px-1 text-base leading-none text-muted hover:text-fg"
-      >×</button>
-    </div>
+    <Chip visual="↩" title={excerpt} onRemove={onCancel} removeLabel="Cancel the reply">
+      Replying to <span className="font-bold">{author}</span>, #{parent.id}{excerpt && <span className="text-muted"> “{excerpt}”</span>}
+    </Chip>
   );
 }

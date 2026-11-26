@@ -2,13 +2,17 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Author, Message, Sender } from '../lib/core';
-import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
+import { MAX_ATTACHMENTS_PER_MESSAGE, SENDERS, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
-import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
+import { ChipRow } from './chips';
+import {
+  MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
+  pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
+} from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
 
@@ -97,6 +101,12 @@ export default function Page() {
   const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
   const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
+  const [quotes, setQuotes] = useState<QuoteChip[]>([]); // quotes waiting above the message box
+  const quotesRef = useRef<QuoteChip[]>([]);
+  const draftRef = useRef('');
+  const nextQuoteKey = useRef(1);
+  quotesRef.current = quotes;
+  draftRef.current = draft;
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
 
@@ -281,19 +291,22 @@ export default function Page() {
   // The box grows with its text up to a share of the window, or is the tall writing area.
   useBoxHeight(boxRef, draft, expanded, viewportHeight);
 
-  // An unsent draft survives a reload: the text only, per participant, in this browser.
-  // (This effect comes first on purpose. In the render where `me` changes, the box still holds
-  // the previous text, and it must not be saved under the new name.)
+  // An unsent draft survives a reload: the text and the quotes, never the images, per participant,
+  // in this browser. (This effect comes first on purpose. In the render where `me` changes, the
+  // composer still holds the previous draft, and it must not be saved under the new name.)
   useEffect(() => {
-    if (me && draftOwner.current === me) writeDraft(localStorage, me, draft);
-  }, [draft, me]);
+    if (me && draftOwner.current === me) writeDraft(localStorage, me, { text: draft, quotes });
+  }, [draft, quotes, me]);
   // Once the page knows who is signed in, that participant's draft comes back.
   useEffect(() => {
     if (!me || draftOwner.current === me) return;
     const owner = draftOwner.current;
-    const stored = readDraft(localStorage, me);
     draftOwner.current = me;
-    setDraft((current) => draftFor(current, owner, me, stored));
+    const current = { text: draftRef.current, quotes: quotesRef.current };
+    const next = draftFor(current, owner, me, readDraft(localStorage, me));
+    if (next === current) return;
+    setDraft(next.text);
+    setQuotes(next.quotes.map((q) => ({ ...q, key: nextQuoteKey.current++ })));
   }, [me]);
   const onScroll = () => {
     const el = listRef.current;
@@ -322,27 +335,34 @@ export default function Page() {
     if (at >= box.value.length) box.scrollTop = box.scrollHeight;
   }, [draft]);
 
-  // Quote a selection: text selected inside one message can be put into the message box as a quote.
+  // Quote a selection: text selected inside one message becomes a quote chip above the message box.
   const [quotable, clearQuotable] = useQuotableSelection();
   /** Quotes `selected` from message `m`, or the whole message when `selected` is null. */
   const addQuote = useCallback((m: Message, selected: string | null) => {
-    const box = boxRef.current;
-    if (!box) return;
-    const author = NAMES[m.sender] ?? m.sender;
     const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
-    if (selected === null && source === '') return;
-    const quote = selected === null ? quoteMessage(author, m.id, source) : quoteSelection(author, m.id, selected);
-    const next = insertQuote(box.value, box.selectionStart, box.selectionEnd, quote);
-    cursorAfterInsert.current = next.cursor;
-    setDraft(next.text);
+    const text = selected ?? source;
+    if (text.trim() === '') return;
+    const chip: QuoteChip = { key: nextQuoteKey.current++, author: NAMES[m.sender] ?? m.sender, messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
+    const result = withQuote(quotesRef.current, chip);
+    setNotice(result.refused === 'full' ? `A message can carry at most ${MAX_QUOTES} quotes.` : '');
+    quotesRef.current = result.quotes; // so a second quote right away counts this one
+    setQuotes(result.quotes);
     clearQuotable();
-    box.focus();
+    boxRef.current?.focus(); // the box stays free for what the writer wants to say
   }, [clearQuotable]);
+  const removeQuote = (key: number) => {
+    setQuotes((list) => list.filter((q) => q.key !== key));
+    boxRef.current?.focus();
+  };
   const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
 
   const uploading = drafts.some((d) => d.state === 'uploading');
   const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
-  const canSend = !sending && !uploading && (draft.trim() !== '' || ready.length > 0);
+  // What will be sent: the quotes written out as Markdown, then the typed text. The 20 KB limit is
+  // the server's and counts all of it, so the writer is told before sending, not after.
+  const composed = composeMessage(quotes, draft);
+  const overLimit = tooLong(composed, quotes.length);
+  const canSend = !sending && !uploading && !overLimit && (draft.trim() !== '' || ready.length > 0 || quotes.length > 0);
 
   const send = async () => {
     if (!canSend) return;
@@ -350,8 +370,14 @@ export default function Page() {
     setNotice('');
     setEmojiOpen(false);
     try {
-      const body: { text: string; to?: string; attachments?: string[]; reply_to?: number } = { text: draft };
+      const sentQuotes = quotes; // the quotes that go out with this message, as they are right now
+      const body: { text: string; to?: string; attachments?: string[]; reply_to?: number } = { text: composed };
+      // "@name" and "DECISION:" at the start of what was typed mean what they always mean. The
+      // server looks for them at the start of the message, where the quotes now stand, so the
+      // page asks for the recipient here, and for the pin below.
+      const typed = sentQuotes.length ? typedIntent(draft, SENDERS) : { to: null, decision: false };
       if (to) body.to = to;
+      else if (typed.to) body.to = typed.to;
       if (replyTo) body.reply_to = replyTo.id;
       const sent = ready; // the images that go out with this message, as they are right now
       if (sent.length) body.attachments = sent.map((d) => d.attachment!.id);
@@ -360,11 +386,21 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const { message } = (await res.json()) as { message: Message };
+      let { message } = (await res.json()) as { message: Message };
+      if (typed.decision && !message.pinned_at) {
+        try {
+          const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
+          message = ((await pinnedNow.json()) as { message: Message }).message;
+        } catch (e) {
+          if (errorMessage(e) !== 'unauthorized') setNotice(`The message was sent, but it could not be pinned: ${errorMessage(e)}`);
+        }
+      }
       // Don't move lastId forward here: the next poll picks up anything sent in between.
       setMessages((list) => merge(list, [message]));
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
       setDraft(''); // which also removes the stored draft and lets the box shrink back
+      // Only what was sent leaves the composer: a quote added while the message was on its way stays.
+      setQuotes((list) => list.filter((q) => !sentQuotes.some((sentQuote) => sentQuote.key === q.key)));
       setExpanded(false);
       setReplyTo(null);
       // Only what was sent leaves the composer. An image added while the message was on its way stays.
@@ -529,8 +565,15 @@ export default function Page() {
       <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
-        {replyTo && <ReplyingTo parent={replyTo} author={NAMES[replyTo.sender] ?? replyTo.sender} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
-        <DraftChips drafts={drafts} onRemove={removeDraft} />
+        {overLimit && <div className="mb-1.5 text-[13px] text-bad" role="alert">{overLimit}</div>}
+        {/* Everything that goes with the next message, in one row: the message it answers, quotes, images. */}
+        {(replyTo || quotes.length > 0 || drafts.length > 0) && (
+          <ChipRow>
+            {replyTo && <ReplyingTo parent={replyTo} author={NAMES[replyTo.sender] ?? replyTo.sender} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
+            <QuoteChips quotes={quotes} onRemove={removeQuote} />
+            <DraftChips drafts={drafts} onRemove={removeDraft} />
+          </ChipRow>
+        )}
         {/* The message box has the full width on every screen. The controls sit in one row below it. */}
         <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           <textarea

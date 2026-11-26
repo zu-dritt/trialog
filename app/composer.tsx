@@ -7,6 +7,7 @@
 // kept in this browser per participant, so a reload doesn't lose it. Only the text: no images,
 // and nothing leaves the browser.
 import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
+import { parseQuotes, type Quote } from './quote';
 
 /** The box grows with its text up to this share of the visible window, then scrolls. */
 export const GROW_SHARE = 0.4;
@@ -72,43 +73,70 @@ export function useBoxHeight(boxRef: RefObject<HTMLTextAreaElement | null>, text
 
 // --- the unsent draft -------------------------------------------------------------------------
 
+/** What is kept of an unsent message: the typed text and the quotes above it. Never images. */
+export interface StoredDraft {
+  text: string;
+  quotes: Quote[];
+}
+export const EMPTY_DRAFT: StoredDraft = { text: '', quotes: [] };
+const hasContent = (draft: StoredDraft): boolean => draft.text.trim() !== '' || draft.quotes.length > 0;
+
 /** A draft longer than this is not kept. A message can't be longer than 20 KB anyway. */
 export const MAX_DRAFT_CHARS = 20_000;
+/** The same for a draft with its quotes, which are stored unescaped and with their writers' names. */
+const MAX_STORED_CHARS = 3 * MAX_DRAFT_CHARS;
 /** One entry per participant, so a second person at the same browser gets their own draft. */
 export const draftKey = (participant: string): string => `trialogDraft:${participant}`;
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-/** The stored draft of this participant, or ''. Never throws: storage can be switched off. */
-export function readDraft(storage: DraftStorage, participant: string): string {
+// A draft without quotes is stored as its plain text, as it always was. One with quotes is stored
+// as a small JSON object that says so with a version number, in the same entry.
+const WITH_QUOTES = '{"v":1,';
+
+/** The stored draft of this participant, or an empty one. Never throws: storage can be switched off. */
+export function readDraft(storage: DraftStorage, participant: string): StoredDraft {
   try {
-    const text = storage.getItem(draftKey(participant));
-    return typeof text === 'string' && text.length <= MAX_DRAFT_CHARS ? text : '';
+    const raw = storage.getItem(draftKey(participant));
+    if (typeof raw !== 'string' || raw.length > MAX_STORED_CHARS) return EMPTY_DRAFT;
+    if (raw.startsWith(WITH_QUOTES)) {
+      try {
+        const kept = JSON.parse(raw) as { v?: unknown; text?: unknown; quotes?: unknown };
+        if (kept && kept.v === 1 && typeof kept.text === 'string') {
+          return { text: kept.text.length <= MAX_DRAFT_CHARS ? kept.text : '', quotes: parseQuotes(kept.quotes) };
+        }
+      } catch { /* not ours after all: it is plain text that happens to start like this */ }
+    }
+    return raw.length <= MAX_DRAFT_CHARS ? { text: raw, quotes: [] } : EMPTY_DRAFT;
   } catch {
-    return '';
+    return EMPTY_DRAFT;
   }
 }
 
 /** Stores the draft, or removes the entry when there is nothing worth keeping. Never throws. */
-export function writeDraft(storage: DraftStorage, participant: string, text: string): void {
+export function writeDraft(storage: DraftStorage, participant: string, draft: StoredDraft): void {
   try {
-    if (text.trim() === '' || text.length > MAX_DRAFT_CHARS) storage.removeItem(draftKey(participant));
-    else storage.setItem(draftKey(participant), text);
+    const key = draftKey(participant);
+    const text = draft.text.length <= MAX_DRAFT_CHARS ? draft.text : '';
+    const quotes = draft.quotes.map(({ author, messageId, kind, text: quoted }) => ({ author, messageId, kind, text: quoted }));
+    const value = quotes.length ? JSON.stringify({ v: 1, text, quotes }) : text;
+    if (!hasContent({ text, quotes }) || value.length > MAX_STORED_CHARS) storage.removeItem(key);
+    else storage.setItem(key, value);
   } catch { /* storage is full or off: the box works without it */ }
 }
 
 /**
- * What the message box should hold once the page knows who is signed in.
- *   current  what is in the box now
- *   owner    whose text that is: a participant, or null when nobody was known yet
+ * What the composer should hold once the page knows who is signed in.
+ *   current  what is in the composer now
+ *   owner    whose that is: a participant, or null when nobody was known yet
  *   me       who is signed in now
  *   stored   that participant's stored draft
- * Text typed in the first moment, before the page knew who is signed in, is kept. After a
- * change of participant the box shows the new participant's own draft, never the other's.
+ * Something typed or quoted in the first moment, before the page knew who is signed in, is kept.
+ * After a change of participant the composer shows the new participant's own draft, never the other's.
  */
-export function draftFor(current: string, owner: string | null, me: string, stored: string): string {
+export function draftFor(current: StoredDraft, owner: string | null, me: string, stored: StoredDraft): StoredDraft {
   if (owner === me) return current;
-  if (owner === null && current.trim() !== '') return current;
+  if (owner === null && hasContent(current)) return current;
   return stored;
 }
 
