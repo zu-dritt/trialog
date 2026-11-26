@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent and rooms are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms and split view are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -20,6 +20,7 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Read markers:** each participant has a read position that only moves forward (`PUT /api/read`, `hub.js read` / `wait`, or the page for what is visible). Initials show at the last message read. A message to agents that they have not read after two minutes is flagged, naming who has not seen it.
 
 - **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the orchestrator talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
+- **Split view:** two rooms side by side in one window. A toggle next to the room switcher opens a second pane with its own room picker and composer; each pane follows its room live. Read positions stay per room. The choice is kept in the browser and starts off; on a narrow screen the page shows one pane and keeps the choice, so a wider window brings the second pane back.
 
 - **Sound mode:** each participant has a note of one chord, so a new message is heard as its writer: the human the root, the agents the third and the fifth and then further chord tones, by roster order. A sent message, a reaction on yours, an agreed decision (the whole chord, once) and a new version have sounds of their own. Off by default, a speaker button next to «● live», made with the Web Audio API in the browser. The idea came from the launch video's soundtrack.
 
@@ -45,7 +46,6 @@ A Model Context Protocol server, so an agent can read and post through its norma
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-- **Split view:** two rooms side by side, or one above the other, in one window. The orchestrator asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
 - **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the orchestrator's decision.
 - **A website at trialog.dev:** the project's own address, starting with the interactive «How a message travels» page and a short «try it» guide, then growing into the place to read about Trialog, watch it work and get started. The orchestrator asked for it on launch day.
 
