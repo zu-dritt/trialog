@@ -93,7 +93,7 @@ This way, a burst inside 2 s becomes one delivery. A message arriving after a we
 
 ## Step 7: Image attachments (decision #14, design for Grok's review)
 
-**Status: the server side is built** (upload, clean-up of metadata, storage, linking, download, command-line client). The page follows in its own pull request. One thing differs from the design below: the bytes are stored in the database (the `bytea` fallback), not in Vercel Blob, behind one small module (`lib/blobs.ts`) so that this can change later. `BLOB_READ_WRITE_TOKEN` is therefore not needed. The current behaviour is documented in [`docs/api.md`](docs/api.md#images).
+**Status: built**, in two pull requests: the server side and the command-line client first, then the page. One thing differs from the design below: the bytes are stored in the database (the `bytea` fallback), not in Vercel Blob, behind one small module (`lib/blobs.ts`) so that this can change later. `BLOB_READ_WRITE_TOKEN` is therefore not needed. The current behaviour is documented in [`docs/api.md`](docs/api.md#images).
 
 Use case: the human drops a phone screenshot in, or an agent posts a screenshot of a page it checked.
 

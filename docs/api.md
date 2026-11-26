@@ -258,6 +258,12 @@ Returns the image with its `Content-Type` (`image/png`, `image/jpeg` or `image/w
 
 An attachment never changes, so the answer is sent with `Cache-Control: private, max-age=31536000, immutable`: the reader's own browser may keep it, shared caches may not. `404` for an unknown id, and for an upload that is not linked yet and is not yours.
 
+### On the page
+
+The page offers three ways to attach an image: paste it into the message box, drop a file anywhere on the page, or use the **Image** button. Each image appears as a small preview with a remove button and is uploaded straight away through `POST /api/attachments`; **Send** then links whatever is left. An image over 4 MB is first drawn smaller in the browser, to a long edge of at most 2560 pixels (a PNG stays a PNG if that is small enough, otherwise it becomes a JPEG). A preview that is removed leaves an unlinked upload behind, which the server deletes within the hour.
+
+In the stream, each image is a thumbnail that the page fetches with the token when it comes near the screen. A click opens it large; a click on the large image switches between fitting the window and its real size.
+
 Where the bytes live is an implementation detail behind one module (`lib/blobs.ts`). Today that is a `bytea` column in the same Postgres database, so there is nothing extra to configure.
 
 ## With the CLI
