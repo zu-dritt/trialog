@@ -6,6 +6,7 @@ import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachmen
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
+import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { PollCard, PollComposer, withPolls } from './polls';
@@ -497,11 +498,13 @@ export default function Page() {
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">Decisions</h2>
+          {/* Every pinned message is listed here. A decision carries its badge; a message pinned by hand does not. */}
+          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned)}</h2>
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
                 <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
+                {isDecision(m.text) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -538,6 +541,8 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
+                    {isDecision(m.text) && <DecisionBadge className="max-sm:hidden" />}
                     <ReplyButton
                       messageId={m.id}
                       onReply={() => startReply(m)}
@@ -551,10 +556,14 @@ export default function Page() {
                     />
                     <button
                       className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
-                      title={isPinned ? 'Unpin decision' : 'Pin as decision'}
+                      // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
+                      title={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-pressed={isPinned}
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
+                  {isDecision(m.text) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
                   {m.reply_to != null && (() => {
                     const parent = byId.get(m.reply_to);
                     return (
