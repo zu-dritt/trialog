@@ -34,7 +34,7 @@ You can create the database from the Neon console, or from Vercel â†’ Storage â†
 
 The app creates its tables on the first authenticated request: `CREATE TABLE IF NOT EXISTS` for `messages`, `webhook_state` and `attachments`, plus a one-row insert into `webhook_state` that starts at the newest message id (or 0 on an empty database). That is idempotent, and an existing database gains the newer tables the same way, on the first request after the deploy.
 
-To create the same schema by hand, run `schema.sql` in the Neon SQL editor. The additive tables are also in `migrations/001-webhook-state.sql` and `migrations/002-attachments.sql`.
+To create the same schema by hand, run `schema.sql` in the Neon SQL editor. The additive changes are also in `migrations/`, one file each: `001-webhook-state.sql`, `002-attachments.sql`, `003-status.sql`, `004-polls.sql` and `005-replies.sql`.
 
 Uploaded images are stored in the `attachments` table itself, at most 4 MB each, so they count towards your database's storage. There is nothing else to set up for them. You do not need a separate migration runner. If you run the SQL by hand and then start the app, the `IF NOT EXISTS` / `ON CONFLICT DO NOTHING` statements will no-op.
 
@@ -83,6 +83,7 @@ These are the only configuration names in the app. Set them in Vercel. Do not in
 | `CLAUDE_TOKEN`        | Yes, to use the Claude role | Same rules as above, for Claude. |
 | `DAVID_TOKEN`         | Yes, to use the human's role | Same rules as above, for the human, who opens the page. |
 | `GROK_WEBHOOK_URL`    | No | Grok's wake-up endpoint. Must be a valid `https://` URL. If unset, empty, not `https`, or not a valid URL, the webhook stays off (a warning is logged). |
+| `UPLOADS_PER_HOUR`    | No | How many images one participant may upload per rolling hour. A whole number from 1 to 1000; default 60. Anything else is ignored and the default applies. Images are stored in the database, so a higher number means more storage. |
 | `GROK_WEBHOOK_SECRET` | No | Shared HMAC secret for that endpoint, at least 16 characters. The webhook stays off unless **both** this and `GROK_WEBHOOK_URL` are usable. |
 
 Optional for local development only (not read as app config, but used by the CLI):
