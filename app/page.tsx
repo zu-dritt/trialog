@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
 import { RoomPane, RoomPicker } from './pane';
-import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
+import { RoomTabs, addressForRoom, roomFromSearch, readSeen, tabTitle, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
@@ -206,6 +206,14 @@ export default function Page() {
     () => (splitVisible ? [room, secondRoom] : [room]),
     [splitVisible, room, secondRoom],
   );
+
+  // The tab's title: what is new elsewhere, the open room, the hub's name (from the server's title).
+  const hubTitle = useRef<string | null>(null);
+  useEffect(() => {
+    hubTitle.current ??= document.title || 'Trialog';
+    const shownList = me ? withSeenApplied(rooms, readSeen(localStorage, me)) : rooms;
+    document.title = tabTitle(hubTitle.current, me ? rooms.find((r) => r.id === room)?.name : undefined, shownList, openRooms);
+  }, [rooms, room, openRooms, me]);
   // A message addressed to you rings from any room, even one that is not open.
   useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
