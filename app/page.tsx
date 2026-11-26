@@ -13,6 +13,8 @@ import { PollCard, PollComposer, withPolls } from './polls';
 import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
+import { NewVersionPill, useWaitingLong } from './version';
+import { BUILD_ID, isOtherBuild } from '../lib/build';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -79,6 +81,10 @@ export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
   const [status, setStatus] = useState('connecting…');
+  const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  // The server runs another build than this page was loaded with. The page says so and waits for a click.
+  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
+  const newVersionWaitsLong = useWaitingLong(newVersion);
   const [draft, setDraft] = useState('');
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
@@ -221,7 +227,13 @@ export default function Page() {
       let goodbye = false;
       const parser = createSseParser((event: SseEvent) => {
         if (stopped) return;
-        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
+        if (event.event === 'hello') {
+          // Every (re)connect of the stream says who we are and which build the server runs.
+          const hello = JSON.parse(event.data) as { me: Sender; build?: unknown };
+          setMe(hello.me);
+          if (typeof hello.build === 'string') setServerBuild(hello.build);
+          setStatus('live');
+        }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
         else if (event.event === 'bye') goodbye = true;
@@ -484,13 +496,20 @@ export default function Page() {
   const pinnedIds = new Set(pinned.map((m) => m.id));
   const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
+  const reload = () => window.location.reload();
 
   return (
     <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
-      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+      {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
+      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        <span className="flex-1" />
+        {/* The free space of the header starts with the "New version available" pill, directly after
+            the status, so the state of the page reads in one spot and nothing else moves when it
+            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
+        <span role="status" className="flex flex-1">
+          {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
+        </span>
         {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>

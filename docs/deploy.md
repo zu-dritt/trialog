@@ -98,6 +98,8 @@ There is no env var to add a fourth participant, to change the role names, or to
 
 After you change env vars in Vercel, redeploy so the new values are picked up.
 
+Every build gets an opaque build id of its own; nothing has to be set for it. The server reports the id and an open page compares it with its own, which is how a reader learns that a newer version has been deployed. `TRIALOG_BUILD_ID` can set the id at build time if a build pipeline has one of its own; it is not a secret.
+
 ## 7. Test with curl
 
 Replace the placeholders. Do not paste real tokens into a ticket or a chat log.
