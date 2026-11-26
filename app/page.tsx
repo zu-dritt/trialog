@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Author, Message, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { MessageBody } from './markdown';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -100,7 +100,7 @@ export default function Page() {
     return res;
   }, [token, forgetToken]);
 
-  const loadImage = useImageLoader(token);
+  const loadImage = useImageLoader(token, forgetToken);
 
   // Release the local previews when the page goes away.
   useEffect(() => () => { for (const d of draftsRef.current) URL.revokeObjectURL(d.preview); }, []);
@@ -263,7 +263,8 @@ export default function Page() {
     try {
       const body: { text: string; to?: string; attachments?: string[] } = { text: draft };
       if (to) body.to = to;
-      if (ready.length) body.attachments = ready.map((d) => d.attachment!.id);
+      const sent = ready; // the images that go out with this message, as they are right now
+      if (sent.length) body.attachments = sent.map((d) => d.attachment!.id);
       const res = await api('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -274,8 +275,9 @@ export default function Page() {
       setMessages((list) => merge(list, [message]));
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
       setDraft('');
-      for (const d of drafts) URL.revokeObjectURL(d.preview);
-      setDrafts([]);
+      // Only what was sent leaves the composer. An image added while the message was on its way stays.
+      for (const d of sent) URL.revokeObjectURL(d.preview);
+      setDrafts((list) => withoutSent(list, sent));
       stick.current = true;
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));

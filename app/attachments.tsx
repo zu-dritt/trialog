@@ -16,10 +16,25 @@ const EXTENSION: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'j
 export type LoadImage = (id: string) => Promise<string>;
 
 /**
+ * Fetches the bytes of one attachment with the token. A 401 means the token has stopped working:
+ * `onUnauthorized` is told, so the page can go back to the token prompt, the same way it does when
+ * a message request is refused.
+ */
+export async function fetchImage(id: string, token: string | null, onUnauthorized: () => void, fetcher: typeof fetch = fetch): Promise<Blob> {
+  const res = await fetcher(`/api/attachments/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.blob();
+}
+
+/**
  * Returns a function that fetches an attachment with the token and gives back a blob: URL.
  * Each image is fetched once per token; the URLs are released when the token changes or the page closes.
  */
-export function useImageLoader(token: string | null): LoadImage {
+export function useImageLoader(token: string | null, onUnauthorized: () => void): LoadImage {
   const cache = useRef(new Map<string, Promise<string>>());
   useEffect(() => {
     const map = cache.current;
@@ -32,16 +47,12 @@ export function useImageLoader(token: string | null): LoadImage {
     const map = cache.current;
     let pending = map.get(id);
     if (!pending) {
-      pending = fetch(`/api/attachments/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(async (res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return URL.createObjectURL(await res.blob());
-        });
+      pending = fetchImage(id, token, onUnauthorized).then((blob) => URL.createObjectURL(blob));
       pending.catch(() => { if (map.get(id) === pending) map.delete(id); }); // a failure is not remembered
       map.set(id, pending);
     }
     return pending;
-  }, [token]);
+  }, [token, onUnauthorized]);
 }
 
 const sizeLabel = (a: Attachment) => `${a.width}×${a.height}`;
@@ -140,6 +151,15 @@ export interface Draft {
   state: 'uploading' | 'ready' | 'failed';
   attachment?: Attachment;
   error?: string;
+}
+
+/**
+ * The drafts that stay in the composer after a message went out with `sent`. Anything added while
+ * that message was on its way (a paste or a drop after Send was pressed) was not part of it and stays.
+ */
+export function withoutSent(drafts: Draft[], sent: Draft[]): Draft[] {
+  const gone = new Set(sent.map((d) => d.key));
+  return drafts.filter((d) => !gone.has(d.key));
 }
 
 export function DraftChips({ drafts, onRemove }: { drafts: Draft[]; onRemove: (key: number) => void }) {
