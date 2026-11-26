@@ -7,12 +7,19 @@
 // from an agent wakes only the agents it addresses (a message to everyone addresses every
 // agent), never the sender. Messages from the hub wake no one.
 //
+// The loop and cost guard (lib/guard.ts) can hold wake-ups back. While it is tripped, the
+// wake-ups that come due are not sent: they are recorded as failed, with the reason, and so are
+// never sent later, when the pause is over. A human message lifts the pause, and that message
+// wakes the agents as always.
+//
 // The signature contract (header names, HMAC, skew) is the one published in docs/api.md. The
 // combined header is still called X-Hub-Grok-Signature so existing receivers keep working.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { promises as dns } from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import type { Message, Sender } from './core';
+import type { GuardLimit } from './guard';
+import { currentGuard } from './guard-hub';
 import { loadRoster } from './participants';
 import { MAIN_ROOM, whoToWake, type Participant } from './shared';
 import type { PendingWake, Store, WakeDelivery } from './store';
@@ -289,6 +296,7 @@ export type DeliveryResult =
   | { status: 'idle' } // nobody to wake, or no target registered
   | { status: 'delivered'; deliveries: WakeDelivery[] }
   | { status: 'failed'; deliveries: WakeDelivery[] }
+  | { status: 'paused'; limit: GuardLimit; deliveries: WakeDelivery[] } // the guard held them back
   | { status: 'error'; error: string };
 
 export interface WakeupOptions {
@@ -306,7 +314,12 @@ export interface WakeupOptions {
   lookup?: DnsLookup;
   /** When false, skip the public-host check. Only the real-HTTP loopback test uses this. */
   enforcePublicTarget?: boolean;
+  /** The limit of the loop and cost guard that holds wake-ups back now, or null. Left out: worked out from the store (lib/guard-hub.ts). */
+  guard?: () => Promise<GuardLimit | null>;
 }
+
+/** The error a wake-up is recorded with when the guard held it back. */
+export const PAUSED_ERROR = 'Not sent: the guard has paused wake-ups. A message from a human lets them go on.';
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -346,6 +359,7 @@ export function createWakeup(options: WakeupOptions) {
   const enforcePublicTarget = options.enforcePublicTarget !== false;
 
   const rosterOf = () => options.roster ?? loadRoster().participants;
+  const guard = options.guard ?? (async () => (await currentGuard(store, { roster: rosterOf() })).tripped);
 
   async function credentials(participant: string): Promise<WebhookConfig | null> {
     const stored = await store.getWakeCredentials(participant);
@@ -415,6 +429,13 @@ export function createWakeup(options: WakeupOptions) {
     if (!pending.length) return { status: 'idle' };
 
     const deliveries: WakeDelivery[] = [];
+    // Asked after the claim, so it decides about exactly these rows. Each is closed as failed
+    // with the reason, not left pending: a pause must not end in a flood of old wake-ups.
+    const paused = await guard();
+    if (paused) {
+      for (const row of pending) deliveries.push(await store.saveWakeDelivery(row.message_id, row.participant, 'failed', 0, PAUSED_ERROR));
+      return { status: 'paused', limit: paused, deliveries };
+    }
     for (const row of pending) {
       const target = await credentials(row.participant);
       if (!target) {

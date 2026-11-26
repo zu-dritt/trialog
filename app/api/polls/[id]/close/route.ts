@@ -2,6 +2,7 @@ import { waitUntil } from '@vercel/functions';
 import { RATE_LIMIT_PER_MIN, isPollId } from '../../../../../lib/core';
 import { authenticate, error, json, safe } from '../../../../../lib/http';
 import { PollError, getStore } from '../../../../../lib/store';
+import { postGuardNotice } from '../../../../../lib/guard-hub';
 import { getWakeup } from '../../../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,8 @@ export const POST = safe(async (request: Request, { params }: { params: Promise<
       return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
     }
     if (result.message) {
+      // The loop and cost guard: the hub's notice when this message trips it (lib/guard-hub.ts).
+      await postGuardNotice(store, result.message);
       const job = getWakeup(store)?.onMessage(result.message);
       if (job) waitUntil(job);
     }

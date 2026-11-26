@@ -4,6 +4,7 @@ import { SEARCH_LIMIT, parseQuery } from '../../../lib/search';
 import { waitUntil } from '@vercel/functions';
 import { loadRoster } from '../../../lib/participants';
 import { AttachmentLinkError, ReadError, ReplyTargetError, RoomError, getStore } from '../../../lib/store';
+import { postGuardNotice } from '../../../lib/guard-hub';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -136,6 +137,8 @@ export const POST = safe(async (request: Request) => {
   if (!message) {
     return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
   }
+  // The loop and cost guard: the hub's notice when this message trips it (lib/guard-hub.ts).
+  await postGuardNotice(store, message);
   // Wake the agents this message should wake, if they have a target registered (lib/webhook.ts), in the background. The sender's response never waits for the webhook or fails because of it.
   const job = getWakeup(store).onMessage(message);
   if (job) waitUntil(job);
