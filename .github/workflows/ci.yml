@@ -3,13 +3,50 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [test, staging, main]
+    branches: [playground, test, staging, main]
 
 # Read-only: tests use throwaway tokens and an in-process database. No secrets are used.
 permissions:
   contents: read
 
 jobs:
+  addresses:
+    name: Commit addresses
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the repository with its history
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The repository is public and GitHub keeps pull request commits for ever,
+      # so every commit must carry no-reply addresses only. See CONTRIBUTING.md.
+      - name: Every commit uses a no-reply address
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          elif git rev-parse -q --verify origin/playground >/dev/null && [ "$(git rev-parse origin/playground)" != "$PUSH_AFTER" ]; then
+            # A new branch, or a rewritten one: check everything it has that `playground` doesn't.
+            range="origin/playground..$PUSH_AFTER"
+          elif git rev-parse -q --verify "$PUSH_AFTER~1" >/dev/null; then
+            # `playground` itself, new or rewritten: check the newest commit.
+            range="$PUSH_AFTER~1..$PUSH_AFTER"
+          else
+            # The very first commit of a repository has no parent: check that commit.
+            range="$PUSH_AFTER"
+          fi
+          node scripts/check-commit-addresses.js "$range"
+
   test:
     name: Tests, build and type check
     runs-on: ubuntu-latest

@@ -5,7 +5,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { WELCOME_TEXT } from '../lib/core';
+import { welcomeText } from '../lib/core';
+import { DEFAULT_PARTICIPANTS, parseParticipants } from '../lib/participants';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 
 /** Db adapter for PGlite, with the same shape as the pg adapter in lib/store.ts. */
@@ -33,7 +34,8 @@ for (const [name, make] of [['sql (PGlite)', sqlStore], ['memory', async () => c
     const all = await store.all();
     assert.equal(all.length, 1);
     assert.equal(all[0].sender, 'hub');
-    assert.equal(all[0].text, WELCOME_TEXT);
+    assert.equal(all[0].text, welcomeText(parseParticipants(DEFAULT_PARTICIPANTS)));
+    assert.match(all[0].text, /Grok, Claude and David share this stream/);
   });
 
   test(`${name}: add, list since, filter by recipient`, async () => {
@@ -98,10 +100,18 @@ test('sql: messages and pins survive a restart (new connection, same database)',
   }
 });
 
-test('sql: the database refuses unknown senders and recipients', async () => {
-  const store = await sqlStore();
-  await store.ensure();
-  // Bypass the types on purpose: the CHECK constraints are the last line of defence.
-  await assert.rejects(store.add({ sender: 'mallory' as never, recipient: null, text: 'x' }));
-  await assert.rejects(store.add({ sender: 'grok', recipient: 'mallory' as never, text: 'x' }));
-});
+// Who is a participant is decided by the application (the PARTICIPANTS setting). The store only
+// refuses what could never be a name, as the last line of defence.
+for (const [name, make] of [['sql (PGlite)', sqlStore], ['memory', async () => createMemoryStore()]] as const) {
+  test(`${name}: the store refuses senders and recipients that don't have the shape of a name`, async () => {
+    const store = await make();
+    await store.ensure();
+    for (const bad of ['Mallory', 'mal lory', '1mallory', 'mallory!', '', 'm'.repeat(25), "x'; DROP TABLE messages; --"]) {
+      await assert.rejects(store.add({ sender: bad, recipient: null, text: 'x' }), `sender ${JSON.stringify(bad)}`);
+      if (bad !== '') await assert.rejects(store.add({ sender: 'grok', recipient: bad, text: 'x' }), `recipient ${JSON.stringify(bad)}`);
+    }
+    assert.equal((await store.all()).length, 1, 'only the welcome message is there');
+    // Any well-formed name is stored: whether it is a participant was decided before the store is asked.
+    assert.ok(await store.add({ sender: 'quill-2', recipient: 'ana-maria', text: 'x' }));
+  });
+}

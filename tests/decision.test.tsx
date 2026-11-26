@@ -1,0 +1,172 @@
+// The Decision badge, as far as it can be checked without a browser: which messages are
+// decisions, what the list of pinned messages is called, and the markup of the badge. How the
+// badge sits in a message's header line and in the list is looked at by hand (see the pull request).
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { DecisionBadge, isDecision, pinnedListTitle } from '../app/decision';
+import { DecisionCardView } from '../app/decisions';
+import { DECISION_HINT, HUMAN_DECISION_HINT, type DecisionCard, type Participant } from '../lib/shared';
+import { parseMessageInput } from '../lib/core';
+
+const DECISIONS = [
+  'DECISION: ship v1',
+  '  DECISION: ship v1',
+  '\n\nDECISION: ship v1\nand more below',
+  '@grok DECISION: ship v1',
+  '@claude, DECISION: ship v1',
+  '@david: DECISION: ship v1',
+  '@grok\nDECISION: ship v1',
+  'DECISION:',
+];
+const NOT_DECISIONS = [
+  'We should ship v1',
+  'no DECISION: yet',
+  'decision: ship v1',
+  'Decision: ship v1',
+  'DECISION ship v1',
+  '@nobody DECISION: ship v1',
+  // The server's rule wants the name in small letters here, so the page does too.
+  '@GROK DECISION: ship v1',
+  'First line\nDECISION: ship v1',
+  '✅ DECISION: ship v1',
+  '',
+];
+
+// The names that apply when PARTICIPANTS is not set.
+const THREE = ['grok', 'claude', 'david'];
+
+test('a message is a decision when it starts with DECISION:, after an optional @name', () => {
+  for (const text of DECISIONS) assert.equal(isDecision(text, THREE), true, JSON.stringify(text));
+  for (const text of NOT_DECISIONS) assert.equal(isDecision(text, THREE), false, JSON.stringify(text));
+});
+
+test('the page and the server agree on what a decision is', () => {
+  // The server pins a message by this rule when it is posted (lib/core.ts). None of these texts
+  // opens with a quote, which is the one case where the page looks further than the server.
+  for (const text of [...DECISIONS, ...NOT_DECISIONS].filter((t) => t.trim() !== '')) {
+    const parsed = parseMessageInput({ text }, THREE);
+    assert.ok(parsed.ok, JSON.stringify(text));
+    assert.equal(isDecision(text, THREE), parsed.pinned, JSON.stringify(text));
+  }
+});
+
+test('a quote at the top is skipped; a DECISION: inside a quote does not count', () => {
+  // A decision that opens with the message it answers.
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage do we use?\n\nDECISION: Postgres', THREE), true);
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage?\n\n@grok DECISION: Postgres', THREE), true);
+  // Quoting a decision is not deciding.
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> DECISION: Postgres\n\nI am not sure about this.', THREE), false);
+  assert.equal(isDecision('> DECISION: Postgres', THREE), false);
+  assert.equal(isDecision('>DECISION: Postgres\n>\n> more', THREE), false);
+});
+
+test('pinned by hand is not a decision', () => {
+  // What makes a decision is its text. Whether a message is pinned plays no part.
+  const byHand = { id: 7, text: 'The address of the test page is in the README.', pinned_at: '2026-11-25T13:00:00Z' };
+  const unpinnedDecision = { id: 8, text: 'DECISION: ship v1', pinned_at: null };
+  assert.equal(isDecision(byHand.text, THREE), false);
+  assert.equal(isDecision(unpinnedDecision.text, THREE), true);
+});
+
+test('the list is called by what it holds', () => {
+  const decision = { text: 'DECISION: ship v1' };
+  const addressed = { text: '@grok DECISION: use Postgres' };
+  const byHand = { text: 'The address of the test page is in the README.' };
+  assert.equal(pinnedListTitle([decision], THREE), 'Decisions');
+  assert.equal(pinnedListTitle([decision, addressed], THREE), 'Decisions');
+  assert.equal(pinnedListTitle([decision, byHand], THREE), 'Decisions and pinned');
+  assert.equal(pinnedListTitle([byHand, addressed, byHand], THREE), 'Decisions and pinned');
+  assert.equal(pinnedListTitle([byHand], THREE), 'Pinned');
+  assert.equal(pinnedListTitle([byHand, byHand], THREE), 'Pinned');
+});
+
+test('the badge is a label with the word and a drawn check mark, not an emoji', () => {
+  const html = renderToStaticMarkup(<DecisionBadge />);
+  // The word is there as text, so a screen reader says it and a search finds it.
+  assert.match(html, /^<span [^>]*>.*Decision<\/span>$/);
+  assert.equal(html.replace(/<[^>]+>/g, ''), 'Decision');
+  // The check mark is a drawing inside the badge, hidden from screen readers: the word says it all.
+  assert.match(html, /<svg aria-hidden="true"[^>]*><path [^>]*><\/path><\/svg>/);
+  // Styled as a label: a border and a background of its own.
+  assert.match(html, /class="[^"]*\bborder\b[^"]*\bbg-decision\/10\b/);
+  // The page can add a class of its own, to show the badge in one place on a wide screen and another on a narrow one.
+  assert.match(renderToStaticMarkup(<DecisionBadge className="max-sm:hidden" />), /class="[^"]* text-decision max-sm:hidden"/);
+  // No emoji stands for a decision: neither a check-mark emoji nor the pin.
+  for (const sign of ['✅', '✔', '☑', '✓', '📌']) assert.ok(!html.includes(sign), sign);
+});
+
+const PARTICIPANTS: Participant[] = [
+  { name: 'grok', kind: 'agent', color: 0 },
+  { name: 'claude', kind: 'agent', color: 1 },
+  { name: 'david', kind: 'human', color: 2 },
+];
+
+const openCard = (positions: DecisionCard['positions'] = []): DecisionCard => ({
+  id: 'decision_testhint',
+  message_id: 12,
+  creator: 'david',
+  prompt: 'Ship the card itself?',
+  created_at: '2026-11-26T06:00:00.000Z',
+  agreed_at: null,
+  positions,
+});
+
+test('an agreed card is a decision even without DECISION: in the text', () => {
+  const agreed: DecisionCard = { ...openCard(), agreed_at: '2026-11-26T07:00:00.000Z' };
+  assert.equal(isDecision('Ship the card itself?', THREE, agreed), true);
+  assert.equal(isDecision('Ship the card itself?', THREE, openCard()), false);
+  const byPositions = openCard(THREE.map((name) => ({ participant: name, stance: 'agree' as const, note: null, updated_at: '2026-11-26T07:00:00.000Z' })));
+  assert.equal(isDecision('Ship the card itself?', THREE, byPositions), true);
+  assert.equal(pinnedListTitle([{ text: 'Ship the card itself?', decision: agreed }], THREE), 'Decisions');
+});
+
+test('a human sees what Agree means; an agent does not', () => {
+  const card = openCard([{ participant: 'david', stance: 'agree', note: null, updated_at: '2026-11-26T06:00:00.000Z' }]);
+  const asHuman = renderToStaticMarkup(<DecisionCardView card={card} me="david" participants={PARTICIPANTS} />);
+  assert.ok(asHuman.includes(HUMAN_DECISION_HINT), asHuman);
+  assert.ok(asHuman.includes(DECISION_HINT), asHuman);
+  const asAgent = renderToStaticMarkup(<DecisionCardView card={card} me="grok" participants={PARTICIPANTS} />);
+  assert.ok(!asAgent.includes(HUMAN_DECISION_HINT), asAgent);
+  assert.ok(asAgent.includes(DECISION_HINT), asAgent);
+  // The proposer already agreed, so they are not listed as waiting.
+  assert.match(asHuman, />David<\/span> ✓/);
+});
+
+test('the card shows which answer the reader gave: that button is the chosen one, the other is plain', () => {
+  const at = '2026-11-26T06:00:00.000Z';
+  const view = (positions: DecisionCard['positions'], me: string | null = 'david') =>
+    renderToStaticMarkup(<DecisionCardView card={openCard(positions)} me={me} participants={PARTICIPANTS} onPosition={() => {}} />);
+  /** The two answer buttons of a card: [class, aria-pressed] of each. */
+  const answers = (markup: string) => Object.fromEntries(
+    [...markup.matchAll(/<button type="button" class="([^"]*)" aria-pressed="(true|false)"[^>]*>(Agree|Object, and say why)<\/button>/g)]
+      .map(([, classes, pressed, label]) => [label, { classes, pressed }]),
+  );
+  const CHOSEN = /\bbg-(ok|bad)\/20\b/;
+
+  // No answer yet: neither is pressed, neither is coloured.
+  const none = answers(view([{ participant: 'grok', stance: 'agree', note: null, updated_at: at }]));
+  assert.deepEqual(Object.keys(none), ['Agree', 'Object, and say why']);
+  assert.equal(none['Agree'].pressed, 'false');
+  assert.equal(none['Object, and say why'].pressed, 'false');
+  assert.ok(!CHOSEN.test(none['Agree'].classes) && !CHOSEN.test(none['Object, and say why'].classes));
+
+  // Agreed: the stored position decides, wherever it was given.
+  const agree = answers(view([{ participant: 'david', stance: 'agree', note: null, updated_at: at }]));
+  assert.equal(agree['Agree'].pressed, 'true');
+  assert.match(agree['Agree'].classes, /border-ok bg-ok\/20 text-ok/);
+  assert.equal(agree['Object, and say why'].pressed, 'false');
+  assert.equal(agree['Object, and say why'].classes, none['Object, and say why'].classes, 'the other one stays plain');
+
+  // Objected.
+  const object = answers(view([{ participant: 'david', stance: 'object', note: 'Too early.', updated_at: at }]));
+  assert.equal(object['Object, and say why'].pressed, 'true');
+  assert.match(object['Object, and say why'].classes, /border-bad bg-bad\/20 text-bad/);
+  assert.equal(object['Agree'].pressed, 'false');
+  assert.equal(object['Agree'].classes, none['Agree'].classes, 'the other one stays plain');
+
+  // Somebody else's answer never presses the reader's buttons.
+  const others = answers(view([{ participant: 'david', stance: 'object', note: 'Too early.', updated_at: at }], 'grok'));
+  assert.equal(others['Agree'].pressed, 'false');
+  assert.equal(others['Object, and say why'].pressed, 'false');
+});
