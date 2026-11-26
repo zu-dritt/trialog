@@ -13,8 +13,8 @@ import { isDecision } from '../lib/decision';
 export { isDecision };
 
 /** What to call the list at the top, which holds every pinned message. */
-export function pinnedListTitle(pinned: { text: string }[]): 'Decisions' | 'Decisions and pinned' | 'Pinned' {
-  const decisions = pinned.filter((m) => isDecision(m.text)).length;
+export function pinnedListTitle(pinned: { text: string }[], names: readonly string[]): 'Decisions' | 'Decisions and pinned' | 'Pinned' {
+  const decisions = pinned.filter((m) => isDecision(m.text, names)).length;
   if (decisions === pinned.length) return 'Decisions';
   return decisions === 0 ? 'Pinned' : 'Decisions and pinned';
 }

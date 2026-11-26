@@ -5,27 +5,31 @@
 // A decision is a message its writer began with DECISION: (in capitals, after an optional @name).
 // Whether a message is pinned plays no part: a note pinned by hand is not a decision, and a
 // decision that was unpinned still is one.
-import { SENDERS } from './shared';
-
-const NAMES = SENDERS.join('|');
-// The same rule the server pins by (lib/core.ts): DECISION: in capitals, after an optional @name.
-const STARTS_DECISION = new RegExp(`^\\s*(?:@(?:${NAMES})\\b[\\s,:]*)?DECISION:`);
+import { addressing } from './shared';
 
 /**
  * Whether a message is a decision: what its writer wrote starts with DECISION:, by the server's
  * rule. Lines of a quote at the top (starting with ">") and empty lines are skipped first, so a
  * decision that opens with what it answers is still one. A DECISION: inside a quote, or further
  * down in the text, does not make a message a decision.
+ *
+ * `names` are the participants (GET /api/participants): the rule is the one the server pins by
+ * (addressing in lib/shared.ts), DECISION: in capitals after an optional "@name".
  */
-export function isDecision(text: string): boolean {
+export function isDecision(text: string, names: readonly string[]): boolean {
   const lines = text.split('\n');
   const first = lines.findIndex((line) => line.trim() !== '' && !line.trimStart().startsWith('>'));
-  return first !== -1 && STARTS_DECISION.test(lines.slice(first).join('\n'));
+  return first !== -1 && addressing(names).decision.test(lines.slice(first).join('\n'));
 }
 
 /**
  * The same rule as a Postgres regular expression, for `text ~ $n` (case matters, as above).
- * First any number of lines that are empty or a quote, then the start of a decision.
+ * First any number of lines that are empty or a quote, then the start of a decision, which is
+ * the very pattern of addressing(): written so that both JavaScript and Postgres read it alike.
  * tests/search.test.ts runs a list of texts through both and expects the same answers.
  */
-export const DECISION_SQL_PATTERN = `^(?:[[:blank:]\\r\\f\\v]*(?:>[^\\n]*)?\\n)*\\s*(?:@(?:${NAMES})\\y[\\s,:]*)?DECISION:`;
+export function decisionSqlPattern(names: readonly string[]): string {
+  const start = addressing(names).decision.source;
+  if (!start.startsWith('^')) throw new Error('The decision rule no longer starts at the beginning of the text.');
+  return `^(?:[[:blank:]\\r\\f\\v]*(?:>[^\\n]*)?\\n)*${start.slice(1)}`;
+}

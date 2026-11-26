@@ -7,8 +7,9 @@
 // marked. It is never rendered as Markdown or HTML, so nothing in a message can turn into markup
 // here. The rules of a query (lib/search.ts) are the same ones the server uses.
 import { useEffect, useId, useRef, useState } from 'react';
-import type { Author, Message } from '../lib/core';
+import type { Message } from '../lib/core';
 import { isDecision } from '../lib/decision';
+import { colorOf, displayName, type Participant } from '../lib/shared';
 import { DecisionBadge } from './decision';
 import { SEARCH_LIMIT, debounce, markMatches, matchLine, newestOnly, parseQuery } from '../lib/search';
 
@@ -27,14 +28,12 @@ export type SearchState =
   | { kind: 'done'; results: Message[]; words: string[] };
 
 interface Look {
-  /** Display names per sender. */
-  names: Record<Author, string>;
-  /** The text colour class of a sender. */
-  colour: (sender: Author) => string;
+  /** Who takes part (GET /api/participants): for the colours, and for the rule of a decision. */
+  participants: readonly Participant[];
 }
 
 /** The list of results. Each one is an option of the search field's list box. */
-export function SearchResults({ listId, results, words, active, onPick, onPoint, names, colour }: Look & {
+export function SearchResults({ listId, results, words, active, onPick, onPoint, participants }: Look & {
   listId: string;
   results: Message[];
   words: string[];
@@ -43,6 +42,7 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
   onPick: (m: Message) => void;
   onPoint?: (index: number) => void;
 }) {
+  const names = participants.map((p) => p.name);
   return (
     <ul id={listId} role="listbox" aria-label="Search results" className="max-h-[min(60vh,420px)] overflow-auto">
       {results.map((m, i) => (
@@ -53,11 +53,11 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
           className={`cursor-pointer border-t border-line px-3 py-1.5 ${i === active ? 'bg-[#2a2f3a]' : ''}`}
         >
           <div className="flex items-baseline gap-2 text-xs text-muted">
-            <span className={`font-bold ${colour(m.sender)}`}>{names[m.sender] ?? m.sender}</span>
+            <span className="font-bold" style={{ color: colorOf(m.sender, participants) }}>{displayName(m.sender)}</span>
             <time dateTime={m.created_at}>{whenFmt.format(new Date(m.created_at))}</time>
             <span>#{m.id}</span>
             {/* The same two signs as in the stream: the badge for a decision, the word for a pin. */}
-            {isDecision(m.text) && <DecisionBadge />}
+            {isDecision(m.text, names) && <DecisionBadge />}
             {m.pinned_at && <span>pinned</span>}
           </div>
           <div className="truncate text-[13px]">
@@ -93,7 +93,7 @@ const Magnifier = () => (
  *   search  asks the server; rejects when it could not
  *   onPick  the reader chose a result
  */
-export function SearchBox({ search, onPick, names, colour }: Look & {
+export function SearchBox({ search, onPick, participants }: Look & {
   search: (q: string, decisionsOnly: boolean) => Promise<Message[]>;
   onPick: (m: Message) => void;
 }) {
@@ -198,7 +198,7 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
               Decisions only
             </label>
             {results.length > 0 && (
-              <SearchResults listId={listId} results={results} words={state.kind === 'done' ? state.words : []} active={active} onPick={pick} onPoint={setActive} names={names} colour={colour} />
+              <SearchResults listId={listId} results={results} words={state.kind === 'done' ? state.words : []} active={active} onPick={pick} onPoint={setActive} participants={participants} />
             )}
             {/* Said aloud by a screen reader when it changes: how the search stands. */}
             <p role="status" className={`m-0 px-3 text-xs text-muted ${note ? 'border-t border-line py-2' : ''}`}>

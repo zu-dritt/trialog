@@ -58,8 +58,8 @@ test('after a long wait only the outline changes', () => {
   const plain = renderToStaticMarkup(<NewVersionPill onReload={() => {}} />);
   const accented = renderToStaticMarkup(<NewVersionPill onReload={() => {}} accent />);
   assert.match(plain, /\bborder-muted\/50\b/);
-  assert.match(accented, /\bborder-david\b/);
-  assert.equal(accented.replace('border-david', 'border-muted/50'), plain, 'the same pill otherwise');
+  assert.match(accented, /\bborder-accent\b/);
+  assert.equal(accented.replace('border-accent', 'border-muted/50'), plain, 'the same pill otherwise');
   assert.ok(!/animate|transition|blink|pulse/.test(accented), accented);
 });
 

@@ -108,7 +108,9 @@ test('sql (PGlite): set, clear, expiry cleanup and CHECK constraints', async () 
   assert.equal(await store.clearStatus('david'), true);
   assert.equal(await store.clearStatus('david'), false);
 
-  await assert.rejects(store.setStatus({ participant: 'mallory' as never, text: 'nope', ttlSeconds: 60 }));
+  // Who is a participant is the application's business (PARTICIPANTS); the table refuses what could never be a name.
+  await assert.rejects(store.setStatus({ participant: 'Not A Name', text: 'x', ttlSeconds: 60 }));
+  assert.ok(await store.setStatus({ participant: 'quill-2', text: 'a fourth participant', ttlSeconds: 60 }));
   await assert.rejects(store.setStatus({ participant: 'grok', text: '', ttlSeconds: 60 }));
   await assert.rejects(store.setStatus({ participant: 'grok', text: 'x'.repeat(81), ttlSeconds: 60 }));
 });

@@ -43,27 +43,30 @@ function pgliteDb(pg: PGlite): Db {
   };
 }
 
+// The names that apply when PARTICIPANTS is not set.
+const THREE = ['grok', 'claude', 'david'];
+
 const auth = (who?: string): Record<string, string> => (who ? { Authorization: `Bearer ${TOKENS[who] ?? who}` } : {});
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
 test('parsePollInput trims, enforces lengths, option count, uniqueness and ignores spoofed identity', () => {
   const body = { question: '  Lunch?\n', options: [' Pizza ', 'Salad', 'Soup'], participant: 'david', sender: 'claude', creator: 'david' };
-  assert.deepEqual(parsePollInput(body), { ok: true, question: 'Lunch?', options: ['Pizza', 'Salad', 'Soup'], recipient: null });
-  assert.deepEqual(parsePollInput({ question: 'Q', options: ['A', 'B'], to: '@claude' }), { ok: true, question: 'Q', options: ['A', 'B'], recipient: 'claude' });
+  assert.deepEqual(parsePollInput(body, THREE), { ok: true, question: 'Lunch?', options: ['Pizza', 'Salad', 'Soup'], recipient: null });
+  assert.deepEqual(parsePollInput({ question: 'Q', options: ['A', 'B'], to: '@claude' }, THREE), { ok: true, question: 'Q', options: ['A', 'B'], recipient: 'claude' });
 
-  assert.equal(parsePollInput(null).ok, false);
-  assert.equal(parsePollInput([]).ok, false);
-  assert.equal(parsePollInput({ question: '   ', options: ['A', 'B'] }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: ['A'] }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: Array.from({ length: POLL_MAX_OPTIONS + 1 }, (_, i) => `o${i}`) }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'A'] }).ok, false);
-  assert.equal(parsePollInput({ question: 'a'.repeat(POLL_QUESTION_MAX_LENGTH + 1), options: ['A', 'B'] }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'b'.repeat(POLL_OPTION_MAX_LENGTH + 1)] }).ok, false);
-  assert.equal(parsePollInput({ question: 'ok\u0000', options: ['A', 'B'] }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'B'], to: 'mallory' }).ok, false);
-  assert.equal(parsePollInput({ question: 'Q', options: 'A' }).ok, false);
-  assert.ok(parsePollInput({ question: 'a'.repeat(POLL_QUESTION_MAX_LENGTH), options: ['A', 'B'] }).ok);
-  assert.ok(parsePollInput({ question: 'Q', options: Array.from({ length: POLL_MIN_OPTIONS }, (_, i) => `o${i}`) }).ok);
+  assert.equal(parsePollInput(null, THREE).ok, false);
+  assert.equal(parsePollInput([], THREE).ok, false);
+  assert.equal(parsePollInput({ question: '   ', options: ['A', 'B'] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: ['A'] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: Array.from({ length: POLL_MAX_OPTIONS + 1 }, (_, i) => `o${i}`) }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'A'] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'a'.repeat(POLL_QUESTION_MAX_LENGTH + 1), options: ['A', 'B'] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'b'.repeat(POLL_OPTION_MAX_LENGTH + 1)] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'ok\u0000', options: ['A', 'B'] }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: ['A', 'B'], to: 'mallory' }, THREE).ok, false);
+  assert.equal(parsePollInput({ question: 'Q', options: 'A' }, THREE).ok, false);
+  assert.ok(parsePollInput({ question: 'a'.repeat(POLL_QUESTION_MAX_LENGTH), options: ['A', 'B'] }, THREE).ok);
+  assert.ok(parsePollInput({ question: 'Q', options: Array.from({ length: POLL_MIN_OPTIONS }, (_, i) => `o${i}`) }, THREE).ok);
 });
 
 test('parseVoteInput requires a 1-based integer option and ignores participant', () => {
@@ -144,13 +147,23 @@ for (const [name, make] of STORES) {
   });
 }
 
-test('SQL rejects a creator that is not a participant via the named check', async () => {
+test('SQL: the checks that listed three names are replaced by checks on the shape of a name', async () => {
+  // Who is a participant is the application's business (PARTICIPANTS). The tables refuse what could never be a name.
   const pg = new PGlite();
   const store = createSqlStore(pgliteDb(pg));
   await store.ensure();
-  const names = (await pg.query(`SELECT conname FROM pg_constraint WHERE conname IN ('polls_creator_is_participant', 'poll_votes_participant_is_participant')`)).rows as { conname: string }[];
-  assert.deepEqual(names.map((r) => r.conname).sort(), ['poll_votes_participant_is_participant', 'polls_creator_is_participant']);
-  await assert.rejects(store.createPoll({ creator: 'mallory' as never, question: 'Q?', options: ['A', 'B'] }));
+  const names = (await pg.query(`SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid IN ('polls'::regclass, 'poll_votes'::regclass) AND conname ~ 'participant|creator' ORDER BY 1`)).rows as { conname: string }[];
+  assert.deepEqual(names.map((r) => r.conname), ['poll_votes_participant_shape', 'polls_creator_shape']);
+  await assert.rejects(store.createPoll({ creator: 'Not A Name', question: 'Q?', options: ['A', 'B'] }), /messages_sender_shape|polls_creator_shape/);
+  const created = await store.createPoll({ creator: 'quill-2', question: 'A fourth participant asks?', options: ['A', 'B'] });
+  assert.ok(created);
+  await assert.rejects(store.vote(created.poll.id, 'NOPE', 1), /poll_votes_participant_shape/);
+  assert.deepEqual((await store.vote(created.poll.id, 'ana-maria', 2)).options[1].voters, ['ana-maria']);
+  // Closing it posts the result under the closer's name, with the voter named as the page names them.
+  const closed = await store.closePoll(created.poll.id, 'quill-2');
+  assert.equal(closed?.message?.sender, 'quill-2');
+  assert.equal(closed?.message?.reply_to, created.message.id);
+  assert.match(closed?.message?.text ?? '', /B — 1 vote \(Ana-Maria\)/);
 });
 
 const BASE = 'http://hub.test';

@@ -293,6 +293,59 @@ test('send --reply-to posts reply_to, and read shows the arrow on a reply', asyn
   }
 });
 
+test('the CLI follows the names of the hub it talks to: --to, participants, and how names are shown', async () => {
+  // A hub with made-up participants. The CLI has no list of names of its own.
+  const message = { id: 7, sender: 'ana-maria', recipient: 'quill-2', text: 'hello', created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [] };
+  const seen: { method: string; url: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ method: req.method || '', url: req.url || '', body: Buffer.concat(chunks).toString() });
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/api/participants') {
+        res.end(JSON.stringify({ me: 'quill-2', participants: [{ name: 'ana-maria', kind: 'human', color: 0 }, { name: 'quill-2', kind: 'agent', color: 1 }] }));
+      } else if (req.method === 'POST') {
+        res.statusCode = 201;
+        res.end(JSON.stringify({ message }));
+      } else if (req.url?.startsWith('/api/status')) {
+        res.end(JSON.stringify({ statuses: [{ participant: 'ana-maria', text: 'reading', expires_at: '2026-11-26T04:10:00.000Z', updated_at: '2026-11-26T04:00:00.000Z' }] }));
+      } else {
+        res.end(JSON.stringify({ me: 'quill-2', messages: [message], pinned: [] }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const sent = await run('send', '--to', 'quill-2', 'hello');
+    assert.equal(sent.code, 0, sent.stderr);
+    assert.deepEqual(JSON.parse(seen[0].body), { text: 'hello', to: 'quill-2' }, 'the name goes to the hub as given; the hub decides whether it is one');
+    assert.match(sent.stdout, /^sent #7 to Quill-2/);
+
+    const read = await run('read', '--to', 'quill-2');
+    assert.equal(seen[1].url, '/api/messages?to=quill-2');
+    assert.match(read.stdout, /^#7 \[\d\d:\d\d\] Ana-Maria → Quill-2:\nhello/);
+
+    const who = await run('participants');
+    assert.equal(who.code, 0, who.stderr);
+    assert.equal(seen[2].url, '/api/participants');
+    assert.equal(who.stdout, 'ana-maria (human)\nquill-2 (agent)  ← you\n');
+    assert.deepEqual(JSON.parse((await run('participants', '--json')).stdout).participants.map((p: { name: string }) => p.name), ['ana-maria', 'quill-2']);
+
+    assert.match((await run('status')).stdout, /^Ana-Maria: reading/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('search needs at least one word, before any request', async () => {
   for (const args of [['search'], ['search', '   '], ['search', '--json'], ['search', '--pinned'], ['search', '--decisions']]) {
     const { code, stderr } = await hub(...args);

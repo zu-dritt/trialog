@@ -3,7 +3,8 @@ import { beforeAll, test } from 'vitest';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
-import { DECISION_SQL_PATTERN, isDecision } from '../lib/decision';
+import { decisionSqlPattern, isDecision } from '../lib/decision';
+import { addressing } from '../lib/shared';
 import { MAX_SEARCH_CHARS, MAX_SEARCH_WORDS, SEARCH_LIMIT, likePattern, parseQuery } from '../lib/search';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 
@@ -13,6 +14,8 @@ function pgliteDb(pg: PGlite): Db {
     transaction: (fn) => pg.transaction((tx) => fn({ query: async (text, params) => (await tx.query(text, params)).rows as Row[] })),
   };
 }
+/** The participants that apply when the PARTICIPANTS setting is not set. */
+const NAMES = ['grok', 'claude', 'david'];
 const must = <T>(v: T | null): T => {
   assert.ok(v, 'expected a value');
   return v;
@@ -47,7 +50,8 @@ for (const [name, make] of [
   const texts = async (store: Store, q: string, options: { to?: 'grok' | 'claude' | 'david'; decisions?: boolean; pinned?: boolean; limit?: number } = {}) => {
     const query = parseQuery(q);
     assert.ok(query.ok, q);
-    return (await store.search({ words: query.words, ...options })).map((m) => m.text);
+    const { decisions, ...rest } = options;
+    return (await store.search({ words: query.words, decisionsAmong: decisions ? NAMES : null, ...rest })).map((m) => m.text);
   };
 
   test(`${name}: every word must be in the message, in any order and any case`, async () => {
@@ -137,11 +141,36 @@ for (const [name, make] of [
     ];
     const ids = new Map<number, string>();
     for (const text of cases) ids.set(must(await store.add({ sender: 'david', recipient: null, text }, 1000)).id, text);
-    const found = new Set((await store.search({ words: ['ship'], decisions: true, limit: 500 })).map((m) => m.id));
+    const found = new Set((await store.search({ words: ['ship'], decisionsAmong: NAMES, limit: 500 })).map((m) => m.id));
     assert.equal((await store.search({ words: ['ship'], limit: 500 })).length, cases.length);
-    for (const [id, text] of ids) assert.equal(found.has(id), isDecision(text), JSON.stringify(text));
+    for (const [id, text] of ids) assert.equal(found.has(id), isDecision(text, NAMES), JSON.stringify(text));
     // The list has both kinds in it.
     assert.ok(found.size >= 10 && found.size <= cases.length - 10, String(found.size));
+  });
+
+  test(`${name}: with other participants, their names are the ones that may stand before DECISION:`, async () => {
+    const store = await make();
+    // A hub with made-up participants. "ana" is also the start of "ana-maria".
+    const others = ['ana', 'ana-maria', 'quill-2'];
+    const cases = [
+      'DECISION: sail', '@ana DECISION: sail', '@ana-maria DECISION: sail', '@quill-2: DECISION: sail', '@quill-2,\nDECISION: sail',
+      '> quote\n\n@ana-maria DECISION: sail', '@grok DECISION: sail', '@claude DECISION: sail', '@anab DECISION: sail', '@ana-mari DECISION: sail',
+      '@ana_x DECISION: sail', '@quill-22 DECISION: sail', '@ANA DECISION: sail', '> @ana DECISION: sail', 'we sail, no decision',
+    ];
+    const ids = new Map<number, string>();
+    for (const text of cases) ids.set(must(await store.add({ sender: 'ana', recipient: null, text }, 1000)).id, text);
+    const among = async (names: string[]) => new Set((await store.search({ words: ['sail'], decisionsAmong: names, limit: 500 })).map((m) => m.id));
+    const withOthers = await among(others);
+    for (const [id, text] of ids) assert.equal(withOthers.has(id), isDecision(text, others), JSON.stringify(text));
+    assert.equal([...ids].filter(([id]) => withOthers.has(id)).length, 6, 'the first six');
+    // The same texts on a hub with the default three: other names count.
+    const withDefault = await among(NAMES);
+    for (const [id, text] of ids) assert.equal(withDefault.has(id), isDecision(text, NAMES), JSON.stringify(text));
+    assert.deepEqual([...ids].filter(([id]) => withDefault.has(id)).map(([, text]) => text), ['DECISION: sail', '@grok DECISION: sail', '@claude DECISION: sail']);
+    // No names at all: only a bare DECISION: is one.
+    const withNone = await among([]);
+    for (const [id, text] of ids) assert.equal(withNone.has(id), isDecision(text, []), JSON.stringify(text));
+    assert.deepEqual([...ids].filter(([id]) => withNone.has(id)).map(([, text]) => text), ['DECISION: sail']);
   });
 
   test(`${name}: nothing in a query acts as a pattern`, async () => {
@@ -344,7 +373,13 @@ test('"decisions only" through the route: an unpinned decision is found, a note 
   assert.ok(pinned.some((m) => m.id === note.id) && !pinned.some((m) => m.id === decision.id));
 });
 
-test('the decision rule for the database is built from the same names as the page\'s rule', () => {
-  assert.match(DECISION_SQL_PATTERN, /@\(\?:grok\|claude\|david\)\\y/);
-  assert.ok(DECISION_SQL_PATTERN.endsWith('DECISION:'));
+test('the decision rule for the database is the page\'s rule, written for Postgres', () => {
+  // One source: the pattern of addressing() in lib/shared.ts, after the lines of a quote.
+  const pattern = decisionSqlPattern(NAMES);
+  assert.ok(pattern.startsWith('^(?:'), pattern);
+  assert.ok(pattern.endsWith(addressing(NAMES).decision.source.slice(1)), pattern);
+  assert.ok(pattern.endsWith('DECISION:'));
+  // Other participants, another pattern: nothing about names is fixed.
+  assert.ok(decisionSqlPattern(['ana', 'quill-2']).includes('quill-2|ana'));
+  assert.ok(!decisionSqlPattern(['ana', 'quill-2']).includes('grok'));
 });

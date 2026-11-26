@@ -6,7 +6,8 @@ import { test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SEARCH_WAIT_MS, SearchResults, queryProblem, searchNote } from '../app/search';
-import type { Author, Message } from '../lib/core';
+import type { Message } from '../lib/core';
+import type { Participant } from '../lib/shared';
 import { SEARCH_LIMIT, debounce, markMatches, matchLine, matchesAll, newestOnly, parseQuery, searchLines } from '../lib/search';
 
 const hits = (line: string, words: string[]) => markMatches(line, words).map((p) => (p.hit ? `[${p.text}]` : p.text)).join('');
@@ -136,7 +137,12 @@ test('what the panel says', () => {
   assert.equal(searchNote({ kind: 'problem', message: queryProblem(tooMany.error) }, false), 'A search can have at most 8 words.');
 });
 
-const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
+/** The participants as GET /api/participants gives them when the PARTICIPANTS setting is not set. */
+const PARTICIPANTS: Participant[] = [
+  { name: 'grok', kind: 'agent', color: 0 },
+  { name: 'claude', kind: 'agent', color: 1 },
+  { name: 'david', kind: 'human', color: 2 },
+];
 const message = (over: Partial<Message>): Message => ({
   id: 1, sender: 'grok', recipient: null, text: '', created_at: '2026-11-20T09:30:00.000Z', pinned_at: null, attachments: [], reply_to: null, poll: null, ...over,
 });
@@ -147,17 +153,17 @@ test('a result shows sender, time, number and one line with the matches marked',
     message({ id: 45, sender: 'grok', text: 'Intro.\nWhich storage for the images?' }),
   ];
   const out = renderToStaticMarkup(
-    <SearchResults listId="s" results={results} words={['images']} active={1} onPick={() => {}} names={NAMES} colour={(s) => `text-${s}`} />,
+    <SearchResults listId="s" results={results} words={['images']} active={1} onPick={() => {}} participants={PARTICIPANTS} />,
   );
   assert.match(out, /^<ul id="s" role="listbox" aria-label="Search results"/);
   const options = [...out.matchAll(/<li id="(s-\d+)" role="option" aria-selected="(true|false)"[^>]*>(.*?)<\/li>/g)];
   assert.deepEqual(options.map((o) => [o[1], o[2]]), [['s-46', 'false'], ['s-45', 'true']]);
   const [first, second] = options.map((o) => o[3]);
-  assert.match(first, /<span class="font-bold text-claude">Claude<\/span><time dateTime="2026-11-20T09:30:00\.000Z">20\.11\.26, \d\d:30<\/time><span>#46<\/span><span [^>]*>.*Decision<\/span><span>pinned<\/span>/);
+  assert.match(first, /<span class="font-bold" style="color:#c792ea">Claude<\/span><time dateTime="2026-11-20T09:30:00\.000Z">20\.11\.26, \d\d:30<\/time><span>#46<\/span><span [^>]*>.*Decision<\/span><span>pinned<\/span>/);
   // The badge is the one from the stream: the word in a label, never an emoji.
   assert.ok(!/✅|✔|✓|📌/.test(out), out);
   assert.match(first, /DECISION: <\/span><mark[^>]*>Images<\/mark><span> go into the database\.<\/span>/);
-  assert.match(second, /<span class="font-bold text-grok">Grok<\/span>.*<span>#45<\/span><\/div>/);
+  assert.match(second, /<span class="font-bold" style="color:#f0883e">Grok<\/span>.*<span>#45<\/span><\/div>/);
   assert.ok(!second.includes('pinned') && !second.includes('Decision'), 'neither pinned nor a decision');
   // The line with the match, not the first line.
   assert.match(second, /<span>Which storage for the <\/span><mark[^>]*>images<\/mark><span>\?<\/span>/);
@@ -166,7 +172,7 @@ test('a result shows sender, time, number and one line with the matches marked',
 
 test('a result shows the Decision badge by the text, and "pinned" by the pin', () => {
   const marks = (m: Message) => {
-    const out = renderToStaticMarkup(<SearchResults listId="s" results={[m]} words={['plan']} active={-1} onPick={() => {}} names={NAMES} colour={() => ''} />);
+    const out = renderToStaticMarkup(<SearchResults listId="s" results={[m]} words={['plan']} active={-1} onPick={() => {}} participants={PARTICIPANTS} />);
     const head = /<div class="flex items-baseline[^"]*">(.*?)<\/div>/.exec(out)?.[1] ?? '';
     return { decision: />Decision<\/span>/.test(head), pinned: /<span>pinned<\/span>/.test(head) };
   };
@@ -177,10 +183,27 @@ test('a result shows the Decision badge by the text, and "pinned" by the pin', (
   assert.deepEqual(marks(message({ text: '> DECISION: the plan\n\nI only quote it', pinned_at: null })), { decision: false, pinned: false });
 });
 
+test('names and colours come from the participants list, whoever they are', () => {
+  const others: Participant[] = [{ name: 'ana-maria', kind: 'human', color: 0 }, { name: 'quill-2', kind: 'agent', color: 1 }];
+  const results = [
+    message({ id: 3, sender: 'quill-2', text: '@ana-maria DECISION: the plan' }),
+    message({ id: 2, sender: 'ana-maria', text: '@grok DECISION: not a participant here, so this plan is no decision' }),
+    message({ id: 1, sender: 'someone-gone', text: 'a plan from a former participant' }),
+  ];
+  const out = renderToStaticMarkup(<SearchResults listId="s" results={results} words={['plan']} active={-1} onPick={() => {}} participants={others} />);
+  const heads = [...out.matchAll(/<div class="flex items-baseline[^"]*">(.*?)<\/div>/g)].map((m) => m[1]);
+  assert.match(heads[0], /<span class="font-bold" style="color:#c792ea">Quill-2<\/span>/);
+  assert.match(heads[0], />Decision<\/span>/);
+  assert.match(heads[1], /<span class="font-bold" style="color:#f0883e">Ana-Maria<\/span>/);
+  assert.ok(!heads[1].includes('Decision'), 'the name before DECISION: is nobody on this hub');
+  // Someone who is no longer on the list: the neutral grey, and the name as it is stored.
+  assert.match(heads[2], /<span class="font-bold" style="color:#7d8590">Someone-Gone<\/span>/);
+});
+
 test('a result is text: nothing from a message becomes markup', () => {
   const nasty = message({ id: 7, text: 'Hello <img src=x onerror=alert(1)> **bold** [link](javascript:alert(1)) <script>x</script> & more' });
   const out = renderToStaticMarkup(
-    <SearchResults listId="s" results={[nasty]} words={['bold', '<script>', 'onerror']} active={-1} onPick={() => {}} names={NAMES} colour={() => ''} />,
+    <SearchResults listId="s" results={[nasty]} words={['bold', '<script>', 'onerror']} active={-1} onPick={() => {}} participants={PARTICIPANTS} />,
   );
   assert.ok(!/<img|<script|<a |<strong|<b>/.test(out), out);
   assert.ok(out.includes('&lt;img src=x '), out);

@@ -8,11 +8,12 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import { MAX_SCALE, validScale } from './shared';
 import {
-  MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WELCOME_TEXT,
+  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, welcomeText,
   pollResultText,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
 } from './core';
-import { DECISION_SQL_PATTERN, isDecision } from './decision';
+import { decisionSqlPattern, isDecision } from './decision';
+import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 
 export type Row = Record<string, unknown>;
@@ -94,8 +95,12 @@ export interface SearchOptions {
   /** A message matches when it contains every one of these, in upper or lower case. */
   words: string[];
   to?: Sender | null;
-  /** Only decisions: messages that start with DECISION:, by the rule in lib/decision.ts. Pinned or not. */
-  decisions?: boolean;
+  /**
+   * Only decisions: messages that start with DECISION:, by the rule in lib/decision.ts, pinned or
+   * not. The value is the list of participants' names, which the rule needs (an "@name" may stand
+   * in front of DECISION:). Left out or null: all messages.
+   */
+  decisionsAmong?: readonly string[] | null;
   /** Only pinned messages, decision or not. */
   pinned?: boolean;
   limit?: number;
@@ -191,11 +196,25 @@ export interface Store {
   closePoll(pollId: string, participant: Sender, limitPerMin?: number): Promise<{ poll: Poll; message: Message | null } | null>;
 }
 
+// Two instances that start at the same moment take turns at the one statement that may alter tables.
+const MIGRATION_LOCK_ID = 7230420;
+
+// Who may post is decided by the PARTICIPANTS setting, in the application (lib/participants.ts).
+// The database only checks that a stored name has the shape of one, which also fits `hub`, the
+// author of the welcome message. So adding or removing a participant never needs a schema change,
+// and the messages of someone who is no longer a participant stay where they are.
+//
+// The statements below that have a file in migrations/ are kept word for word as those files
+// have them, so the older ones still list the first three names. The last statement
+// (migrations/007-any-participants.sql) replaces those lists with the checks on the shape, on a
+// new database as on an old one.
+const NAME_SHAPE = `'${NAME_PATTERN.source}'`;
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS messages (
      id         BIGSERIAL PRIMARY KEY,
-     sender     TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david', 'hub')),
-     recipient  TEXT CHECK (recipient IN ('grok', 'claude', 'david')),
+     sender     TEXT NOT NULL CONSTRAINT messages_sender_shape CHECK (sender ~ ${NAME_SHAPE}),
+     recipient  TEXT CONSTRAINT messages_recipient_shape CHECK (recipient ~ ${NAME_SHAPE}),
      text       TEXT NOT NULL,
      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      pinned_at  TIMESTAMPTZ
@@ -237,8 +256,8 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
   // Polls and votes (migrations/004-polls.sql).
-  // polls_creator_is_participant and poll_votes_participant_is_participant
-  // are named so they can be dropped when participants become configurable.
+  // polls_creator_is_participant and poll_votes_participant_is_participant list the first three
+  // names. Migration 007 below drops them and checks the shape of the name instead.
   `CREATE TABLE IF NOT EXISTS polls (
   id          TEXT PRIMARY KEY CHECK (id ~ '^poll_[a-z0-9]+$'),
   message_id  BIGINT NOT NULL UNIQUE REFERENCES messages (id) ON DELETE CASCADE,
@@ -301,6 +320,42 @@ const SCHEMA = [
      END IF;
    EXCEPTION WHEN duplicate_column THEN
      NULL;
+   END $$`,
+  // Any participants (migrations/007-any-participants.sql). The tables above were created with
+  // checks that list the first three names. This replaces every one of them with a check on the
+  // shape of a name. No row is changed, and every existing row passes, because the old names have
+  // that shape. On a database that is already up to date it only looks, and alters nothing.
+  `DO $$
+   DECLARE old record;
+   BEGIN
+     PERFORM pg_advisory_xact_lock(${MIGRATION_LOCK_ID});
+     FOR old IN
+       SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
+       WHERE contype = 'c'
+         AND conrelid IN ('messages'::regclass, 'attachments'::regclass, 'participant_status'::regclass,
+                          'polls'::regclass, 'poll_votes'::regclass)
+         AND pg_get_constraintdef(oid) LIKE '%''grok''%'
+     LOOP
+       EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', old.tbl, old.conname);
+     END LOOP;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_sender_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_sender_shape CHECK (sender ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_recipient_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_recipient_shape CHECK (recipient ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'attachments'::regclass AND conname = 'attachments_sender_shape') THEN
+       ALTER TABLE attachments ADD CONSTRAINT attachments_sender_shape CHECK (sender ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'participant_status'::regclass AND conname = 'participant_status_participant_shape') THEN
+       ALTER TABLE participant_status ADD CONSTRAINT participant_status_participant_shape CHECK (participant ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'polls'::regclass AND conname = 'polls_creator_shape') THEN
+       ALTER TABLE polls ADD CONSTRAINT polls_creator_shape CHECK (creator ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'poll_votes'::regclass AND conname = 'poll_votes_participant_shape') THEN
+       ALTER TABLE poll_votes ADD CONSTRAINT poll_votes_participant_shape CHECK (participant ~ ${NAME_SHAPE});
+     END IF;
    END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
@@ -428,8 +483,14 @@ const toMessage = (r: Row): Message => ({
   poll: toPoll(r.poll),
 });
 
+export interface StoreOptions {
+  /** The message an empty hub starts with. It names the participants, so getStore() builds it from the setting. */
+  welcome?: string;
+}
+const defaultWelcome = (): string => welcomeText(parseParticipants(DEFAULT_PARTICIPANTS));
+
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
-export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
+export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcome = defaultWelcome() }: StoreOptions = {}): Store {
   let ready: Promise<void> | null = null;
   async function init() {
     for (const stmt of SCHEMA) await db.query(stmt, []);
@@ -437,7 +498,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       `INSERT INTO messages (sender, text)
        SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)
        ON CONFLICT (sender) WHERE sender = 'hub' DO NOTHING`,
-      [WELCOME_TEXT],
+      [welcome],
     );
   }
   function ensure(): Promise<void> {
@@ -562,7 +623,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
         );
       return rows.map(toMessage);
     },
-    async search({ words, to = null, decisions = false, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
       await ensure();
       if (!words.length) return [];
       // Plain ILIKE over the text, and over the poll's question and options when there is one.
@@ -576,9 +637,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
                ILIKE ALL ($1::text[])
            AND ($2::text IS NULL OR recipient = $2::text)
            AND (NOT $3::boolean OR pinned_at IS NOT NULL)
-           AND (NOT $4::boolean OR messages.text ~ $5::text)
-         ORDER BY id DESC LIMIT $6::int`,
-        [words.map(likePattern), to, pinned, decisions, DECISION_SQL_PATTERN, limit],
+           AND ($4::text IS NULL OR messages.text ~ $4::text)
+         ORDER BY id DESC LIMIT $5::int`,
+        [words.map(likePattern), to, pinned, decisionsAmong ? decisionSqlPattern(decisionsAmong) : null, limit],
       );
       return rows.map(toMessage);
     },
@@ -805,14 +866,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
   };
 }
 
-export interface MemoryStoreOptions {
+export interface MemoryStoreOptions extends StoreOptions {
   blobs?: Blobs;
   /** The clock, in milliseconds. Tests move it forward to age uploads. */
   now?: () => number;
 }
 
 /** In-memory store with the same behaviour (local development and tests only). */
-export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now }: MemoryStoreOptions = {}): Store {
+export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now, welcome = defaultWelcome() }: MemoryStoreOptions = {}): Store {
   const rows: Message[] = [];
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
@@ -821,7 +882,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     rows.push(m);
     return m;
   };
-  push({ sender: 'hub', text: WELCOME_TEXT });
+  push({ sender: 'hub', text: welcome });
+  // The same check the database makes, so a name that Postgres would refuse is refused here too.
+  const shaped = (name: string): string => {
+    if (!NAME_PATTERN.test(name)) throw new Error('A stored name must have the shape of a participant name.');
+    return name;
+  };
   type PollRow = { id: string; message_id: number; creator: Sender; question: string; options: string[]; closed_at: string | null; created_at: string };
   type VoteRow = { poll_id: string; participant: Sender; option_index: number; created_at: string; updated_at: string };
   const pollRows = new Map<string, PollRow>();
@@ -889,7 +955,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
         if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
-      const m = push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to });
+      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to });
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },
@@ -919,10 +985,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
       return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
     },
-    async search({ words, to = null, decisions = false, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
       if (!words.length) return [];
       return rows.map(copy)
-        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && (!decisions || isDecision(m.text)) && matchesAll(m, words))
+        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && (!decisionsAmong || isDecision(m.text, decisionsAmong)) && matchesAll(m, words))
         .reverse().slice(0, limit);
     },
     async pinned() { return rows.filter((m) => m.pinned_at).map(copy); },
@@ -976,7 +1042,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       recipient = notToSelf(creator, recipient);
       const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
-      const m = push({ sender: creator, recipient: recipient ?? null, text: question });
+      const m = push({ sender: shaped(creator), recipient: recipient ? shaped(recipient) : null, text: question });
       const row: PollRow = {
         id: newPollId(),
         message_id: m.id,
@@ -1009,6 +1075,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       return rows.filter((m) => want.has(m.id)).map(copy);
     },
     async vote(pollId, participant, option) {
+      shaped(participant);
       const row = requireOpenPoll(pollId);
       if (option < 1 || option > row.options.length) throw new PollError('bad option');
       const current = timestamp();
@@ -1084,14 +1151,16 @@ const globalStore = globalThis as typeof globalThis & { __collabHubStore?: Promi
 export function getStore(): Promise<Store> {
   if (!globalStore.__collabHubStore) {
     const url = process.env.DATABASE_URL;
+    // Only a new, empty hub uses this: an existing one keeps the welcome message it has.
+    const welcome = welcomeText(loadRoster().participants);
     if (url) {
-      globalStore.__collabHubStore = createPgDb(url).then((db) => createSqlStore(db)).catch((e: unknown) => {
+      globalStore.__collabHubStore = createPgDb(url).then((db) => createSqlStore(db, undefined, { welcome })).catch((e: unknown) => {
         globalStore.__collabHubStore = undefined; // retry on the next request
         throw e;
       });
     } else if (process.env.NODE_ENV !== 'production') {
       console.warn('[trialog] DATABASE_URL is not set: using an in-memory store (messages are lost on restart).');
-      globalStore.__collabHubStore = Promise.resolve(createMemoryStore());
+      globalStore.__collabHubStore = Promise.resolve(createMemoryStore({ welcome }));
     } else {
       return Promise.reject(new Error('DATABASE_URL is not set.'));
     }

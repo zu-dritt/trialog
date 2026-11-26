@@ -36,7 +36,7 @@ export function NewVersionPill({ onReload, accent = false, className = '' }: { o
   return (
     <button
       type="button" onClick={onReload} title={NEW_VERSION_HINT} aria-label={`New version available. ${NEW_VERSION_HINT}`}
-      className={`inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border bg-transparent px-2 text-[13px] text-fg hover:bg-panel ${accent ? 'border-david' : 'border-muted/50'} ${className}`.trimEnd()}
+      className={`inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border bg-transparent px-2 text-[13px] text-fg hover:bg-panel ${accent ? 'border-accent' : 'border-muted/50'} ${className}`.trimEnd()}
     >
       {/* A small reload arrow, drawn. */}
       <svg aria-hidden="true" viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">

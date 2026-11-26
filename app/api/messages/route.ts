@@ -1,7 +1,8 @@
-import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseLimit, parseMessageInput, parseRecipient, parseSince } from '../../../lib/core';
+import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseLimit, parseMessageInput, parseRecipient, parseSince, recipientHint } from '../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
 import { SEARCH_LIMIT, parseQuery } from '../../../lib/search';
 import { waitUntil } from '@vercel/functions';
+import { loadRoster } from '../../../lib/participants';
 import { AttachmentLinkError, ReplyTargetError, getStore } from '../../../lib/store';
 import { getWakeup } from '../../../lib/webhook';
 
@@ -29,8 +30,9 @@ export const GET = safe(async (request: Request) => {
   const params = new URL(request.url).searchParams;
   const since = parseSince(params.get('since'));
   if (since === undefined) return error(400, '"since" must be a message id (a whole number).');
-  const to = parseRecipient(params.get('to'));
-  if (to === undefined) return error(400, '"to" must be grok, claude or david.');
+  const { names } = loadRoster();
+  const to = parseRecipient(params.get('to'), names);
+  if (to === undefined) return error(400, recipientHint(names));
   const q = params.get('q');
   const limit = parseLimit(params.get('limit') || (q === null ? null : String(SEARCH_LIMIT)));
   if (limit === undefined) return error(400, '"limit" must be a whole number.');
@@ -43,7 +45,7 @@ export const GET = safe(async (request: Request) => {
     if (decisions === undefined) return error(400, '"decisions" must be 1 or 0.');
     const pinned = parseSwitch(params.get('pinned'));
     if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
-    return json({ me, messages: await store.search({ words: query.words, to, decisions, pinned, limit }) });
+    return json({ me, messages: await store.search({ words: query.words, to, decisionsAmong: decisions ? names : null, pinned, limit }) });
   }
   // The top-level polls list is opt-in (`?polls=1`). The page asks for it so a since-poll
   // still sees votes on older polls; the CLI, which polls every few seconds, leaves it off.
@@ -56,7 +58,7 @@ export const GET = safe(async (request: Request) => {
   return json(includePolls ? { me, messages, pinned, polls } : { me, messages, pinned });
 });
 
-// POST /api/messages {"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45}
+// POST /api/messages {"text": "...", "to": "<name>", "attachments": ["att_…"], "reply_to": 45}
 // The sender is the owner of the Bearer token; any "sender"/"from" in the body is ignored.
 // "attachments" is optional: up to 4 of the sender's own uploads that no message links yet.
 // "reply_to" is optional: the id of an existing message that this one answers.
@@ -65,7 +67,7 @@ export const POST = safe(async (request: Request) => {
   if (denied) return denied;
   const [body, bad] = await readJson(request, MAX_BODY_BYTES);
   if (bad) return bad;
-  const input = parseMessageInput(body);
+  const input = parseMessageInput(body, loadRoster().names);
   if (!input.ok) return error(input.status, input.error);
   const store = await getStore();
   let message;
@@ -80,7 +82,7 @@ export const POST = safe(async (request: Request) => {
   if (!message) {
     return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
   }
-  // Wake Grok in the background. The sender's response never waits for the webhook or fails because of it.
+  // Wake the participant named grok, if the webhook is set up (lib/webhook.ts), in the background. The sender's response never waits for the webhook or fails because of it.
   const job = getWakeup(store)?.onMessage(message);
   if (job) waitUntil(job);
   return json({ message }, 201);
