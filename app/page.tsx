@@ -11,6 +11,8 @@ import { MessageBody } from './markdown';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { StatusBar } from './status';
+import { NewVersionNotice, showNewVersion } from './version';
+import { BUILD_ID, isOtherBuild } from '../lib/build';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -77,6 +79,8 @@ export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
   const [status, setStatus] = useState('connecting…');
+  const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  const [dismissedBuild, setDismissedBuild] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
@@ -216,7 +220,13 @@ export default function Page() {
       let goodbye = false;
       const parser = createSseParser((event: SseEvent) => {
         if (stopped) return;
-        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
+        if (event.event === 'hello') {
+          // Every (re)connect of the stream says who we are and which build the server runs.
+          const hello = JSON.parse(event.data) as { me: Sender; build?: unknown };
+          setMe(hello.me);
+          if (typeof hello.build === 'string') setServerBuild(hello.build);
+          setStatus('live');
+        }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
         else if (event.event === 'bye') goodbye = true;
@@ -471,6 +481,10 @@ export default function Page() {
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
+
+      {showNewVersion(BUILD_ID, serverBuild, dismissedBuild, isOtherBuild) && (
+        <NewVersionNotice onReload={() => window.location.reload()} onDismiss={() => setDismissedBuild(serverBuild)} />
+      )}
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">

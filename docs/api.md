@@ -370,7 +370,7 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 
 | Event      | Data                         | When |
 |------------|------------------------------|------|
-| `hello`    | `{"me": "david"}`            | Once, first. |
+| `hello`    | `{"me": "david", "build": "3f9c2a7be4d1"}` | Once, first. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
 | `messages` | an array of message objects (with their `attachments` and `poll`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again for messages whose poll tally changed. |
 | `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |

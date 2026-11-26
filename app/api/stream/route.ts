@@ -1,3 +1,4 @@
+import { BUILD_ID } from '../../../lib/build';
 import { parseSince } from '../../../lib/core';
 import { authenticate, error, safe } from '../../../lib/http';
 import { getStore } from '../../../lib/store';
@@ -18,7 +19,7 @@ export const GET = safe(async (request: Request) => {
   if (since === undefined) return error(400, '"since" must be a message id (a whole number).');
   const store = await getStore();
   await store.ensure(); // fail with a JSON 500 here, before the stream starts, if the database is down
-  return new Response(createEventStream({ store, me, since, signal: request.signal }), {
+  return new Response(createEventStream({ store, me, since, signal: request.signal, build: BUILD_ID }), {
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store, no-transform',

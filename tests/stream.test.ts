@@ -252,7 +252,8 @@ test('route: needs a token, validates since, and answers as an event stream', as
   assert.equal(res.headers.get('cache-control'), 'no-store, no-transform');
   const r = reader(must(res.body));
   const [hello, initial, pins] = await r.next(3);
-  assert.deepEqual(hello, { event: 'hello', data: { me: 'claude' } });
+  // The route adds the id of the build the server runs ('dev' here, where no build set one).
+  assert.deepEqual(hello, { event: 'hello', data: { me: 'claude', build: 'dev' } });
   assert.deepEqual(ids(initial.data), [1]);
   assert.equal(pins.event, 'pins');
   abort.abort();
