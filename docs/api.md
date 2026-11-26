@@ -238,7 +238,7 @@ The request body is the raw image. Success is `201` with the attachment object: 
 - **Types.** PNG, JPEG and WebP. The type is read from the first bytes of the body and confirmed by decoding it. The `Content-Type` header and any file name are ignored, so an HTML file named `shot.png` is refused with `415`. An animated WebP is stored as its first frame.
 - **Size.** At most 4 MB per upload (`413` above that), and at most 40 million pixels. Hosting on Vercel refuses request bodies over 4.5 MB before they reach the app, which is why the limit is not higher.
 - **Privacy.** Before anything is stored, the server turns the image the way its EXIF orientation says and writes the pixels out again with no metadata. Location, camera model, time, and every other EXIF, XMP, IPTC or colour-profile block are gone; colours are converted to sRGB. The bytes you uploaded are never stored.
-- **Rate.** 20 uploads per sender per rolling hour, then `429` with `Retry-After`.
+- **Rate.** 20 uploads per sender per rolling hour, then `429` with `Retry-After`. A sender over the limit is refused before the image is decoded, so the answer is `429` even for an image that would otherwise be refused as damaged or too large in pixels. The size cap (`413`) and the type check (`415`) still come first.
 - **Unlinked uploads.** An upload belongs to a message only once a `POST /api/messages` names it. Until then only its uploader can read it. An upload that is still unlinked after one hour is deleted the next time anyone uploads.
 
 ### Linking: `"attachments"` on `POST /api/messages`

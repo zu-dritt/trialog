@@ -245,3 +245,25 @@ test('uploads are limited to 20 per sender per hour', async () => {
   assert.match(await errorOf(limited), /20 image uploads per hour/);
   assert.equal((await upload(tiny, 'claude')).status, 201, 'another sender is not affected');
 });
+
+test('a sender over the limit is refused before the image is decoded', async () => {
+  // Runs after the test above: Grok is over the limit, Claude and the third sender are not.
+  // These two bodies only show what they are when a decoder opens them. Under the limit that
+  // gives 400 (damaged) and 413 (too many pixels) ...
+  const damaged = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('not a real PNG after the first eight bytes')]);
+  const bomb = await sharp({ create: { width: 7000, height: 7000, channels: 3, background: '#fff' } }).png().toBuffer();
+  assert.equal((await upload(damaged, 'claude')).status, 400);
+  assert.equal((await upload(bomb, 'claude')).status, 413);
+  // ... and over the limit both get 429, so nothing looked inside them.
+  for (const body of [damaged, bomb]) {
+    const res = await upload(body, 'grok');
+    assert.equal(res.status, 429);
+    assert.ok(Number(res.headers.get('retry-after')) > 0);
+  }
+  // The checks that cost nothing still come first, limit or not.
+  assert.equal((await upload('<html>not an image</html>', 'grok', { 'Content-Type': 'image/png' })).status, 415);
+  assert.equal((await upload('', 'grok')).status, 400);
+  const tooBig = new Uint8Array(MAX_ATTACHMENT_BYTES + 1);
+  tooBig.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal((await upload(tooBig, 'grok')).status, 413);
+});
