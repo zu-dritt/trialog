@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS messages (
      id         BIGSERIAL PRIMARY KEY,
-     sender     TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david', 'hub')),
-     recipient  TEXT CHECK (recipient IN ('grok', 'claude', 'david')),
+     sender     TEXT NOT NULL CONSTRAINT messages_sender_shape CHECK (sender ~ '^[a-z][a-z0-9-]{0,23}$'),
+     recipient  TEXT CONSTRAINT messages_recipient_shape CHECK (recipient ~ '^[a-z][a-z0-9-]{0,23}$'),
      text       TEXT NOT NULL,
      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      pinned_at  TIMESTAMPTZ
@@ -105,4 +105,37 @@ DO $$
      END IF;
    EXCEPTION WHEN duplicate_column THEN
      NULL;
+   END $$;
+
+DO $$
+   DECLARE old record;
+   BEGIN
+     PERFORM pg_advisory_xact_lock(7230420);
+     FOR old IN
+       SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
+       WHERE contype = 'c'
+         AND conrelid IN ('messages'::regclass, 'attachments'::regclass, 'participant_status'::regclass,
+                          'polls'::regclass, 'poll_votes'::regclass)
+         AND pg_get_constraintdef(oid) LIKE '%''grok''%'
+     LOOP
+       EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', old.tbl, old.conname);
+     END LOOP;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_sender_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_sender_shape CHECK (sender ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_recipient_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_recipient_shape CHECK (recipient ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'attachments'::regclass AND conname = 'attachments_sender_shape') THEN
+       ALTER TABLE attachments ADD CONSTRAINT attachments_sender_shape CHECK (sender ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'participant_status'::regclass AND conname = 'participant_status_participant_shape') THEN
+       ALTER TABLE participant_status ADD CONSTRAINT participant_status_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'polls'::regclass AND conname = 'polls_creator_shape') THEN
+       ALTER TABLE polls ADD CONSTRAINT polls_creator_shape CHECK (creator ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'poll_votes'::regclass AND conname = 'poll_votes_participant_shape') THEN
+       ALTER TABLE poll_votes ADD CONSTRAINT poll_votes_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
    END $$;

@@ -11,7 +11,7 @@ import {
   parseQuotes, pickSelection, placeButton, quoteExcerpt, quoteMarkdown, quoteMessage, quoteSelection, textBytes, tooLong, typedIntent,
   type Quote, type SelectionLike,
 } from '../app/quote';
-import { MAX_TEXT_BYTES, SENDERS } from '../lib/shared';
+import { MAX_TEXT_BYTES } from '../lib/shared';
 import { parseMessageInput } from '../lib/core';
 
 const html = (text: string) => renderToStaticMarkup(<MessageBody text={text} />);
@@ -20,6 +20,9 @@ const visible = (markup: string) => markup
   .replace(/<br\s*\/?>\n?/g, '\n').replace(/<\/p>\s*<p>/g, '\n\n').replace(/<[^>]+>/g, '')
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
 const squash = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
+
+// The names that apply when PARTICIPANTS is not set.
+const THREE = ['grok', 'claude', 'david'];
 
 test('a quote says who wrote it and in which message, then the text, each line marked', () => {
   assert.equal(quoteSelection('Grok', 45, 'the second point'), '> **Grok** in #45:\n>\n> the second point');
@@ -250,7 +253,7 @@ test('a message without quotes is exactly what was typed; one with quotes only i
   assert.equal(composeMessage([selected], '   \n'), quoteMarkdown(selected), 'spaces alone add nothing');
   assert.equal(composeMessage([selected, selected], ''), `${quoteMarkdown(selected)}\n\n${quoteMarkdown(selected)}`);
   // The server takes a quotes-only message: its text is not empty.
-  assert.equal(parseMessageInput({ text: composeMessage([selected], '') }).ok, true);
+  assert.equal(parseMessageInput({ text: composeMessage([selected], '') }, THREE).ok, true);
 });
 
 test('at most five quotes, each one once, in the order they were added', () => {
@@ -288,32 +291,32 @@ test('the 20 KB limit counts the composed text, and the writer is told before se
   assert.match(said, /^With its quote this message is 22\.\d KB\. The limit is 20 KB: remove a quote or shorten the text\.$/);
   assert.match(String(tooLong(composeMessage([big, big], ''), 2)), /^With its quotes /);
   // The page's check and the server's agree: what the page lets through, the server takes, and the other way round.
-  assert.equal(parseMessageInput({ text: composed }).ok, false);
+  assert.equal(parseMessageInput({ text: composed }, THREE).ok, false);
   const fits = composeMessage([{ ...selected, text: 'z'.repeat(7 * 1024) }], typed);
   assert.equal(tooLong(fits, 1), null);
-  assert.equal(parseMessageInput({ text: fits }).ok, true);
+  assert.equal(parseMessageInput({ text: fits }, THREE).ok, true);
   // Escaping makes a quote longer than the selection was, and that is what counts.
   const stars = '*'.repeat(11 * 1024);
   assert.ok(textBytes(stars) < MAX_TEXT_BYTES && tooLong(composeMessage([{ ...selected, text: stars }], ''), 1) !== null);
 });
 
 test('"@name" and "DECISION:" at the start of the typed text are read as the server reads them', () => {
-  assert.deepEqual(typedIntent('@grok please look', SENDERS), { to: 'grok', decision: false });
-  assert.deepEqual(typedIntent('  @Claude: done?', SENDERS), { to: 'claude', decision: false });
-  assert.deepEqual(typedIntent('DECISION: ship it', SENDERS), { to: null, decision: true });
-  assert.deepEqual(typedIntent('@david, DECISION: ship it', SENDERS), { to: 'david', decision: true });
-  assert.deepEqual(typedIntent('no @grok here, and no DECISION: either', SENDERS), { to: null, decision: false });
-  assert.deepEqual(typedIntent('decision: lower case does not pin', SENDERS), { to: null, decision: false });
-  assert.deepEqual(typedIntent('@nobody hello', SENDERS), { to: null, decision: false });
-  assert.deepEqual(typedIntent('', SENDERS), { to: null, decision: false });
+  assert.deepEqual(typedIntent('@grok please look', THREE), { to: 'grok', decision: false });
+  assert.deepEqual(typedIntent('  @Claude: done?', THREE), { to: 'claude', decision: false });
+  assert.deepEqual(typedIntent('DECISION: ship it', THREE), { to: null, decision: true });
+  assert.deepEqual(typedIntent('@david, DECISION: ship it', THREE), { to: 'david', decision: true });
+  assert.deepEqual(typedIntent('no @grok here, and no DECISION: either', THREE), { to: null, decision: false });
+  assert.deepEqual(typedIntent('decision: lower case does not pin', THREE), { to: null, decision: false });
+  assert.deepEqual(typedIntent('@nobody hello', THREE), { to: null, decision: false });
+  assert.deepEqual(typedIntent('', THREE), { to: null, decision: false });
   // The same answers as the server gives for the same text standing alone.
   for (const typed of ['@grok please look', '  @Claude: done?', 'DECISION: ship it', '@david, DECISION: ship it', '@david DECISION: x', 'plain', 'x @grok', '@GROK hi', '@grokster hi']) {
-    const server = parseMessageInput({ text: typed });
+    const server = parseMessageInput({ text: typed }, THREE);
     assert.ok(server.ok);
-    assert.deepEqual(typedIntent(typed, SENDERS), { to: server.recipient, decision: server.pinned }, typed);
+    assert.deepEqual(typedIntent(typed, THREE), { to: server.recipient, decision: server.pinned }, typed);
   }
   // With a quote in front, the server no longer sees either. That is why the page asks for them itself.
-  const withQuote = parseMessageInput({ text: composeMessage([selected], '@grok DECISION: ship it') });
+  const withQuote = parseMessageInput({ text: composeMessage([selected], '@grok DECISION: ship it') }, THREE);
   assert.ok(withQuote.ok && withQuote.recipient === null && withQuote.pinned === false);
   // Names with characters that mean something in a pattern can't break it.
   assert.deepEqual(typedIntent('@a.b hi', ['a.b', '(x']), { to: null, decision: false });
@@ -328,21 +331,21 @@ test('a quote can never decide who the message is for', () => {
     // A composed message starts with the quote's header line, so the server finds no "@name" at its start, and no "DECISION:".
     const quoted = composeMessage([quote], 'I agree.');
     assert.ok(quoted.startsWith('> **Claude** in #43:'), quoted);
-    const server = parseMessageInput({ text: quoted });
+    const server = parseMessageInput({ text: quoted }, THREE);
     assert.ok(server.ok && server.recipient === null && server.pinned === false, 'the quote neither addresses nor pins');
     // Quotes only: the same.
-    const only = parseMessageInput({ text: composeMessage([quote], '') });
+    const only = parseMessageInput({ text: composeMessage([quote], '') }, THREE);
     assert.ok(only.ok && only.recipient === null && only.pinned === false);
     // Every line of a quote starts with ">", so no line of it can look like the start of a message.
     assert.ok(quoteMarkdown(quote).split('\n').every((line) => line.startsWith('>')));
   }
   // The page reads the recipient from what the writer typed, and from nothing else.
-  assert.deepEqual(typedIntent('I agree.', SENDERS), { to: null, decision: false });
-  assert.deepEqual(typedIntent('@claude I agree.', SENDERS), { to: 'claude', decision: false });
-  assert.deepEqual(typedIntent('', SENDERS), { to: null, decision: false }, 'quotes only: nobody in particular');
+  assert.deepEqual(typedIntent('I agree.', THREE), { to: null, decision: false });
+  assert.deepEqual(typedIntent('@claude I agree.', THREE), { to: 'claude', decision: false });
+  assert.deepEqual(typedIntent('', THREE), { to: null, decision: false }, 'quotes only: nobody in particular');
   // So: a quote that starts with "@grok", an answer that starts with "@claude". It goes to Claude.
-  const body = { text: composeMessage([mention], '@claude I agree.'), to: typedIntent('@claude I agree.', SENDERS).to };
-  const sent = parseMessageInput(body);
+  const body = { text: composeMessage([mention], '@claude I agree.'), to: typedIntent('@claude I agree.', THREE).to };
+  const sent = parseMessageInput(body, THREE);
   assert.ok(sent.ok && sent.recipient === 'claude');
 });
 

@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { MAX_TEXT_BYTES, UPLOADS_PER_HOUR, uploadsPerHour, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
 import { sniffImageType } from '../lib/images';
 
+// The names that apply when PARTICIPANTS is not set. Other names are covered in participants.test.ts.
+const THREE = ['grok', 'claude', 'david'];
+
 const env = {
   GROK_TOKEN: 'grok-token-0123456789abcdef',
   CLAUDE_TOKEN: 'claude-token-0123456789abcdef',
@@ -31,35 +34,35 @@ test('senderFromAuth ignores unset or too-short tokens, and refuses duplicates',
 });
 
 test('parseRecipient', () => {
-  assert.equal(parseRecipient(undefined), null);
-  assert.equal(parseRecipient(''), null);
-  assert.equal(parseRecipient('everyone'), null);
-  assert.equal(parseRecipient('@Claude'), 'claude');
-  assert.equal(parseRecipient('grok'), 'grok');
-  assert.equal(parseRecipient('hub'), undefined);
-  assert.equal(parseRecipient('mallory'), undefined);
-  assert.equal(parseRecipient(42), undefined);
+  assert.equal(parseRecipient(undefined, THREE), null);
+  assert.equal(parseRecipient('', THREE), null);
+  assert.equal(parseRecipient('everyone', THREE), null);
+  assert.equal(parseRecipient('@Claude', THREE), 'claude');
+  assert.equal(parseRecipient('grok', THREE), 'grok');
+  assert.equal(parseRecipient('hub', THREE), undefined);
+  assert.equal(parseRecipient('mallory', THREE), undefined);
+  assert.equal(parseRecipient(42, THREE), undefined);
 });
 
 const ok = (body: unknown) => {
-  const r = parseMessageInput(body);
+  const r = parseMessageInput(body, THREE);
   assert.ok(r.ok, JSON.stringify(r));
   return r;
 };
 const fail = (body: unknown) => {
-  const r = parseMessageInput(body);
+  const r = parseMessageInput(body, THREE);
   assert.ok(!r.ok, JSON.stringify(r));
   return r;
 };
 
 test('parseMessageInput: addressing by "to" or by @prefix', () => {
-  assert.deepEqual(parseMessageInput({ text: 'hi all' }), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [], replyTo: null });
+  assert.deepEqual(parseMessageInput({ text: 'hi all' }, THREE), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [], replyTo: null });
   assert.equal(ok({ text: '@grok please review' }).recipient, 'grok');
   assert.equal(ok({ text: '  @Claude: done?' }).recipient, 'claude');
   assert.equal(ok({ text: 'mail @grok later' }).recipient, null);
   assert.equal(ok({ text: '@grokbot hi' }).recipient, null);
   assert.equal(ok({ text: '@grok hi', to: 'david' }).recipient, 'david');
-  assert.equal(parseMessageInput({ text: 'x', to: 'nobody' }).ok, false);
+  assert.equal(parseMessageInput({ text: 'x', to: 'nobody' }, THREE).ok, false);
 });
 
 test('parseMessageInput: DECISION: prefix pins', () => {
@@ -76,13 +79,13 @@ test('parseMessageInput: rejects bad bodies and caps size at 20 KB', () => {
   assert.equal(fail({}).status, 400);
   assert.equal(fail({ text: '   ' }).status, 400);
   assert.equal(fail({ text: 5 }).status, 400);
-  assert.equal(parseMessageInput({ text: 'a'.repeat(MAX_TEXT_BYTES) }).ok, true);
+  assert.equal(parseMessageInput({ text: 'a'.repeat(MAX_TEXT_BYTES) }, THREE).ok, true);
   assert.equal(fail({ text: 'a'.repeat(MAX_TEXT_BYTES + 1) }).status, 413);
   assert.equal(fail({ text: 'ä'.repeat(MAX_TEXT_BYTES / 2 + 1) }).status, 413); // bytes, not chars
 });
 
 test('parseMessageInput ignores a spoofed sender in the body', () => {
-  const r = parseMessageInput({ text: 'hi', sender: 'david', from: 'grok' });
+  const r = parseMessageInput({ text: 'hi', sender: 'david', from: 'grok' }, THREE);
   assert.equal('sender' in r, false);
   assert.equal('from' in r, false);
 });

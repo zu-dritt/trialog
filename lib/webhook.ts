@@ -6,6 +6,7 @@
 // here without changing Grok's receiver too.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Message } from './core';
+import { loadRoster } from './participants';
 import { wakesGrok, type Store, type WakeupClaim } from './store';
 
 export const SIGNATURE_HEADER = 'X-Hub-Signature';
@@ -70,7 +71,13 @@ export interface WebhookConfig {
   secret: string;
 }
 
-/** Reads GROK_WEBHOOK_URL and GROK_WEBHOOK_SECRET. If either is unset or unusable, the feature is off. */
+/** The participant the webhook wakes. Wake-ups for every agent are a later step (ROADMAP.md). */
+export const WAKEUP_PARTICIPANT = 'grok';
+
+/**
+ * Reads GROK_WEBHOOK_URL and GROK_WEBHOOK_SECRET. If either is unset or unusable, the feature is off.
+ * It is also off, with a line in the log, when no participant is named `grok`: there is nobody to wake.
+ */
 export function webhookConfig(env: Record<string, string | undefined> = process.env): WebhookConfig | null {
   const url = env.GROK_WEBHOOK_URL?.trim();
   const secret = env.GROK_WEBHOOK_SECRET?.trim();
@@ -88,6 +95,16 @@ export function webhookConfig(env: Record<string, string | undefined> = process.
   }
   if (secret.length < MIN_SECRET_LENGTH) {
     console.warn(`[trialog] GROK_WEBHOOK_SECRET is shorter than ${MIN_SECRET_LENGTH} characters: wake-up webhook is off.`);
+    return null;
+  }
+  let names: string[];
+  try {
+    names = loadRoster(env).names;
+  } catch {
+    return null; // a broken PARTICIPANTS setting is reported by every request (lib/http.ts)
+  }
+  if (!names.includes(WAKEUP_PARTICIPANT)) {
+    console.warn(`[trialog] GROK_WEBHOOK_URL is set, but PARTICIPANTS has no participant named "${WAKEUP_PARTICIPANT}": wake-up webhook is off.`);
     return null;
   }
   return { url: parsed.toString(), secret };

@@ -34,11 +34,11 @@ test('a long line is cut to the given length with an ellipsis', () => {
 });
 
 test('the line above a reply names the answered message and is a button that goes there', () => {
-  const out = renderToStaticMarkup(<ReplyContext replyTo={45} parent={parent} author="Grok" authorClass="text-grok" onJump={() => {}} />);
+  const out = renderToStaticMarkup(<ReplyContext replyTo={45} parent={parent} author="Grok" authorColor="#f0883e" onJump={() => {}} />);
   assert.match(out, /^<button type="button"/);
   assert.match(out, /aria-label="In reply to message #45 by Grok\. Go to it\. It says: Which storage do we use\?"/);
   assert.match(out, /title="Go to message #45"/);
-  assert.match(out, /<span class="font-bold text-grok">Grok<\/span> <span>#45<\/span> <span>Which storage do we use\?<\/span>/);
+  assert.match(out, /<span class="font-bold" style="color:#f0883e">Grok<\/span> <span>#45<\/span> <span>Which storage do we use\?<\/span>/);
   assert.match(out, /truncate/, 'one line, cut off when it is too long for the column');
 });
 

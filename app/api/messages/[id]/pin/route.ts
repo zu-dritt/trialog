@@ -5,7 +5,7 @@ import { getStore } from '../../../../../lib/store';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// POST /api/messages/<id>/pin {"pinned": true|false}  (any of the three senders may pin)
+// POST /api/messages/<id>/pin {"pinned": true|false}  (any participant may pin)
 export const POST = safe(async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const [, denied] = authenticate(request);
   if (denied) return denied;

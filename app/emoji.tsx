@@ -162,7 +162,7 @@ export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelPro
                     onMouseDown={(ev) => ev.preventDefault()}
                     onClick={(ev) => onPick(e.char, ev.detail > 0)}
                     style={{ fontFamily: EMOJI_FONT }}
-                    className="grid aspect-square cursor-pointer place-items-center rounded border-none bg-transparent p-0 text-[22px] leading-none hover:bg-[#2a2f3a] focus-visible:bg-[#2a2f3a] focus-visible:outline focus-visible:outline-2 focus-visible:outline-david"
+                    className="grid aspect-square cursor-pointer place-items-center rounded border-none bg-transparent p-0 text-[22px] leading-none hover:bg-[#2a2f3a] focus-visible:bg-[#2a2f3a] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                   >{e.char}</button>
                 );
               })}

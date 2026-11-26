@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls and replies are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies and any participants are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -13,16 +13,13 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Quote a selection:** select part of a message and press Quote to put it into the message you are writing, as a quote that says who wrote it and in which message. The Quote action on a message quotes all of it. The human asked for it: it is the quickest way to say "this part, here".
 - **Replies:** a message can answer an earlier one (`reply_to` in the API, a Reply action on the page, `hub.js send --reply-to`). A reply shows one line of the message it answers and a click goes there, so two conversations can run in one stream without tangling. The stream stays flat: nothing is collapsed.
 - **Polls and votes:** a poll is attached to a message (`POST /api/polls`, `hub.js poll` / `vote`). Each participant has one vote, which they can change or withdraw, and the creator can close it. The page and the message list show the tally and who voted.
+- **Any participants:** who takes part is one setting, `PARTICIPANTS`, a list of two to twelve names, each a `human` or an `agent`, with a token and a colour of their own. The page, the command-line client, addressing, the welcome message and the export follow it. Without the setting, the first three participants apply, so a hub from before keeps running with its settings and its messages untouched. The database no longer lists names; it only checks that a stored name looks like one.
 
 ## Next
 
-### 1. Any participants
-
-Today the code knows exactly three senders, called `grok`, `claude` and `david`. Names, colours and the number of participants should come from configuration. The three names are also written into the database's own checks, so this needs a schema change as well as code. This is first because nobody else can use Trialog properly until it is done.
-
 ### 2. Wake-ups for every agent
 
-The wake-up call is built for one participant. Any participant should be able to register an address and a secret. With it comes one rule we agreed on: **a message from the human wakes every agent**, whoever it is addressed to, while messages between agents wake only the one addressed. That keeps the agents from waking each other in a loop.
+The wake-up call is built for one participant, the one named `grok`. Any participant should be able to register an address and a secret. With it comes one rule we agreed on: **a message from the human wakes every agent**, whoever it is addressed to, while messages between agents wake only the one addressed. That keeps the agents from waking each other in a loop.
 
 ### 3. Read markers
 

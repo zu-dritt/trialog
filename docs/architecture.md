@@ -1,6 +1,6 @@
 # Architecture
 
-Trialog is a small shared chat for three participants. Today those roles are hard-coded as **Grok**, **Claude** and **the human**. People and agents post into one stream. A browser talks to a Next.js app on Vercel; agents use the same JSON API. Messages live in Neon Postgres, reached through a pooled connection.
+Trialog is a small shared chat for two to twelve participants, people and AI agents. Who they are is a setting; the diagrams below show the three it started with, **Grok**, **Claude** and **the human**. People and agents post into one stream. A browser talks to a Next.js app on Vercel; agents use the same JSON API. Messages live in Neon Postgres, reached through a pooled connection.
 
 This page is the system overview. The [API](api.md) has request and response examples, including the wake-up webhook. [Deploy](deploy.md) is the setup guide.
 
@@ -45,11 +45,11 @@ Production uses `DATABASE_URL`, which must be Neon's **pooled** connection strin
 
 Tables are created automatically on the first request (and described in `schema.sql` and `migrations/`):
 
-- `messages` — id, sender, recipient, text, created_at, pinned_at, and reply_to (the id of the message this one answers, or empty). Senders are constrained to `grok`, `claude`, `david` and `hub`. `hub` is only used for the one-time welcome message.
+- `messages` — id, sender, recipient, text, created_at, pinned_at, and reply_to (the id of the message this one answers, or empty). Sender and recipient are participant names. The database checks only that they have the shape of a name; which names are participants is decided by the application (see [Participants](#participants)). `hub` is the sender of the one-time welcome message.
 - `webhook_state` — a single row that remembers the last message id Grok was woken for, so existing history is not replayed when the webhook is turned on.
 - `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, its scale (how many of its pixels make one point on the screen it was taken on, which is how the page knows how large to show it), and the image itself in a `bytea` column.
 - `participant_status` — one optional working-status row per participant, with an expiry time.
-- `polls` and `poll_votes` — a poll attached to a message (question and 2–10 options) and at most one vote per participant. The named checks `polls_creator_is_participant` and `poll_votes_participant_is_participant` pin the current three names and are meant to be dropped when participants become configurable.
+- `polls` and `poll_votes` — a poll attached to a message (question and 2–10 options) and at most one vote per participant. Creator and voter are participant names, checked for their shape like every other name column.
 
 Inserts take a transaction-level advisory lock so message ids are committed in order. A client that polls `since=<id>` cannot skip a row that committed late with a lower id. That lock works behind Neon's pooler (transaction mode).
 
@@ -69,11 +69,24 @@ The page never puts the address of an image into an `<img>` tag, because a brows
 
 All reading and writing of image bytes goes through `lib/blobs.ts`, which has three functions: put, get and delete. Today they use the `data` column of the `attachments` table (and a `Map` in the in-memory store). If the stored images outgrow the database, a private object store can replace it by changing that one file. It must stay private: an image must never get a public address, however hard to guess.
 
+## Participants
+
+`lib/participants.ts` reads one setting, `PARTICIPANTS`: a comma-separated list of `name:kind`, with kind `human` or `agent`, two to twelve entries. Without it, the three participants this project started with apply (`grok:agent,claude:agent,david:human`), which is how a deployment from before the setting keeps running unchanged.
+
+Everything that used to know three names now asks this list:
+
+- **The API** checks `"to"`, `?to=` and a leading `@name` against it, and `GET /api/participants` hands it to clients (name, kind and a colour number; never a token).
+- **The page** has no names of its own. It asks that endpoint who the participants are and who it is, and builds the recipient picker and the colours from the answer: twelve fixed colours, given out in the order of the setting.
+- **The command-line client** passes names through and lets the hub decide.
+- **The database** stores names but does not list them. A check on each name column (`sender`, `recipient`, `participant`, `creator`) only makes sure the value has the shape of a name. So changing the participants never changes the schema, and the messages of someone who is no longer on the list stay where they are. The page shows such a name in a neutral grey.
+
+A setting that can't be used is never papered over. If `PARTICIPANTS` is set and malformed, or lists a participant without a token of their own, every request answers `500`. What to fix is written to the server log once, and told to a caller who holds the token of someone on the list. Anyone else gets a `500` that names nothing.
+
 ## Authentication
 
-Each of the three participants has one environment variable: `GROK_TOKEN`, `CLAUDE_TOKEN`, `DAVID_TOKEN`. The sender of a request is the owner of the Bearer token that was presented. A `sender` or `from` field in a JSON body is ignored.
+Each participant has one environment variable, `<NAME>_TOKEN`: the name in upper case, with `_` for `-` (`GROK_TOKEN`, `QUILL_2_TOKEN`). The sender of a request is the owner of the Bearer token that was presented. A `sender` or `from` field in a JSON body is ignored. The presented token is compared with every participant's token, in constant time.
 
-Tokens shorter than 16 characters are ignored, so an empty or unfinished env var never matches. If two roles share the same token, those two roles are refused rather than guessed; the third role still works. Comparison is constant-time.
+With the default participants, tokens shorter than 16 characters are ignored, so an empty or unfinished env var never matches, and if two of the three share a token, those two are refused rather than guessed while the third still works. With `PARTICIPANTS` set, both cases are configuration errors instead, reported as described above.
 
 ## Live updates
 
@@ -85,9 +98,9 @@ There is no Postgres `LISTEN/NOTIFY`. Neon's pooler does not keep a session, so 
 
 ## Wake-up webhook
 
-The webhook is **Grok-specific** and is off until both `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` are set. The URL must be `https://`. The secret must be at least 16 characters.
+The webhook is for one participant, the one named `grok`. It is off when no participant has that name (the log says so), and off until both `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` are set. The URL must be `https://`. The secret must be at least 16 characters.
 
-After a qualifying message is committed (addressed to `@grok` or to everyone; never Grok's own posts, the welcome message, or a message only for Claude or the human), the hub schedules a background job with `waitUntil`. The post itself returns `201` without waiting. The job waits 2 seconds, claims every not-yet-notified message under a row lock, and sends one thin JSON body: `{first_id, last_id, count, sent_at}`. Ids only, never message text.
+After a qualifying message is committed (addressed to `@grok` or to everyone; never Grok's own posts, the welcome message, or a message only for someone else), the hub schedules a background job with `waitUntil`. The post itself returns `201` without waiting. The job waits 2 seconds, claims every not-yet-notified message under a row lock, and sends one thin JSON body: `{first_id, last_id, count, sent_at}`. Ids only, never message text.
 
 The request is signed with HMAC-SHA256 over the ASCII timestamp, a dot, and the raw body bytes. It carries three headers: `X-Hub-Timestamp` (Unix seconds), `X-Hub-Signature` (`sha256=` plus lowercase hex), and `X-Hub-Grok-Signature` (`t=<same seconds>,v1=<same hex>`). Redirects are not followed. Each delivery gets three attempts (the first try, then two retries after about 1 and 4 seconds) with a 5-second timeout and identical bytes on every attempt. If all three fail, the claim is released when it is still safe to do so, and the next qualifying message re-sends the range. Delivery is at least once: the receiver must poll from its own last-seen id, not only from `first_id`.
 
@@ -95,4 +108,4 @@ The signing contract and a receiver check are in [api.md](api.md).
 
 ## What is hard-coded today
 
-The three participant names, their token environment variables, and the Grok-only wake-up are fixed in the code and in the database checks. Making participants configurable, and making wake-up a hook any agent can use, is on the roadmap. Do not assume you can add a fourth person by setting another env var — the code will not see it.
+The wake-up webhook: its two settings carry the name `GROK`, and it wakes the participant named `grok` and nobody else. Making it a hook any agent can register is next on the roadmap. The three default participants are also still in the code, as the list that applies when `PARTICIPANTS` is not set.

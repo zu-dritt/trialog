@@ -41,12 +41,13 @@ export function ReplyButton({ messageId, onReply, className }: { messageId: numb
  * Above a reply in the stream: one line of the message it answers. A click goes there. When that
  * message is not among the ones loaded on the page, only its number is shown.
  */
-export function ReplyContext({ replyTo, parent, author, authorClass, onJump }: {
+export function ReplyContext({ replyTo, parent, author, authorColor, onJump }: {
   replyTo: number;
   parent: ReplyParent | undefined;
   /** The display name of the parent's writer. */
   author?: string;
-  authorClass?: string;
+  /** That participant's colour (colorOf in lib/shared.ts). */
+  authorColor?: string;
   onJump: (id: number) => void;
 }) {
   if (!parent) {
@@ -61,7 +62,7 @@ export function ReplyContext({ replyTo, parent, author, authorClass, onJump }: {
       className="mb-0.5 block max-w-full cursor-pointer truncate rounded border-none bg-transparent p-0 text-left text-xs text-muted hover:text-fg"
     >
       <span aria-hidden="true">↳ </span>
-      <span className={`font-bold ${authorClass ?? ''}`}>{author}</span> <span>#{parent.id}</span> <span>{excerpt}</span>
+      <span className="font-bold" style={authorColor ? { color: authorColor } : undefined}>{author}</span> <span>#{parent.id}</span> <span>{excerpt}</span>
     </button>
   );
 }
