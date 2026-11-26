@@ -435,3 +435,33 @@ test('react needs a message id and an emoji', async () => {
   assert.equal((await hub('react', '42')).code, 64);
   assert.equal((await hub('unreact', 'nope', '👍')).code, 64);
 });
+
+test('react reports the count even when the server stores the catalogue form of the emoji', async () => {
+  const heart = '❤️'; // catalogue form, with the variation selector
+  const typed = '\u2764'; // what a client may send
+  const server = createServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      message: {
+        id: 42,
+        reactions: [{ emoji: heart, by: ['claude'] }],
+      },
+    }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const { code, stdout } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile(process.execPath, [HUB, 'react', '42', typed], {
+        env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      child.stdin?.end();
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, new RegExp(`reacted ${heart} on #42 \\(1\\)`));
+    assert.doesNotMatch(stdout, /\(0\)/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

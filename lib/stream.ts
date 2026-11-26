@@ -9,11 +9,38 @@ import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
 import type { Store } from './store';
 
-/** Message ids recorded in a reactions fingerprint (`count|latest|id:n,id:n`). */
-export function messageIdsInReactionsFingerprint(fp: string): number[] {
+/** Parse a reactions fingerprint (`count|latest|id:count:latest,...`) into message-id → entry. */
+export function reactionEntriesInFingerprint(fp: string): Map<number, string> {
   const body = fp.split('|')[2] ?? '';
-  if (!body) return [];
-  return body.split(',').map((part) => Number(part.split(':')[0])).filter((id) => id > 0);
+  const map = new Map<number, string>();
+  if (!body) return map;
+  for (const part of body.split(',')) {
+    const id = Number(part.split(':', 1)[0]);
+    if (Number.isInteger(id) && id > 0) map.set(id, part);
+  }
+  return map;
+}
+
+/** Message ids recorded in a reactions fingerprint. */
+export function messageIdsInReactionsFingerprint(fp: string): number[] {
+  return [...reactionEntriesInFingerprint(fp).keys()];
+}
+
+/**
+ * Message ids whose reaction entry appeared, changed, or disappeared.
+ * A disappeared id still has to be re-sent, so the client can clear the last reaction.
+ */
+export function reactionMessageIdsChanged(previous: string, next: string): number[] {
+  const before = reactionEntriesInFingerprint(previous);
+  const after = reactionEntriesInFingerprint(next);
+  const ids = new Set<number>();
+  for (const [id, entry] of after) {
+    if (before.get(id) !== entry) ids.add(id);
+  }
+  for (const id of before.keys()) {
+    if (!after.has(id)) ids.add(id);
+  }
+  return [...ids].sort((a, b) => a - b);
 }
 
 export const INTERVAL_MS = 1_000;
@@ -160,13 +187,12 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
           // Reaction changes do not move last_id, so they need their own fingerprint.
           // Re-send those messages without moving `last`, or a lower id would make the next tick replay the stream.
           if (version.reactions !== reactions) {
-            const ids = [...new Set([
-              ...messageIdsInReactionsFingerprint(reactions),
-              ...messageIdsInReactionsFingerprint(version.reactions),
-            ])];
+            const ids = reactionMessageIdsChanged(reactions, version.reactions);
             reactions = version.reactions;
-            const updated = await store.listMessagesByIds(ids);
-            if (updated.length) send('messages', updated);
+            if (ids.length) {
+              const updated = await store.listMessagesByIds(ids);
+              if (updated.length) send('messages', updated);
+            }
             wrote = true;
           }
           if (wrote) lastWrite = now();

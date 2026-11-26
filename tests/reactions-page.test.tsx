@@ -1,6 +1,7 @@
 // Reaction bar rendering, allow-list helpers, and since-poll merging.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { REACTION_HINT, type Message } from '../lib/core';
 import { ReactionBar, applyReactionList, replaceMatching, QUICK_REACTIONS } from '../app/reactions';
@@ -55,4 +56,10 @@ test('replaceMatching updates existing ids and never appends', () => {
   assert.equal(next.length, 1);
   assert.equal(next[0].text, 'new');
   assert.deepEqual(next[0].reactions, [{ emoji: '👍', by: ['david'] }]);
+});
+
+test('the hint uses the same size as the more label, not 11px', () => {
+  const src = readFileSync(new URL('../app/reactions.tsx', import.meta.url), 'utf8');
+  assert.match(src, /text-xs text-muted">\{REACTION_HINT\}/);
+  assert.ok(!src.includes('text-[11px]'), src);
 });

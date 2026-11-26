@@ -444,10 +444,15 @@ const POLLS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM polls) || '|' ||
       FROM polls p
     ) t
   ), '')`;
+// One entry per message: id:count:latest, so a swap (same count, different emoji) still shows.
 const REACTIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM reactions) || '|' ||
   (SELECT coalesce(max(created_at)::text, '') FROM reactions) || '|' ||
-  (SELECT coalesce(string_agg(message_id::text || ':' || n::text, ',' ORDER BY message_id), '')
-     FROM (SELECT message_id, count(*)::int AS n FROM reactions GROUP BY message_id) t)`;
+  (SELECT coalesce(string_agg(message_id::text || ':' || n::text || ':' || latest, ',' ORDER BY message_id), '')
+     FROM (
+       SELECT message_id, count(*)::int AS n, max(created_at)::text AS latest
+       FROM reactions
+       GROUP BY message_id
+     ) t)`;
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
@@ -1031,13 +1036,21 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       .map(([emoji, g]) => ({ emoji, by: g.by }));
   };
   const reactionsFingerprint = (): string => {
-    const byMessage = new Map<number, number>();
+    const byMessage = new Map<number, { n: number; latest: string }>();
     let latest = '';
     for (const r of reactionRows) {
-      byMessage.set(r.message_id, (byMessage.get(r.message_id) ?? 0) + 1);
+      const cur = byMessage.get(r.message_id);
+      if (!cur) byMessage.set(r.message_id, { n: 1, latest: r.created_at });
+      else {
+        cur.n += 1;
+        if (r.created_at > cur.latest) cur.latest = r.created_at;
+      }
       if (r.created_at > latest) latest = r.created_at;
     }
-    const body = [...byMessage.entries()].sort((a, b) => a[0] - b[0]).map(([id, n]) => `${id}:${n}`).join(',');
+    const body = [...byMessage.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([id, row]) => `${id}:${row.n}:${row.latest}`)
+      .join(',');
     return `${reactionRows.length}|${latest}|${body}`;
   };
   const copy = (m: Message): Message => ({

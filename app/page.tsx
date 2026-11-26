@@ -242,7 +242,7 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1' });
+      const params = new URLSearchParams({ polls: '1', reactions: '1' });
       if (lastId.current) params.set('since', String(lastId.current));
       const data = (await (await api(`/api/messages?${params}`, { signal: abort.signal })).json()) as MessagesResponse;
       if (stopped) return;

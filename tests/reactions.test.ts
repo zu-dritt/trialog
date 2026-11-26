@@ -178,11 +178,17 @@ test('PUT and DELETE take the participant from the token and ignore a body', asy
   const { message } = (await res.json()) as { message: Message };
   assert.deepEqual(message.reactions, [{ emoji: '👍', by: ['claude'] }]);
 
-  const listed = (await (await messages.GET(new Request(`${URL_BASE}/api/messages?since=${m.id - 1}`, { headers: auth('grok') }))).json()) as {
+  const listedPlain = (await (await messages.GET(new Request(`${URL_BASE}/api/messages?since=${m.id - 1}`, { headers: auth('grok') }))).json()) as {
+    messages: Message[];
+    reactions?: { message_id: number; reactions: Message['reactions'] }[];
+  };
+  assert.ok(listedPlain.messages.some((row) => row.id === m.id && row.reactions[0].by[0] === 'claude'));
+  assert.equal(listedPlain.reactions, undefined, 'top-level reactions is omitted unless asked for');
+
+  const listed = (await (await messages.GET(new Request(`${URL_BASE}/api/messages?since=${m.id - 1}&reactions=1`, { headers: auth('grok') }))).json()) as {
     messages: Message[];
     reactions: { message_id: number; reactions: Message['reactions'] }[];
   };
-  assert.ok(listed.messages.some((row) => row.id === m.id && row.reactions[0].by[0] === 'claude'));
   assert.ok(listed.reactions.some((row) => row.message_id === m.id && row.reactions[0].by[0] === 'claude'));
 
   const gone = await call('DELETE', m.id, '👍', 'claude');

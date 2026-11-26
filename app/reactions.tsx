@@ -132,7 +132,7 @@ export function ReactionBar({ message, me, participants = [], onToggle }: BarPro
               onClick={() => setMore((v) => !v)}
             >more</button>
           </div>
-          <p className="mt-1.5 max-w-[16rem] text-[11px] text-muted">{REACTION_HINT}</p>
+          <p className="mt-1.5 max-w-[16rem] text-xs text-muted">{REACTION_HINT}</p>
           {more && (
             <div className="mt-2">
               <EmojiPanel

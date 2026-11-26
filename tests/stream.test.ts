@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
 import { SSE_PING, createSseParser, sseEvent, type SseEvent } from '../lib/sse';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { createEventStream, pollMessageIdsChanged } from '../lib/stream';
+import { createEventStream, pollMessageIdsChanged, reactionMessageIdsChanged } from '../lib/stream';
 
 // --- encoder and parser ---------------------------------------------------------------------------
 
@@ -314,3 +314,34 @@ for (const [name, make] of STORES) {
   });
 }
 
+test('reactionMessageIdsChanged returns only ids whose entry changed, including a removal', () => {
+  assert.deepEqual(reactionMessageIdsChanged('0||', '0||'), []);
+  assert.deepEqual(reactionMessageIdsChanged('0||', '1|t0|12:1:t0'), [12]);
+  // A reaction on 12 does not re-send 13.
+  assert.deepEqual(reactionMessageIdsChanged('2|t0|12:1:t0,13:1:t0', '2|t1|12:2:t1,13:1:t0'), [12]);
+  // A swap at a constant count still shows, because latest moved.
+  assert.deepEqual(reactionMessageIdsChanged('1|t0|12:1:t0', '1|t1|12:1:t1'), [12]);
+  // The last reaction on a message still re-sends that message so the client can clear it.
+  assert.deepEqual(reactionMessageIdsChanged('1|t0|12:1:t0', '0||'), [12]);
+});
+
+test('a reaction re-sends only the message whose entry changed', async () => {
+  const store = createMemoryStore();
+  const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
+  const b = must(await store.add({ sender: 'david', recipient: null, text: 'two' }));
+  assert.equal((await store.addReaction(a.id, 'claude', '👍')).status, 'ok');
+  assert.equal((await store.addReaction(b.id, 'grok', '🎉')).status, 'ok');
+  const abort = new AbortController();
+  const r = reader(createEventStream({ store, me: 'claude', since: b.id, signal: abort.signal, ...FAST }));
+  assert.deepEqual((await r.next(2)).map((e) => e.event), ['hello', 'pins']);
+  assert.ok(await r.quiet());
+
+  assert.equal((await store.addReaction(a.id, 'david', '❤️')).status, 'ok');
+  const [updated] = await r.next();
+  assert.equal(updated.event, 'messages');
+  assert.deepEqual((updated.data as Message[]).map((m) => m.id), [a.id], 'the unchanged reaction is not re-sent');
+  assert.deepEqual((updated.data as Message[])[0].reactions.map((x) => x.emoji).sort(), ['👍', '❤️'].sort());
+
+  abort.abort();
+  await r.finished();
+});

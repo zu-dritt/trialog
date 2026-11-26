@@ -321,9 +321,13 @@ async function main() {
     })).json();
     if (opts.json) console.log(JSON.stringify(message));
     else {
-      const found = (message.reactions || []).find((r) => r.emoji === emoji);
+      // The server stores the catalogue form (a heart may gain or lose a variation selector).
+      // Match on that, and report the emoji and count from the answer.
+      const fold = (s) => s.replaceAll('\uFE0F', '');
+      const found = (message.reactions || []).find((r) => r.emoji === emoji || fold(r.emoji) === fold(emoji));
+      const shown = found ? found.emoji : emoji;
       const n = found ? found.by.length : 0;
-      console.log(cmd === 'react' ? `reacted ${emoji} on #${args[0]} (${n})` : `removed ${emoji} from #${args[0]}`);
+      console.log(cmd === 'react' ? `reacted ${shown} on #${args[0]} (${n})` : `removed ${emoji} from #${args[0]}`);
     }
     return;
   }
