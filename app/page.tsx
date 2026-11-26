@@ -13,6 +13,7 @@ import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
 import { SplitToggle, useSplitFits } from './split-ui';
+import { TourButton, TourPanel, useTour } from './tour';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
@@ -77,6 +78,11 @@ export default function Page() {
   const sound = useSoundMode({ messages: heardMessages, me, participants, primed, newVersion });
   const onLeadHeard = useCallback((messages: Message[], next: boolean) => setLeadHeard({ messages, primed: next }), []);
   const onSideHeard = useCallback((messages: Message[], next: boolean) => setSideHeard({ messages, primed: next }), []);
+  // Learn by doing: the guided tour. Both panes report the person's own actions to it (tour.note).
+  // It is offered only once the leading pane's latest messages are in, so the page can tell whether
+  // the person has written there before.
+  const tour = useTour({ me, participants, loaded: leadHeard.primed, history: heardMessages });
+  const noteTour = tour.note;
 
   // The address says which room to open. Read together with the token, so the page opens once, in that room.
   useEffect(() => {
@@ -127,7 +133,8 @@ export default function Page() {
     if (id === roomRef.current) return;
     window.history.pushState(null, '', addressForRoom(window.location.href, id));
     setRoom(id);
-  }, []);
+    noteTour({ kind: 'room' });
+  }, [noteTour]);
 
   const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
   const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
@@ -226,6 +233,7 @@ export default function Page() {
     openRooms,
     onUnauthorized: forgetToken,
     soundSent: sound.sent,
+    onTour: noteTour,
   };
 
   return (
@@ -235,6 +243,8 @@ export default function Page() {
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
         <SoundToggle on={sound.on} onToggle={sound.toggle} />
+        {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
         {/* The "New version available" pill comes directly after the status, so the state of the
             page reads in one spot. On a narrow screen it sits on a line of its own, under the
             status. An empty holder takes no room in the row. */}
@@ -256,7 +266,11 @@ export default function Page() {
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
-      <div className="border-b border-line px-4 py-1.5 lg:hidden">{tabs('flex')}</div>
+      <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden">
+        {tabs('flex min-w-0 flex-1')}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
+      </div>
+      <TourPanel tour={tour} me={me} participants={participants} />
       <WakeTargetsLine me={me} participants={participants} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
       {splitVisible && statusBar}
@@ -288,7 +302,7 @@ export default function Page() {
               <RoomPicker
                 rooms={shownRooms}
                 current={secondRoom}
-                onPick={setSecondRoom}
+                onPick={(id) => { setSecondRoom(id); noteTour({ kind: 'room' }); }}
               />
             }
           />
