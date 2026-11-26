@@ -96,7 +96,7 @@ test('the hint uses the same size as the more label, not 11px', () => {
 });
 
 test('Reply, Quote, pin and react are grouped in one action row on the message', () => {
-  const src = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../app/pane.tsx', import.meta.url), 'utf8');
   const row = src.match(/<div className="ml-auto flex items-baseline gap-0">([\s\S]*?)<\/div>/);
   assert.ok(row, 'the action row is one group at the right of the header');
   const body = row[1];
