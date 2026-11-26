@@ -7,9 +7,10 @@
 //     chose, the moment the message is shown, which tells that server who looked and when.
 //     Images are shown as plain links instead; nothing is loaded until the reader clicks.
 //   - Links open in a new tab, without passing on where the reader came from.
-import { createContext, useContext, type ComponentPropsWithoutRef } from 'react';
+import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } from 'react';
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { splitMentions } from './mentions';
 
 const LINK_REL = 'noopener noreferrer nofollow';
 
@@ -35,8 +36,39 @@ function Image({ node: _node, src, alt }: ComponentPropsWithoutRef<'img'> & Extr
   return <a href={src} target="_blank" rel={LINK_REL}>[{label}]</a>;
 }
 
-export const mdComponents = { a: Link, img: Image };
+/** The colour of each participant, for @mentions. Without it, mentions are shown as plain text. */
+export const MentionColors = createContext<((name: string) => string) | null>(null);
 
-export function MessageBody({ text }: { text: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{text}</ReactMarkdown>;
+/** A participant's @name, in that participant's colour. The text is exactly what was written. */
+function Span({ node: _node, children, ...props }: ComponentPropsWithoutRef<'span'> & ExtraProps & { 'data-mention'?: string }) {
+  const colorOf = useContext(MentionColors);
+  const name = props['data-mention'];
+  if (!name || !colorOf) return <span {...props}>{children}</span>;
+  return <span data-mention={name} className="font-semibold" style={{ color: colorOf(name) }}>{children}</span>;
+}
+
+export const mdComponents = { a: Link, img: Image, span: Span };
+
+interface MdNode { type: string; value?: string; children?: MdNode[]; data?: Record<string, unknown> }
+
+/**
+ * Marks each @name of a participant in the text as a mention (a span, coloured by `Span`). Code
+ * spans and blocks are other node types, so a name in code stays as it is.
+ */
+export function remarkMentions(names: readonly string[]) {
+  const walk = (node: MdNode) => {
+    if (!node.children) return;
+    node.children = node.children.flatMap((child): MdNode[] => {
+      if (child.type !== 'text' || !child.value?.includes('@')) { walk(child); return [child]; }
+      return splitMentions(child.value, names).map((part) => typeof part === 'string'
+        ? { type: 'text', value: part }
+        : { type: 'text', value: part.typed, data: { hName: 'span', hProperties: { dataMention: part.name } } });
+    });
+  };
+  return () => (tree: MdNode) => { walk(tree); };
+}
+
+export function MessageBody({ text, names = [] }: { text: string; names?: readonly string[] }) {
+  const plugins = useMemo(() => (names.length ? [remarkGfm, remarkMentions(names)] : [remarkGfm]), [names]);
+  return <ReactMarkdown remarkPlugins={plugins} components={mdComponents}>{text}</ReactMarkdown>;
 }
