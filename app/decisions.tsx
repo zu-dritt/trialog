@@ -9,6 +9,7 @@ import type { DecisionCard, DecisionStance, Participant, Sender } from '../lib/s
 import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, displayName } from '../lib/shared';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
+const ANSWER = 'cursor-pointer rounded-md border px-2.5 py-1 text-[13px] font-semibold disabled:opacity-50';
 
 /** Applies current decision cards to messages already on the page, by message id. */
 export function withDecisions(messages: Message[], cards: DecisionCard[]): Message[] {
@@ -78,6 +79,8 @@ export function DecisionCardView({
   const byName = new Map(card.positions.map((p) => [p.participant, p]));
   const mine = me ? byName.get(me) : undefined;
   const [note, setNote] = useState(mine?.note ?? '');
+  // The answer the reader gave last, as it is stored: its button is shown as the chosen one.
+  const chosen = mine?.stance ?? null;
   const trimmed = note.trim() || null;
   const names = roster.length ? roster : [...new Set(card.positions.map((p) => p.participant))];
 
@@ -127,12 +130,14 @@ export function DecisionCardView({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="cursor-pointer rounded-md border border-line bg-panel px-2.5 py-1 text-[13px] font-semibold"
+              className={`${ANSWER} ${chosen === 'agree' ? 'border-ok bg-ok/20 text-ok' : 'border-line bg-panel'}`}
+              aria-pressed={chosen === 'agree'}
               onClick={() => submit('agree')}
             >Agree</button>
             <button
               type="button"
-              className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-[13px] font-semibold disabled:opacity-50"
+              className={`${ANSWER} ${chosen === 'object' ? 'border-bad bg-bad/20 text-bad' : 'border-line'}`}
+              aria-pressed={chosen === 'object'}
               disabled={!trimmed}
               onClick={() => submit('object')}
             >Object, and say why</button>
