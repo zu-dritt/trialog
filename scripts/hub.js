@@ -7,7 +7,8 @@
 //   node scripts/hub.js send --attach shot.png "caption"  (repeatable, up to 4; the text is optional)
 //   node scripts/hub.js send --reply-to 45 "Agreed."      (an answer to message #45; read shows it as ↳ #45)
 //   node scripts/hub.js get att_… > shot.png              (or: get att_… --out shot.png)
-//   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]
+//   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]   (marks those messages read)
+//   node scripts/hub.js read --up-to <id> [--json]        (set the read position explicitly; only forward)
 //   node scripts/hub.js search "storage images" [--decisions] [--pinned] [--to claude] [--limit 20] [--json]
 //   node scripts/hub.js wait [--to claude] [--since <id>] [--timeout 600] [--json]
 //   node scripts/hub.js status "reviewing pull request 7" [--ttl 600] [--json]
@@ -41,7 +42,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | export');
   process.exit(64);
 }
 
@@ -202,7 +203,14 @@ async function main() {
   }
 
   if (cmd === 'read') {
-    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit })}`)).json();
+    if (opts['up-to'] !== undefined) {
+      if (!/^[1-9]\d{0,14}$/.test(opts['up-to'] || '')) usage('read --up-to needs a message id');
+      const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo: Number(opts['up-to']) }) })).json();
+      if (opts.json) console.log(JSON.stringify(data.read));
+      else console.log(`read up to #${data.read.up_to}`);
+      return;
+    }
+    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, markRead: '1' })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
     else for (const m of data.messages) console.log(fmt(m));
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;

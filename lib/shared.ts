@@ -173,6 +173,63 @@ export function decisionPositionText(
   return line;
 }
 
+/** How long a message addressed to agents may go unread by them before the page flags it. */
+export const UNSEEN_AFTER_MS = 2 * 60 * 1000;
+
+/** The short label on a message that no addressed agent has read after UNSEEN_AFTER_MS. */
+export const UNSEEN_LABEL = '⏰ not seen yet';
+
+/** One participant's read position: the highest message id they have read. No room field. */
+export interface ReadPosition {
+  participant: Sender;
+  up_to: number;
+  updated_at: string;
+}
+
+/**
+ * The agents a message was addressed to, for the "not seen yet" flag. A message to everyone
+ * addresses every agent except its writer. A message to one agent addresses only that agent.
+ * A message only to a human, or from the hub, addresses no agent.
+ */
+export function addressedAgents(
+  message: { sender: string; recipient: string | null },
+  participants: readonly Participant[],
+): string[] {
+  if (message.sender === 'hub') return [];
+  const agents = participants.filter((p) => p.kind === 'agent').map((p) => p.name);
+  if (message.recipient === null) return agents.filter((name) => name !== message.sender);
+  return agents.includes(message.recipient) ? [message.recipient] : [];
+}
+
+/**
+ * True when a message was addressed to at least one agent, is older than two minutes, and
+ * none of those agents has a read position at or past it. Derived only from the positions
+ * and the recipients; it does not change who is woken.
+ */
+export function unseenByAgents(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): boolean {
+  const agents = addressedAgents(message, participants);
+  if (!agents.length) return false;
+  if (now - Date.parse(message.created_at) < UNSEEN_AFTER_MS) return false;
+  const byName = new Map(reads.map((r) => [r.participant, r.up_to]));
+  return agents.every((name) => (byName.get(name) ?? 0) < message.id);
+}
+
+/** Merge incoming read positions into a list, never moving a participant backwards. */
+export function applyReads(list: ReadPosition[], incoming: ReadPosition[]): ReadPosition[] {
+  if (!incoming.length) return list;
+  const byName = new Map(list.map((r) => [r.participant, r]));
+  for (const r of incoming) {
+    const prev = byName.get(r.participant);
+    if (!prev || r.up_to >= prev.up_to) byName.set(r.participant, r);
+  }
+  return [...byName.values()].sort((a, b) => a.participant.localeCompare(b.participant));
+}
+
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];

@@ -331,7 +331,7 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
     assert.match(sent.stdout, /^sent #7 to Quill-2/);
 
     const read = await run('read', '--to', 'quill-2');
-    assert.equal(seen[1].url, '/api/messages?to=quill-2');
+    assert.equal(seen[1].url, '/api/messages?to=quill-2&markRead=1');
     assert.match(read.stdout, /^#7 \[\d\d:\d\d\] Ana-Maria → Quill-2:\nhello/);
 
     const who = await run('participants');
