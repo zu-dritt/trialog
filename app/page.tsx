@@ -5,6 +5,7 @@ import type { Author, Message, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 
@@ -27,6 +28,8 @@ const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
+// The buttons in the row under the message box: a little narrower on a phone, so the row fits.
+const TOOL = `${BUTTON} max-sm:px-2`;
 
 const timeFmt = new Intl.DateTimeFormat('de-CH', { hour: '2-digit', minute: '2-digit' });
 const dayFmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -86,6 +89,9 @@ export default function Page() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
+  const [expanded, setExpanded] = useState(false); // the tall writing area
+  const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
+  const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); }, []);
@@ -251,6 +257,38 @@ export default function Page() {
     const el = listRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
+  // The stream also changes height when the message box below it grows or shrinks, or the window
+  // does. A reader who was at the newest message stays there.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let heightBefore = el.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const wasAtEnd = stick.current || el.scrollHeight - el.scrollTop - heightBefore < 80;
+      heightBefore = el.clientHeight;
+      if (wasAtEnd) { el.scrollTop = el.scrollHeight; stick.current = true; }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [token]);
+
+  // The box grows with its text up to a share of the window, or is the tall writing area.
+  useBoxHeight(boxRef, draft, expanded, viewportHeight);
+
+  // An unsent draft survives a reload: the text only, per participant, in this browser.
+  // (This effect comes first on purpose. In the render where `me` changes, the box still holds
+  // the previous text, and it must not be saved under the new name.)
+  useEffect(() => {
+    if (me && draftOwner.current === me) writeDraft(localStorage, me, draft);
+  }, [draft, me]);
+  // Once the page knows who is signed in, that participant's draft comes back.
+  useEffect(() => {
+    if (!me || draftOwner.current === me) return;
+    const owner = draftOwner.current;
+    const stored = readDraft(localStorage, me);
+    draftOwner.current = me;
+    setDraft((current) => draftFor(current, owner, me, stored));
+  }, [me]);
   const onScroll = () => {
     const el = listRef.current;
     if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -297,7 +335,8 @@ export default function Page() {
       // Don't move lastId forward here: the next poll picks up anything sent in between.
       setMessages((list) => merge(list, [message]));
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
-      setDraft('');
+      setDraft(''); // which also removes the stored draft and lets the box shrink back
+      setExpanded(false);
       // Only what was sent leaves the composer. An image added while the message was on its way stays.
       for (const d of sent) URL.revokeObjectURL(d.preview);
       setDrafts((list) => withoutSent(list, sent));
@@ -418,19 +457,14 @@ export default function Page() {
         {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
         <DraftChips drafts={drafts} onRemove={removeDraft} />
-        {/* On a narrow screen the message box takes the first row and the controls sit below it. */}
-        <form className="flex flex-wrap items-end gap-2 sm:flex-nowrap" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={`${FIELD} mr-auto sm:mr-0`}>
-            <option value="">to everyone</option>
-            <option value="grok">to Grok</option>
-            <option value="claude">to Claude</option>
-            <option value="david">to David</option>
-          </select>
+        {/* The message box has the full width on every screen. The controls sit in one row below it. */}
+        <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           <textarea
             ref={boxRef}
             rows={2}
             value={draft}
-            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
+            aria-label="Message"
+            placeholder="Message (Markdown). @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
@@ -439,19 +473,31 @@ export default function Page() {
               addImages(files);
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            className={`${FIELD} order-first max-h-[40vh] min-h-[42px] flex-1 basis-full resize-y sm:order-none sm:basis-auto`}
+            // The height is set from the text (see useBoxHeight), so the browser's own resize
+            // handle is switched off: at the bottom of the window there is nowhere to drag it.
+            className={`${FIELD} block min-h-[60px] w-full resize-none`}
           />
-          <input
-            ref={fileInput} type="file" accept={ACCEPT} multiple hidden
-            onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-          />
-          <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={BUTTON} />
-          <button
-            type="button" className={BUTTON} onClick={() => fileInput.current?.click()}
-            disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
-            title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
-          >Image</button>
-          <button type="submit" className={BUTTON} disabled={!canSend}>{uploading ? 'Uploading…' : 'Send'}</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
+              <option value="">to everyone</option>
+              <option value="grok">to Grok</option>
+              <option value="claude">to Claude</option>
+              <option value="david">to David</option>
+            </select>
+            <input
+              ref={fileInput} type="file" accept={ACCEPT} multiple hidden
+              onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+            />
+            <button
+              type="button" className={TOOL} onClick={() => fileInput.current?.click()}
+              disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+              title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
+            >Image</button>
+            <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={TOOL} />
+            <ExpandButton expanded={expanded} onToggle={() => { setExpanded((v) => !v); boxRef.current?.focus(); }} className={TOOL} />
+            <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
+            <button type="submit" className={`${TOOL} ml-auto md:ml-0`} disabled={!canSend}>{uploading ? 'Uploading…' : 'Send'}</button>
+          </div>
         </form>
       </footer>
     </div>
