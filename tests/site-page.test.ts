@@ -2,9 +2,9 @@
 // it has the film, the sentence, the two links and the board.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const siteDir = fileURLToPath(new URL('../docs/site/', import.meta.url));
 const html = readFileSync(join(siteDir, 'index.html'), 'utf8');
@@ -70,4 +70,38 @@ test('old explainer path redirects to docs/site/try.html', () => {
   assert.match(redirect, /href="site\/try\.html"/);
   assert.match(redirect, /Content-Security-Policy" content="default-src 'none'/);
   assert.ok(existsSync(join(siteDir, 'try.html')));
+});
+
+function iconHrefs(pageHtml: string): string[] {
+  const hrefs: string[] = [];
+  for (const [tag] of pageHtml.matchAll(/<link\b[^>]*>/gi)) {
+    const rel = tag.match(/\brel="([^"]+)"/i)?.[1] ?? '';
+    const href = tag.match(/\bhref="([^"]+)"/i)?.[1];
+    if (href && /\b(icon|apple-touch-icon)\b/i.test(rel)) hrefs.push(href);
+  }
+  return hrefs;
+}
+
+test('every site page links a favicon, and the file is there', () => {
+  const pages = [
+    join(siteDir, 'index.html'),
+    ...readdirSync(siteDir).filter((name) => name.endsWith('.html')).map((name) => join(siteDir, name)),
+    fileURLToPath(new URL('../docs/how-a-message-travels.html', import.meta.url)),
+  ];
+  const seen = new Set<string>();
+  let count = 0;
+  for (const page of pages) {
+    if (seen.has(page)) continue;
+    seen.add(page);
+    const pageHtml = readFileSync(page, 'utf8');
+    const hrefs = iconHrefs(pageHtml);
+    assert.ok(hrefs.length > 0, `${page} links an icon`);
+    for (const href of hrefs) {
+      assert.doesNotMatch(href, /^(?:[a-z]+:)?\/\//i, `${page} icon is not a local file: ${href}`);
+      assert.ok(existsSync(join(dirname(page), href)), `${page} missing icon file: ${href}`);
+    }
+    assert.match(pageHtml, /img-src 'self'/, `${page} CSP must allow a local icon`);
+    count++;
+  }
+  assert.ok(count >= 3, 'the front page, the explainer and the redirect are all checked');
 });
