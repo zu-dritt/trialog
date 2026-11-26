@@ -38,7 +38,9 @@ async function legacyDatabase(): Promise<PGlite> {
       ('claude', 'david', 'DECISION: we keep the three colours', '2026-11-25T10:03:00Z', '2026-11-25T10:03:00Z'),
       ('david', 'grok', 'a screenshot', '2026-11-25T10:04:00Z', NULL);
     UPDATE webhook_state SET last_notified_id = 5;
-    INSERT INTO participant_status (participant, text, expires_at) VALUES ('grok', 'reviewing', now() + interval '10 minutes');`);
+    INSERT INTO participant_status (participant, text, expires_at) VALUES ('grok', 'reviewing', now() + interval '10 minutes');
+    INSERT INTO polls (id, message_id, creator, question, options) VALUES ('poll_legacy0123456789abcdef', 2, 'david', 'hello both', ARRAY['yes', 'no']);
+    INSERT INTO poll_votes (poll_id, participant, option_index) VALUES ('poll_legacy0123456789abcdef', 'grok', 1), ('poll_legacy0123456789abcdef', 'claude', 2);`);
   await pg.query(
     `INSERT INTO attachments (id, sender, message_id, position, content_type, bytes, width, height, data) VALUES ($1, 'david', 5, 0, 'image/png', $2, 40, 20, $3)`,
     [IMAGE_ID, IMAGE_BYTES.length, IMAGE_BYTES],
@@ -49,7 +51,7 @@ async function legacyDatabase(): Promise<PGlite> {
 /** Every row of every table, as text, to compare before and after. */
 async function contents(pg: PGlite): Promise<string> {
   const out: unknown[] = [];
-  for (const table of ['messages', 'attachments', 'participant_status', 'webhook_state']) {
+  for (const table of ['messages', 'attachments', 'participant_status', 'webhook_state', 'polls', 'poll_votes']) {
     out.push((await pg.query(`SELECT t::text AS row FROM ${table} t ORDER BY 1`)).rows);
   }
   return JSON.stringify(out);
@@ -58,7 +60,7 @@ async function contents(pg: PGlite): Promise<string> {
 async function nameChecks(pg: PGlite): Promise<string[]> {
   const { rows } = await pg.query<{ c: string }>(
     `SELECT conrelid::regclass || '.' || conname || ': ' || pg_get_constraintdef(oid) AS c FROM pg_constraint
-     WHERE contype = 'c' AND (pg_get_constraintdef(oid) ~ 'sender|recipient|participant') ORDER BY 1`,
+     WHERE contype = 'c' AND (pg_get_constraintdef(oid) ~ 'sender|recipient|participant|creator') ORDER BY 1`,
   );
   return rows.map((r) => r.c);
 }
@@ -67,10 +69,12 @@ const SHAPE_CHECKS = [
   /^messages\.messages_recipient_shape: CHECK \(\(recipient ~ /,
   /^messages\.messages_sender_shape: CHECK \(\(sender ~ /,
   /^participant_status\.participant_status_participant_shape: CHECK \(\(participant ~ /,
+  /^poll_votes\.poll_votes_participant_shape: CHECK \(\(participant ~ /,
+  /^polls\.polls_creator_shape: CHECK \(\(creator ~ /,
 ];
 const assertShapeChecksOnly = async (pg: PGlite) => {
   const checks = await nameChecks(pg);
-  assert.equal(checks.length, 4, checks.join('\n'));
+  assert.equal(checks.length, SHAPE_CHECKS.length, checks.join('\n'));
   for (const [i, expected] of SHAPE_CHECKS.entries()) assert.match(checks[i], expected);
   assert.ok(!checks.join('\n').includes('grok'), 'no check lists names any more');
 };
@@ -82,6 +86,8 @@ test('the fixture really is the old database: its checks list the three names', 
   assert.match(checks, /messages_recipient_check/);
   assert.match(checks, /attachments_sender_check/);
   assert.match(checks, /participant_status_participant_check/);
+  assert.match(checks, /polls_creator_is_participant/);
+  assert.match(checks, /poll_votes_participant_is_participant/);
   await assert.rejects(pg.query(`INSERT INTO messages (sender, text) VALUES ('ana', 'x')`), /check/i);
   await pg.close();
 });
@@ -115,6 +121,13 @@ test('first request on an old database: every row is kept, and the name checks b
   await assert.rejects(pg.query(`INSERT INTO messages (sender, recipient, text) VALUES ('grok', 'not_a_name', 'x')`), /messages_recipient_shape/);
   await assert.rejects(pg.query(`INSERT INTO participant_status (participant, text, expires_at) VALUES ('NOPE', 'x', now())`), /participant_status_participant_shape/);
   await assert.rejects(pg.query(`INSERT INTO attachments (id, sender, content_type, bytes, width, height) VALUES ('att_x', 'no pe', 'image/png', 1, 1, 1)`), /attachments_sender_shape/);
+  await assert.rejects(pg.query(`INSERT INTO polls (id, message_id, creator, question, options) VALUES ('poll_x', 3, 'No Pe', 'q', ARRAY['a', 'b'])`), /polls_creator_shape/);
+  await assert.rejects(pg.query(`INSERT INTO poll_votes (poll_id, participant, option_index) VALUES ('poll_legacy0123456789abcdef', 'NOPE', 1)`), /poll_votes_participant_shape/);
+  // The poll from before is as it was, and a fourth participant can vote in it.
+  const poll = (await store.all())[1].poll;
+  assert.deepEqual(poll?.options.map((o) => [o.text, o.voters]), [['yes', ['grok']], ['no', ['claude']]]);
+  const voted = await store.vote('poll_legacy0123456789abcdef', 'quill-2', 1);
+  assert.deepEqual(voted.options[0].voters, ['grok', 'quill-2']);
   await pg.close();
 });
 
@@ -126,7 +139,7 @@ test('the migration is idempotent: a second start, the migration file and the wh
 
   await createSqlStore(pgliteDb(pg)).ensure(); // the next cold start
   await Promise.all([createSqlStore(pgliteDb(pg)).ensure(), createSqlStore(pgliteDb(pg)).ensure()]); // two at once
-  const migration = await file('../migrations/004-any-participants.sql');
+  const migration = await file('../migrations/005-any-participants.sql');
   await pg.exec(migration);
   await pg.exec(migration);
   await pg.exec(await file('../schema.sql'));
@@ -147,7 +160,10 @@ test('an old database, a new database and the migration files by hand all end wi
   // Someone who applies the files in migrations/ to an old database themselves, without the app.
   const byHand = await legacyDatabase();
   const before = await contents(byHand);
-  for (const name of ['001-webhook-state.sql', '002-attachments.sql', '003-status.sql', '004-any-participants.sql']) await byHand.exec(await file(`../migrations/${name}`));
+  const { readdir } = await import('node:fs/promises');
+  const files = (await readdir(new URL('../migrations/', import.meta.url))).filter((f) => f.endsWith('.sql')).sort();
+  assert.ok(files.at(-1)?.endsWith('-any-participants.sql'), 'the migration that replaces the name lists runs after every table exists');
+  for (const name of files) await byHand.exec(await file(`../migrations/${name}`));
   assert.equal(await contents(byHand), before);
   assert.deepEqual(await nameChecks(byHand), await nameChecks(migrated));
 

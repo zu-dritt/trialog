@@ -1,7 +1,7 @@
 // Small helpers for the route handlers. Plain Web APIs only (Request/Response),
 // so the handlers can be called directly from the tests.
 import { senderFromAuth, type Sender } from './core';
-import { ConfigError } from './participants';
+import { ConfigError, holdsListedToken } from './participants';
 
 const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
 
@@ -13,27 +13,33 @@ export function error(status: number, message: string, extra?: Record<string, st
   return json({ error: message }, status, extra);
 }
 
+/** What a caller without a participant's token is told when the participants setting is broken: that, and no more. */
+export const MISCONFIGURED = 'Configuration error. The details are in the server log.';
+
 /**
- * A setting that can't be used (lib/participants.ts). Until it is fixed nobody can be told apart,
- * so every request gets this answer, with or without a token. The message names the setting and
- * what is wrong with it, never a token.
+ * A setting that can't be used (lib/participants.ts). Until it is fixed nobody can post or read,
+ * so every request answers 500. What is wrong (which entry, which token variable) is written to
+ * the server log. A caller who holds the token of someone on the list is told as well, so the page
+ * and the command line can show it to a participant. Anyone else, with a wrong token or none, gets
+ * a 500 that names nothing. No answer and no log line ever holds a token.
  */
-function misconfigured(e: ConfigError): Response {
+function misconfigured(e: ConfigError, request?: unknown): Response {
   if (lastReported !== e.message) {
     lastReported = e.message; // once per problem, not once per request
     console.error(`[trialog] Configuration error: ${e.message}`);
   }
-  return error(500, `Configuration error: ${e.message}`);
+  const insider = request instanceof Request && holdsListedToken(request.headers.get('authorization'));
+  return error(500, insider ? `Configuration error: ${e.message}` : MISCONFIGURED);
 }
 let lastReported = '';
 
-/** Returns [sender, null] or [null, 401 Response], or [null, 500 Response] when the participants setting is broken. */
+/** Returns [sender, null] or [null, 401 Response], or [null, 500 Response] when the participants setting is broken (see misconfigured). */
 export function authenticate(request: Request): [Sender, null] | [null, Response] {
   let sender: Sender | null;
   try {
     sender = senderFromAuth(request.headers.get('authorization'));
   } catch (e) {
-    if (e instanceof ConfigError) return [null, misconfigured(e)];
+    if (e instanceof ConfigError) return [null, misconfigured(e, request)];
     throw e;
   }
   lastReported = ''; // the setting is usable (again): a later problem is logged afresh
@@ -85,7 +91,7 @@ export function safe<A extends unknown[]>(handler: (...args: A) => Promise<Respo
     try {
       return await handler(...args);
     } catch (e) {
-      if (e instanceof ConfigError) return misconfigured(e);
+      if (e instanceof ConfigError) return misconfigured(e, args[0]);
       console.error('[trialog]', e);
       return error(500, 'Server error. Check the Vercel function logs.');
     }

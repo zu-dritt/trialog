@@ -2,11 +2,9 @@
 -- A row is created by an upload (POST /api/attachments) and linked to a message when that message
 -- is posted. Uploads that stay unlinked for more than an hour are deleted by the next upload.
 -- `data` holds the image after it was re-encoded without metadata, at most 4 MB.
--- The check on `sender` listed three names until 004-any-participants.sql; a database made by the
--- earlier version of this file is brought in line by that migration.
 CREATE TABLE IF NOT EXISTS attachments (
   id           TEXT PRIMARY KEY CHECK (id ~ '^att_[a-z0-9]+$'),
-  sender       TEXT NOT NULL CONSTRAINT attachments_sender_shape CHECK (sender ~ '^[a-z][a-z0-9-]{0,23}$'),
+  sender       TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david')),
   message_id   BIGINT REFERENCES messages (id) ON DELETE CASCADE,
   position     SMALLINT NOT NULL DEFAULT 0,
   content_type TEXT NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),

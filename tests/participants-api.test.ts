@@ -195,32 +195,44 @@ test('messages of someone who is no longer a participant stay readable', async (
   assert.equal(unpin.status, 200);
 });
 
-test('a broken setting answers 500 on every endpoint, says what is wrong, and shows no secret', async () => {
+test('a broken setting answers 500 on every endpoint; only someone with a participant\'s token is told what is wrong', async () => {
   const before = (await all('ben')).length;
   const errors: string[] = [];
   const logError = console.error;
   console.error = (...args: unknown[]) => { errors.push(args.join(' ')); };
-  const broken: [Record<string, string | undefined>, RegExp][] = [
-    [{ PARTICIPANTS: 'ana-maria:human,ben:human,scout:agent,quill-2:robot' }, /^Configuration error: PARTICIPANTS entry 4 \("quill-2"\) needs the kind human or agent/],
-    [{ PARTICIPANTS: 'ana-maria:human' }, /^Configuration error: PARTICIPANTS must list at least 2 participants/],
-    [{ PARTICIPANTS: `${PARTICIPANTS},all:agent` }, /^Configuration error: PARTICIPANTS entry 5 uses the name "all", which is reserved/],
-    [{ SCOUT_TOKEN: undefined }, /^Configuration error: PARTICIPANTS lists scout, but SCOUT_TOKEN is not set or shorter than 16 characters/],
-    [{ SCOUT_TOKEN: 'short-secret' }, /^Configuration error: PARTICIPANTS lists scout, but SCOUT_TOKEN is not set/],
-    [{ SCOUT_TOKEN: TOKENS.ben }, /^Configuration error: BEN_TOKEN and SCOUT_TOKEN hold the same token/],
+  // What is changed, what the log and a participant are told, and whose tokens count as a participant's then.
+  const broken: [Record<string, string | undefined>, RegExp, string[]][] = [
+    [{ PARTICIPANTS: 'ana-maria:human,ben:human,scout:agent,quill-2:robot' }, /^Configuration error: PARTICIPANTS entry 4 \("quill-2"\) needs the kind human or agent/, ['ana-maria', 'ben', 'scout', 'quill-2']],
+    [{ PARTICIPANTS: 'ana-maria:human' }, /^Configuration error: PARTICIPANTS must list at least 2 participants/, ['ana-maria']],
+    [{ PARTICIPANTS: `${PARTICIPANTS},all:agent` }, /^Configuration error: PARTICIPANTS entry 5 uses the name "all", which is reserved/, ['ana-maria', 'ben', 'scout', 'quill-2']],
+    [{ PARTICIPANTS: 'Ana Maria=human;ben' }, /^Configuration error: PARTICIPANTS must list at least 2 participants/, []],
+    [{ SCOUT_TOKEN: undefined }, /^Configuration error: PARTICIPANTS lists scout, but SCOUT_TOKEN is not set or shorter than 16 characters/, ['ana-maria', 'ben', 'quill-2']],
+    [{ SCOUT_TOKEN: 'short-secret' }, /^Configuration error: PARTICIPANTS lists scout, but SCOUT_TOKEN is not set/, ['ana-maria', 'ben', 'quill-2']],
+    [{ SCOUT_TOKEN: TOKENS.ben }, /^Configuration error: BEN_TOKEN and SCOUT_TOKEN hold the same token/, ['ana-maria', 'ben', 'quill-2']],
   ];
+  const PLAIN = 'Configuration error. The details are in the server log.';
+  const secrets = [...Object.values(TOKENS), LEFTOVER_GROK_TOKEN, 'short-secret'];
   try {
-    for (const [change, expected] of broken) {
+    for (const [change, expected, insiders] of broken) {
       const saved = Object.fromEntries(Object.keys(change).map((k) => [k, process.env[k]]));
       for (const [k, v] of Object.entries(change)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
       try {
-        // With a good token, with a wrong one and with none: nobody is let in, and nobody gets a 401 that hides the cause.
-        for (const as of ['ben', 'not-a-real-token-0123456789', undefined]) {
+        // Nobody is let in, whoever asks, and nobody gets a 401 that would hide that the hub is down.
+        for (const as of ['ana-maria', 'ben', 'scout', 'quill-2', LEFTOVER_GROK_TOKEN, 'short-secret', 'not-a-real-token-0123456789', undefined]) {
           for (const [endpoint, pending] of everyEndpoint(as)) {
             const res = await pending;
             assert.equal(res.status, 500, `${endpoint} as ${as}`);
             const body = await res.text();
-            assert.match((JSON.parse(body) as { error: string }).error, expected, endpoint);
-            for (const secret of [...Object.values(TOKENS), LEFTOVER_GROK_TOKEN, 'short-secret']) assert.ok(!body.includes(secret), `${endpoint} shows a token`);
+            const { error } = JSON.parse(body) as { error: string };
+            if (as && insiders.includes(as)) {
+              // A participant with their token: told which setting to fix.
+              assert.match(error, expected, `${endpoint} as ${as}`);
+            } else {
+              // A wrong token, a token that is not on the list, or none: a 500 that names nothing.
+              assert.equal(error, PLAIN, `${endpoint} as ${as}`);
+              assert.doesNotMatch(body, /PARTICIPANTS|_TOKEN|ana|ben|scout|quill|entry|human|agent/i, `${endpoint} as ${as}`);
+            }
+            for (const secret of secrets) assert.ok(!body.includes(secret), `${endpoint} shows a token`);
           }
         }
       } finally {
@@ -230,13 +242,15 @@ test('a broken setting answers 500 on every endpoint, says what is wrong, and sh
   } finally {
     console.error = logError;
   }
-  // The log has each problem once, not once per request, and no token either. (The missing and
-  // the too-short token are the same problem with the same message, so they share a line.)
-  assert.equal(errors.length, broken.length - 1);
-  assert.equal(new Set(errors).size, errors.length);
+  // The log has the details of each problem once, not once per request, and never a token. (The
+  // missing and the too-short token are the same problem with the same message, so they share a
+  // line; so do the two lists with too few entries, which come one after a different problem.)
+  assert.equal(errors.length, 6);
+  assert.ok(errors.every((line, i) => line !== errors[i - 1]), 'the same problem twice in a row is one line');
+  for (const [, expected] of broken) assert.ok(errors.some((line) => expected.test(line.replace('[trialog] ', ''))), String(expected));
   for (const line of errors) {
     assert.match(line, /^\[trialog\] Configuration error: /);
-    for (const secret of [...Object.values(TOKENS), 'short-secret']) assert.ok(!line.includes(secret));
+    for (const secret of secrets) assert.ok(!line.includes(secret));
   }
   // Fixed again: everything works, and nothing was stored in the meantime.
   assert.equal((await who('ben')).status, 200);

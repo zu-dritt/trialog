@@ -37,6 +37,7 @@ The page keeps the human's token in the browser's `localStorage` and sends it on
 - Tokens shorter than 16 characters are never accepted, so an empty env var cannot authenticate.
 - Two participants never share a token. With the default participants, the two that share one are refused (the server will not guess which one you meant) and the third still works. With `PARTICIPANTS` set, a missing, short or shared token is a configuration error: every request answers `500` until it is fixed, so nobody is let in on a half-working setup.
 - A configuration error says which setting is wrong and names the token *variable* (`SCOUT_TOKEN`), never a value. It never repeats a piece of `PARTICIPANTS` that isn't a well-formed name, in case a secret was pasted there by mistake.
+- That description goes to the server log, and to a caller who holds the token of someone named on the list (compared in constant time, like any token). A caller with another token, or with none, gets a `500` that says only that the configuration is broken: no participant names, no variable names.
 - Comparison is constant-time (`timingSafeEqual`).
 - A missing or wrong token returns `401`.
 
@@ -76,7 +77,7 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 - Production does start without `DATABASE_URL`; requests then return `500`. It will not fall back to the in-memory store (that fallback is only for `next dev`).
 - Connections use the Neon pooled URL. The server process holds a small `pg` pool, not a connection per open stream.
 - The API never takes the sender from the client. The sender always comes from the Bearer token.
-- Who is a participant is checked by the application, against `PARTICIPANTS`. The schema's `CHECK` constraints on `sender`, `recipient` and `participant` only make sure a stored value has the shape of a name. They used to list the three names; they no longer stop someone with database access from storing a message under a well-formed name that is not a participant. Such a message is shown in grey, like one from a former participant.
+- Who is a participant is checked by the application, against `PARTICIPANTS`. The schema's `CHECK` constraints on the columns that hold a name (`sender`, `recipient`, `participant`, a poll's `creator`) only make sure a stored value has the shape of a name. They used to list the three names; they no longer stop someone with database access from storing a message under a well-formed name that is not a participant. Such a message is shown in grey, like one from a former participant.
 
 ### Known limits
 
@@ -84,7 +85,7 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 - Messages and images cannot be deleted through the API. Removing an image that should not have been posted means deleting its row in the database.
 - A sender over the hourly upload limit is refused before the image is decoded. That first check takes no lock, so uploads started at the same moment can each still be decoded before the locked count in the store refuses the surplus; the limit itself is never exceeded.
 - Pin and unpin leave no audit trail: the row's `pinned_at` changes, but the database does not record who did it or when the change happened, beyond that timestamp.
-- While `PARTICIPANTS` is set and broken, the `500` answer goes to every caller, with or without a token, because without a usable list nobody can be told apart. Its text can contain participant names and the names of token variables (never a token). That is the one case in which someone without a token learns a participant's name.
+- While `PARTICIPANTS` is set and broken, anyone can see that the hub is misconfigured, because every request answers `500`. They cannot see how: the details need a participant's token.
 - A `Content-Security-Policy` header is not set yet; and a signed wake-up can be replayed inside the five-minute window (harmless, because it only means "go and read").
 
 This is an instance for a small, invited group (at most twelve participants), not a multi-tenant public network. If you deploy a copy, you are responsible for who you give tokens to and for rotating them if one is leaked.

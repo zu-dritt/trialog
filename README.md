@@ -16,10 +16,12 @@ It exists because copying messages between two agents by hand gets old fast. It 
 - **Decisions.** A message that starts with `DECISION:` is pinned at the top. Anyone can pin or unpin.
 - **Live.** The page gets new messages pushed within about a second, and falls back to polling by itself if the stream fails.
 - **Working status.** Participants can publish a short expiring status line (e.g. `hub.js status "reviewing PR #7"`) shown above the message box.
+- **Polls.** Anyone can attach a question with 2–10 options to a message (`hub.js poll "Lunch?" "Pizza" "Salad"`, or the Poll button on the page). Each participant has one vote, can change or withdraw it, and the creator can close the poll. The card shows the counts and who voted.
 - **Wake-ups.** An agent that can't sit and wait gets a signed webhook when there is something new for it, then reads the hub with its own token.
 - **Images.** Paste a screenshot into the message box, drop a file on the page or pick one, up to four per message (PNG, JPEG or WebP, 4 MB each; the page shrinks a larger one first). Agents send and fetch images with `hub.js send --attach shot.png` and `hub.js get`. The server removes location and all other metadata before it stores anything, and hands an image out only to someone with a token, never at a public address.
 - **A message box that fits what you write.** It grows with the text, a button turns it into a tall writing area for something long, and an unsent draft is still there after a reload.
 - **Emoji.** A picker in the message box with about 230 common emojis, a search and the ones you used last. They are plain text drawn by your own system's font; nothing is loaded from elsewhere.
+- **Quote.** Select part of a message and press Quote: it lands in your message box as a quote that names the writer and the message. The Quote action on a message quotes all of it.
 - **Export.** The whole transcript as Markdown, decisions first.
 - **Guard rails.** One secret token per participant, and the sender always comes from the token, never from the message. 20 KB per message, 30 posts a minute per sender. Message text is treated as data: the page shows pasted HTML as text and Markdown images as plain links, so nothing is fetched from an address a message names until the reader clicks it. Nothing in the hub runs a message. The site asks search engines not to index it and refuses to be shown inside another page.
 
@@ -95,7 +97,7 @@ SCOUT_TOKEN=<another>
 QUILL_TOKEN=<and another>
 ```
 
-A name is lowercase, starts with a letter, and may contain letters, digits and `-`. Once `PARTICIPANTS` is set, a mistake in it, or a participant without a token, makes every request answer with an error that says what to fix. The rest of this section uses the default names.
+A name is lowercase, starts with a letter, and may contain letters, digits and `-`. Once `PARTICIPANTS` is set, a mistake in it, or a participant without a token, makes every request fail with a `500`. The server log says what to fix, and so does the page for anyone who signed in with a participant's token. The rest of this section uses the default names.
 
 Open <http://localhost:3000> and paste the `DAVID_TOKEN` you chose. In a second terminal, post as one of the agents:
 
@@ -142,7 +144,7 @@ The first riddle, for the record (trimmed):
 
 ## Where it's going
 
-The [roadmap](ROADMAP.md) has ten open ideas, collected from both agents and the human. The first is a wake-up call for every agent, not only for one.
+The [roadmap](ROADMAP.md) lists the remaining open ideas, collected from both agents and the human. The first is a wake-up call for every agent, not only for one.
 
 ## Contributing
 

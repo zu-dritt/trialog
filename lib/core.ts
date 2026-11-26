@@ -3,18 +3,20 @@
 import { timingSafeEqual } from 'node:crypto';
 import { MIN_TOKEN_LENGTH, loadRoster, tokenEnvName } from './participants';
 import {
-  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_PER_MESSAGE, POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS,
+  POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine,
-  type Attachment, type Author, type Participant, type Sender,
+  type Attachment, type Author, type Participant, type Poll, type Sender,
 } from './shared';
 
 // The image limits, the shape of a name and the status limits live in lib/shared.ts, which the page can load too.
 export {
   IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, NAME_PATTERN, RESERVED_NAMES,
+  POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine,
-  type Attachment, type Author, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Sender,
+  type Attachment, type Author, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Sender,
 } from './shared';
 // Who the participants are is a setting: lib/participants.ts.
 export { MIN_TOKEN_LENGTH } from './participants';
@@ -28,6 +30,8 @@ export interface Message {
   pinned_at: string | null;
   /** Always present; empty when the message has no images. */
   attachments: Attachment[];
+  /** Present when a poll is attached to this message; otherwise omitted or null. */
+  poll?: Poll | null;
 }
 
 export const MAX_TEXT_BYTES = 20 * 1024; // 20 KB per message
@@ -191,6 +195,77 @@ export function parseStatusInput(body: unknown): ParsedStatusInput {
   return { ok: true, text, ttlSeconds };
 }
 
+export type ParsedPollInput =
+  | { ok: true; question: string; options: string[]; recipient: Sender | null }
+  | { ok: false; status: number; error: string };
+
+function cleanPollText(value: unknown, label: string, max: number): string | { status: number; error: string } {
+  if (typeof value !== 'string') {
+    return { status: 400, error: `"${label}" must be a plain text string (1–${max} characters).` };
+  }
+  const text = value.replace(/[\r\n\t]+/g, ' ').trim();
+  if (!text || /[\x00-\x1f\x7f]/.test(text)) {
+    return { status: 400, error: `"${label}" must be a non-empty plain text string (1–${max} characters).` };
+  }
+  if ([...text].length > max) {
+    return { status: 400, error: `"${label}" must be at most ${max} characters.` };
+  }
+  return text;
+}
+
+/**
+ * Validates the POST /api/polls body {question, options, to?}.
+ * Any `sender`/`from`/`participant`/`creator` field in the body is ignored on purpose.
+ */
+export function parsePollInput(body: unknown, names: readonly string[]): ParsedPollInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"question": "...", "options": ["A", "B"]}.' };
+  }
+  const { question: rawQuestion, options: rawOptions, to } = body as { question?: unknown; options?: unknown; to?: unknown };
+  const question = cleanPollText(rawQuestion, 'question', POLL_QUESTION_MAX_LENGTH);
+  if (typeof question !== 'string') return { ok: false, status: question.status, error: question.error };
+  if (!Array.isArray(rawOptions)) {
+    return { ok: false, status: 400, error: `"options" must be a list of ${POLL_MIN_OPTIONS}–${POLL_MAX_OPTIONS} plain text strings.` };
+  }
+  if (rawOptions.length < POLL_MIN_OPTIONS || rawOptions.length > POLL_MAX_OPTIONS) {
+    return { ok: false, status: 400, error: `A poll needs ${POLL_MIN_OPTIONS}–${POLL_MAX_OPTIONS} options.` };
+  }
+  const options: string[] = [];
+  for (let i = 0; i < rawOptions.length; i++) {
+    const option = cleanPollText(rawOptions[i], `options[${i}]`, POLL_OPTION_MAX_LENGTH);
+    if (typeof option !== 'string') return { ok: false, status: option.status, error: option.error };
+    options.push(option);
+  }
+  if (new Set(options).size !== options.length) {
+    return { ok: false, status: 400, error: 'Each option must be different.' };
+  }
+  const recipient = parseRecipient(to, names);
+  if (recipient === undefined) return { ok: false, status: 400, error: recipientHint(names) };
+  return { ok: true, question, options, recipient };
+}
+
+export type ParsedVoteInput =
+  | { ok: true; option: number }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Validates the POST /api/polls/:id/vote body {option}.
+ * `option` is the 1-based index of the choice. Any `participant` field is ignored.
+ */
+export function parseVoteInput(body: unknown): ParsedVoteInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"option": 1}.' };
+  }
+  const { option } = body as { option?: unknown };
+  if (typeof option !== 'number' || !Number.isInteger(option) || option < 1 || option > POLL_MAX_OPTIONS) {
+    return { ok: false, status: 400, error: `"option" must be a whole number from 1 to ${POLL_MAX_OPTIONS}.` };
+  }
+  return { ok: true, option };
+}
+
+/** True when the string is a well-formed poll id. */
+export const isPollId = (value: unknown): value is string => typeof value === 'string' && POLL_ID.test(value);
+
 /** Parses ?since=<id>. Returns a non-negative integer, null when absent, or undefined when invalid. */
 export function parseSince(value: string | null | undefined): number | null | undefined {
   if (value === null || value === undefined || value === '') return null;
@@ -235,6 +310,15 @@ export function toMarkdown(messages: Message[], exportedAt: Date = new Date()): 
     if (m.text.trim()) out.push(m.text.trimEnd(), '');
     // The transcript names each image; the bytes stay in the hub, behind the token.
     if (m.attachments?.length) out.push(m.attachments.map(attachmentLabel).join('  \n'), '');
+    if (m.poll) {
+      const closed = m.poll.closed_at ? ' (closed)' : '';
+      out.push(`Poll:${closed} ${m.poll.question}`, '');
+      for (const opt of m.poll.options) {
+        const who = opt.voters.length ? ` — ${opt.voters.map(displayName).join(', ')}` : '';
+        out.push(`- ${opt.index}. ${opt.text} (${opt.votes}${who})`);
+      }
+      out.push('');
+    }
     out.push('---', '');
   }
   return out.join('\n');

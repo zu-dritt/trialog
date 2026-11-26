@@ -1,13 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Message, Sender } from '../lib/core';
-import { MAX_ATTACHMENTS_PER_MESSAGE, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
+import type { Message, Poll, Sender } from '../lib/core';
+import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
+import { PollCard, PollComposer, withPolls } from './polls';
+import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { StatusBar } from './status';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -30,6 +32,7 @@ interface MessagesResponse {
   me: Sender;
   messages: Message[];
   pinned: Message[];
+  polls?: Poll[];
 }
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
@@ -86,6 +89,9 @@ export default function Page() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollBusy, setPollBusy] = useState(false);
+  const [pollError, setPollError] = useState('');
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
   const [expanded, setExpanded] = useState(false); // the tall writing area
@@ -217,6 +223,7 @@ export default function Page() {
       setMe(data.me);
       addMessages(data.messages);
       setPinned(data.pinned);
+      if (data.polls?.length) setMessages((list) => withPolls(list, data.polls ?? []));
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -336,8 +343,30 @@ export default function Page() {
     const at = cursorAfterInsert.current;
     if (at === null) return;
     cursorAfterInsert.current = null;
-    boxRef.current?.setSelectionRange(at, at);
+    const box = boxRef.current;
+    if (!box) return;
+    box.setSelectionRange(at, at);
+    // Something long, like a quote, can put the cursor below what the box shows. Bring it into view.
+    if (at >= box.value.length) box.scrollTop = box.scrollHeight;
   }, [draft]);
+
+  // Quote a selection: text selected inside one message can be put into the message box as a quote.
+  const [quotable, clearQuotable] = useQuotableSelection();
+  /** Quotes `selected` from message `m`, or the whole message when `selected` is null. */
+  const addQuote = useCallback((m: Message, selected: string | null) => {
+    const box = boxRef.current;
+    if (!box) return;
+    const author = displayName(m.sender);
+    const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
+    if (selected === null && source === '') return;
+    const quote = selected === null ? quoteMessage(author, m.id, source) : quoteSelection(author, m.id, selected);
+    const next = insertQuote(box.value, box.selectionStart, box.selectionEnd, quote);
+    cursorAfterInsert.current = next.cursor;
+    setDraft(next.text);
+    clearQuotable();
+    box.focus();
+  }, [clearQuotable]);
+  const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
 
   const uploading = drafts.some((d) => d.state === 'uploading');
   const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
@@ -404,6 +433,54 @@ export default function Page() {
     }
   };
 
+  const applyPoll = (poll: Poll) => {
+    setMessages((list) => withPolls(list, [poll]));
+    setPinned((list) => withPolls(list, [poll]));
+  };
+
+  const createPoll = async (question: string, options: string[]) => {
+    setPollBusy(true);
+    setPollError('');
+    try {
+      const body: { question: string; options: string[]; to?: string } = { question, options };
+      if (to) body.to = to;
+      const res = await api('/api/polls', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = (await res.json()) as { message: Message; poll: Poll };
+      setMessages((list) => merge(list, [data.message]));
+      setPollOpen(false);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setPollError(errorMessage(e));
+    } finally {
+      setPollBusy(false);
+    }
+  };
+
+  const voteOnPoll = async (pollId: string, option: number | null) => {
+    try {
+      if (option === null) {
+        const data = (await (await api(`/api/polls/${pollId}/vote`, { method: 'DELETE' })).json()) as { poll: Poll };
+        applyPoll(data.poll);
+      } else {
+        const data = (await (await api(`/api/polls/${pollId}/vote`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ option }),
+        })).json()) as { poll: Poll };
+        applyPoll(data.poll);
+      }
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+  const closePoll = async (pollId: string) => {
+    try {
+      const data = (await (await api(`/api/polls/${pollId}/close`, { method: 'POST' })).json()) as { poll: Poll };
+      applyPoll(data.poll);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
 
@@ -439,6 +516,8 @@ export default function Page() {
         </section>
       )}
 
+      {quotable && quotedMessage && <QuoteSelectionButton at={quotable} onQuote={() => addQuote(quotedMessage, quotable.text)} />}
+
       <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.map((m) => {
           const date = new Date(m.created_at);
@@ -466,16 +545,31 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    <QuoteMessageButton
+                      messageId={m.id}
+                      // With text selected in this message, the button quotes that text; otherwise the whole message.
+                      onQuote={() => { const pick = pickSelection(window.getSelection()); addQuote(m, pick?.messageId === m.id ? pick.text : null); }}
+                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                    />
                     <button
-                      className={`ml-auto cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
+                      className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
                       title={isPinned ? 'Unpin decision' : 'Pin as decision'}
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
-                  {m.text.trim() !== '' && (
-                    <div className="md wrap-anywhere">
+                  {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
+                    <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
                       <MessageBody text={m.text} />
                     </div>
+                  )}
+                  {m.poll && (
+                    <PollCard
+                      poll={m.poll}
+                      me={me}
+                      participants={participants}
+                      onVote={(pollId, option) => { void voteOnPoll(pollId, option); }}
+                      onClose={(pollId) => { void closePoll(pollId); }}
+                    />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
                 </div>
@@ -492,6 +586,14 @@ export default function Page() {
         {setupError && <div role="alert" className="mb-1.5 text-[13px] text-bad">{setupError}</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
         <DraftChips drafts={drafts} onRemove={removeDraft} />
+        {pollOpen && (
+          <PollComposer
+            busy={pollBusy}
+            error={pollError}
+            onCancel={() => { setPollOpen(false); setPollError(''); }}
+            onCreate={(question, options) => { void createPoll(question, options); }}
+          />
+        )}
         {/* The message box has the full width on every screen. The controls sit in one row below it. */}
         <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           <textarea
@@ -526,6 +628,14 @@ export default function Page() {
               disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
               title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
             >Image</button>
+            <button
+              type="button"
+              className={TOOL}
+              aria-pressed={pollOpen}
+              aria-expanded={pollOpen}
+              aria-controls={pollOpen ? 'poll-composer' : undefined}
+              onClick={() => { setPollOpen((v) => !v); setPollError(''); }}
+            >Poll</button>
             <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={TOOL} />
             <ExpandButton expanded={expanded} onToggle={() => { setExpanded((v) => !v); boxRef.current?.focus(); }} className={TOOL} />
             <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>

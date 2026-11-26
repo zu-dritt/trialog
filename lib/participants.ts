@@ -10,11 +10,14 @@
 // deployment from before the setting existed runs unchanged.
 //
 // With the setting, nothing is guessed: a malformed list, or a participant without a usable token,
-// throws a ConfigError, and every API request answers 500 with its message (lib/http.ts). The
-// messages name the problem and the setting to fix. They never repeat a token, and they never
-// repeat a piece of the setting that isn't a well-formed name.
+// throws a ConfigError, and every API request answers 500 (lib/http.ts). Its message names the
+// problem and the setting to fix. It goes to the server log, and to a caller who holds the token
+// of someone on the list (holdsListedToken); everyone else gets a 500 that says nothing more.
+// The message never repeats a token, and never repeats a piece of the setting that isn't a
+// well-formed name.
 //
 // No Next.js imports here, so Vitest can load it directly.
+import { timingSafeEqual } from 'node:crypto';
 import { NAME_PATTERN, RESERVED_NAMES, type Participant, type ParticipantKind } from './shared';
 
 export const DEFAULT_PARTICIPANTS = 'grok:agent,claude:agent,david:human';
@@ -24,7 +27,10 @@ export const MIN_TOKEN_LENGTH = 16;
 
 type Env = Record<string, string | undefined>;
 
-/** A setting that can't be used as it is. The message is safe to show to any caller. */
+/**
+ * A setting that can't be used as it is. The message holds no secret, but it can name participants
+ * and token variables, so it is only shown to a caller who holds a participant's token.
+ */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -108,4 +114,34 @@ export function loadRoster(env: Env = process.env): Roster {
   const shared = [...owners.values()].find((vars) => vars.length > 1);
   if (shared) throw new ConfigError(`${list(shared)} hold the same token. Every participant needs a token of their own.`);
   return roster;
+}
+
+/**
+ * Whether a Bearer token is the token of someone the setting names, even when the setting as a
+ * whole can't be used. This decides who is told what is wrong with it: a participant with their
+ * token may know, a stranger may not.
+ *
+ * It looks at every well-formed name in PARTICIPANTS (or the default three), reads that name's
+ * token variable, and compares in constant time. A name that isn't well-formed has no variable to
+ * read, and a token shorter than MIN_TOKEN_LENGTH never matches. Nothing here throws.
+ */
+export function holdsListedToken(header: string | null | undefined, env: Env = process.env): boolean {
+  if (typeof header !== 'string') return false;
+  const m = /^Bearer[ \t]+(\S+)[ \t]*$/i.exec(header);
+  if (!m) return false;
+  const given = Buffer.from(m[1]);
+  const names = new Set(
+    (env.PARTICIPANTS?.trim() || DEFAULT_PARTICIPANTS).split(',')
+      .map((entry) => entry.split(':')[0].trim())
+      .filter((name) => NAME_PATTERN.test(name) && !RESERVED_NAMES.includes(name)),
+  );
+  let held = false;
+  // Every name is compared, match or not, so the time taken doesn't say whose token it was.
+  for (const name of names) {
+    const token = env[tokenEnvName(name)];
+    if (!usable(token)) continue;
+    const expected = Buffer.from(token);
+    if (expected.length === given.length && timingSafeEqual(expected, given)) held = true;
+  }
+  return held;
 }

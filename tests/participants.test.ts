@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseMessageInput, parseRecipient, senderFromAuth, toMarkdown, welcomeText, type Message } from '../lib/core';
 import {
-  ConfigError, DEFAULT_PARTICIPANTS, MAX_PARTICIPANTS, loadRoster, parseParticipants, tokenEnvName,
+  ConfigError, DEFAULT_PARTICIPANTS, MAX_PARTICIPANTS, holdsListedToken, loadRoster, parseParticipants, tokenEnvName,
 } from '../lib/participants';
 import { NEUTRAL_COLOR, PARTICIPANT_COLORS, colorOf, displayName } from '../lib/shared';
 import { webhookConfig } from '../lib/webhook';
@@ -151,6 +151,39 @@ test('two participants with the same token: refused, and the token is not shown'
   const lenient = { GROK_TOKEN: same, CLAUDE_TOKEN: same, DAVID_TOKEN: 'david-token-0123456789abcdef' };
   assert.equal(senderFromAuth(`Bearer ${same}`, lenient), null);
   assert.equal(senderFromAuth(`Bearer ${lenient.DAVID_TOKEN}`, lenient), 'david');
+});
+
+test('who is told what is wrong with a broken setting: only the holder of a listed participant\'s token', () => {
+  const bearer = (token: string) => `Bearer ${token}`;
+  // The setting is fine: every participant's token counts, and nothing else does.
+  assert.equal(holdsListedToken(bearer(TOKENS.BEN_TOKEN), ENV), true);
+  assert.equal(holdsListedToken(bearer(TOKENS.QUILL_2_TOKEN), ENV), true);
+  for (const header of [undefined, null, '', 'Bearer', TOKENS.BEN_TOKEN, `Basic ${TOKENS.BEN_TOKEN}`, bearer(`${TOKENS.BEN_TOKEN}x`), bearer('not-a-real-token-0123456789')]) {
+    assert.equal(holdsListedToken(header, ENV), false, String(header));
+  }
+  // A token for a name that is not on the list counts for nothing, even though its variable is set.
+  const leftover = { ...ENV, GROK_TOKEN: 'grok-leftover-token-0123456789' };
+  assert.equal(holdsListedToken(bearer(leftover.GROK_TOKEN), leftover), false);
+  // The setting is broken, but the names in it can still be read: their tokens still count.
+  const badKind = { ...ENV, PARTICIPANTS: 'ana-maria:human,ben:robot,scout:agent' };
+  assert.throws(() => loadRoster(badKind), ConfigError);
+  assert.equal(holdsListedToken(bearer(TOKENS.BEN_TOKEN), badKind), true);
+  assert.equal(holdsListedToken(bearer(TOKENS.QUILL_2_TOKEN), badKind), false, 'quill-2 is not on this list');
+  const { SCOUT_TOKEN: _scout, ...noScout } = ENV;
+  assert.equal(holdsListedToken(bearer(TOKENS.BEN_TOKEN), noScout), true);
+  assert.equal(holdsListedToken(bearer(TOKENS.SCOUT_TOKEN), noScout), false, 'the missing token is nobody\'s');
+  // Two share a token: whoever holds it is one of them.
+  assert.equal(holdsListedToken(bearer(TOKENS.BEN_TOKEN), { ...ENV, SCOUT_TOKEN: TOKENS.BEN_TOKEN }), true);
+  // A short token never counts, and neither does a name that is not well-formed or is reserved.
+  assert.equal(holdsListedToken('Bearer short', { PARTICIPANTS: 'ana:human,ben:human', ANA_TOKEN: 'short' }), false);
+  const odd = { PARTICIPANTS: 'Ana:human,all:agent,hub:agent', ANA_TOKEN: 'ana-odd-token-0123456789abcdef', ALL_TOKEN: 'all-odd-token-0123456789abcdef', HUB_TOKEN: 'hub-odd-token-0123456789abcdef' };
+  for (const token of [odd.ANA_TOKEN, odd.ALL_TOKEN, odd.HUB_TOKEN]) assert.equal(holdsListedToken(bearer(token), odd), false);
+  // Without the setting, the default three.
+  const three = { CLAUDE_TOKEN: 'claude-only-token-0123456789' };
+  assert.equal(holdsListedToken(bearer(three.CLAUDE_TOKEN), three), true);
+  assert.equal(holdsListedToken(bearer(TOKENS.BEN_TOKEN), { ...three, ...TOKENS }), false);
+  // Whatever the setting holds, this never throws.
+  for (const setting of [',,,', ':', 'a:b:c:d', '🙂:human', ' ', 'x'.repeat(5000)]) assert.doesNotThrow(() => holdsListedToken(bearer(TOKENS.BEN_TOKEN), { ...ENV, PARTICIPANTS: setting }));
 });
 
 test('recipients are the configured names', () => {

@@ -22,7 +22,7 @@ INSERT INTO webhook_state (id, last_notified_id)
 
 CREATE TABLE IF NOT EXISTS attachments (
      id           TEXT PRIMARY KEY CHECK (id ~ '^att_[a-z0-9]+$'),
-     sender       TEXT NOT NULL CONSTRAINT attachments_sender_shape CHECK (sender ~ '^[a-z][a-z0-9-]{0,23}$'),
+     sender       TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david')),
      message_id   BIGINT REFERENCES messages (id) ON DELETE CASCADE,
      position     SMALLINT NOT NULL DEFAULT 0,
      content_type TEXT NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
@@ -38,13 +38,48 @@ CREATE INDEX IF NOT EXISTS attachments_message_id ON attachments (message_id);
 CREATE INDEX IF NOT EXISTS attachments_sender_created_at ON attachments (sender, created_at);
 
 CREATE TABLE IF NOT EXISTS participant_status (
-     participant TEXT PRIMARY KEY CONSTRAINT participant_status_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     participant TEXT PRIMARY KEY CHECK (participant IN ('grok', 'claude', 'david')),
      text        TEXT NOT NULL CHECK (char_length(text) BETWEEN 1 AND 80),
      expires_at  TIMESTAMPTZ NOT NULL,
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    );
 
 CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at);
+
+CREATE TABLE IF NOT EXISTS polls (
+  id          TEXT PRIMARY KEY CHECK (id ~ '^poll_[a-z0-9]+$'),
+  message_id  BIGINT NOT NULL UNIQUE REFERENCES messages (id) ON DELETE CASCADE,
+  creator     TEXT NOT NULL,
+  question    TEXT NOT NULL CHECK (char_length(question) BETWEEN 1 AND 200),
+  options     TEXT[] NOT NULL,
+  closed_at   TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT polls_creator_is_participant CHECK (creator IN ('grok', 'claude', 'david')),
+  CONSTRAINT polls_options_shape CHECK (
+    cardinality(options) BETWEEN 2 AND 10
+    AND array_position(options, NULL) IS NULL
+    AND char_length(options[1]) BETWEEN 1 AND 80
+    AND char_length(options[2]) BETWEEN 1 AND 80
+    AND char_length(options[3]) BETWEEN 1 AND 80
+    AND char_length(options[4]) BETWEEN 1 AND 80
+    AND char_length(options[5]) BETWEEN 1 AND 80
+    AND char_length(options[6]) BETWEEN 1 AND 80
+    AND char_length(options[7]) BETWEEN 1 AND 80
+    AND char_length(options[8]) BETWEEN 1 AND 80
+    AND char_length(options[9]) BETWEEN 1 AND 80
+    AND char_length(options[10]) BETWEEN 1 AND 80
+  )
+);
+
+CREATE TABLE IF NOT EXISTS poll_votes (
+  poll_id      TEXT NOT NULL REFERENCES polls (id) ON DELETE CASCADE,
+  participant  TEXT NOT NULL,
+  option_index SMALLINT NOT NULL CHECK (option_index >= 1 AND option_index <= 10),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (poll_id, participant),
+  CONSTRAINT poll_votes_participant_is_participant CHECK (participant IN ('grok', 'claude', 'david'))
+);
 
 DO $$
    DECLARE old record;
@@ -53,7 +88,8 @@ DO $$
      FOR old IN
        SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
        WHERE contype = 'c'
-         AND conrelid IN ('messages'::regclass, 'attachments'::regclass, 'participant_status'::regclass)
+         AND conrelid IN ('messages'::regclass, 'attachments'::regclass, 'participant_status'::regclass,
+                          'polls'::regclass, 'poll_votes'::regclass)
          AND pg_get_constraintdef(oid) LIKE '%''grok''%'
      LOOP
        EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', old.tbl, old.conname);
@@ -69,5 +105,11 @@ DO $$
      END IF;
      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'participant_status'::regclass AND conname = 'participant_status_participant_shape') THEN
        ALTER TABLE participant_status ADD CONSTRAINT participant_status_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'polls'::regclass AND conname = 'polls_creator_shape') THEN
+       ALTER TABLE polls ADD CONSTRAINT polls_creator_shape CHECK (creator ~ '^[a-z][a-z0-9-]{0,23}$');
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'poll_votes'::regclass AND conname = 'poll_votes_participant_shape') THEN
+       ALTER TABLE poll_votes ADD CONSTRAINT poll_votes_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$');
      END IF;
    END $$;
