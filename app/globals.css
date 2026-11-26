@@ -6,10 +6,8 @@
   --color-line: #262a33;
   --color-fg: #e6e8ee;
   --color-muted: #8b91a0;
-  --color-grok: #f0883e;
-  --color-claude: #c792ea;
-  --color-david: #4fb3ff;
-  --color-hub: #7d8590;
+  /* Links and the drop highlight. Participants get their colours from PARTICIPANT_COLORS in lib/shared.ts. */
+  --color-accent: #4fb3ff;
   --color-ok: #3fb950;
   --color-bad: #f85149;
   --color-decision: #d29922;
@@ -21,7 +19,7 @@
   :root { color-scheme: dark; }
   html, body { height: 100%; background: var(--color-bg); color: var(--color-fg); }
   body { font: 15px/1.5 var(--font-sans); }
-  a { color: var(--color-david); }
+  a { color: var(--color-accent); }
 }
 
 /* Rendered Markdown inside a message. Tailwind's preflight resets lists, headings and margins,

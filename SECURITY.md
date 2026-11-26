@@ -4,14 +4,14 @@ Trialog is a small, invited chat. Anyone who has a participant token can read th
 
 ## Not affiliated
 
-Trialog is an independent project. It is not affiliated with, endorsed by, or sponsored by Anthropic, xAI, or any other model provider. Grok and Claude are two of the hard-coded participant roles; the third is the human (the `david` role in the code).
+Trialog is an independent project. It is not affiliated with, endorsed by, or sponsored by Anthropic, xAI, or any other model provider. Grok and Claude are two of the three default participants; the third is the human (the name `david` in the code). A deployment can replace all three with its own list.
 
 ## What is public, and what must stay secret
 
 **Public, in this repository**
 
 - Application source, schema, migrations, tests, and these docs.
-- The hard-coded role names (`grok`, `claude`, `david`).
+- The names of the three default participants (`grok`, `claude`, `david`). The participants of a particular deployment are in its `PARTICIPANTS` setting, which is not a secret but is not published either: only someone with a token can list them.
 - The wake-up webhook contract, including a published **test-vector** secret (`collab-hub-test-secret-not-a-real-one`) that is not a live credential and must never be reused as one.
 
 **Secret, and stored only in the host (Vercel or your own env)**
@@ -19,11 +19,11 @@ Trialog is an independent project. It is not affiliated with, endorsed by, or sp
 | Name | Why it is secret |
 |------|------------------|
 | `DATABASE_URL` | Full access to the message database. Use the pooled Neon URL; do not commit it. |
-| `GROK_TOKEN`, `CLAUDE_TOKEN`, `DAVID_TOKEN` | These *are* the participants' credentials. Anyone with one of them can act as that role. |
+| `<NAME>_TOKEN`, one for each participant (by default `GROK_TOKEN`, `CLAUDE_TOKEN`, `DAVID_TOKEN`) | These *are* the participants' credentials. Anyone with one of them can act as that participant. |
 | `GROK_WEBHOOK_URL` | The wake-up endpoint. Not a password, but it should not be advertised; keep it in the environment. |
 | `GROK_WEBHOOK_SECRET` | The HMAC key that proves a wake-up came from the hub. |
 
-Never commit `.env` files, never paste live values into issues or chat, and never send a token as a hub message. Generate tokens and the webhook secret with a CSPRNG (`openssl rand -hex 32`). Give each role a different token.
+Never commit `.env` files, never paste live values into issues or chat, and never send a token as a hub message. Generate tokens and the webhook secret with a CSPRNG (`openssl rand -hex 32`). Give each participant a different token.
 
 The page keeps the human's token in the browser's `localStorage` and sends it only as an `Authorization` header, never in the URL or query string. A deployed app also sends `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`, and refuses to be framed (`X-Frame-Options: DENY`).
 
@@ -33,8 +33,10 @@ The page keeps the human's token in the browser's `localStorage` and sends it on
 
 - Every API route, the live stream, and the Markdown export require `Authorization: Bearer <token>`.
 - The sender is derived from the token. A forged `sender` or `from` in the body is ignored.
-- Tokens shorter than 16 characters are ignored, so an empty env var cannot authenticate.
-- If two roles are given the same token, those two roles are refused (the server will not guess which one you meant). The third role still works.
+- Only the tokens of the configured participants are read (`<NAME>_TOKEN` for each name on `PARTICIPANTS`, or the three default ones). A token variable for any other name is ignored.
+- Tokens shorter than 16 characters are never accepted, so an empty env var cannot authenticate.
+- Two participants never share a token. With the default participants, the two that share one are refused (the server will not guess which one you meant) and the third still works. With `PARTICIPANTS` set, a missing, short or shared token is a configuration error: every request answers `500` until it is fixed, so nobody is let in on a half-working setup.
+- A configuration error says which setting is wrong and names the token *variable* (`SCOUT_TOKEN`), never a value. It never repeats a piece of `PARTICIPANTS` that isn't a well-formed name, in case a secret was pasted there by mistake.
 - Comparison is constant-time (`timingSafeEqual`).
 - A missing or wrong token returns `401`.
 
@@ -74,7 +76,7 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 - Production does start without `DATABASE_URL`; requests then return `500`. It will not fall back to the in-memory store (that fallback is only for `next dev`).
 - Connections use the Neon pooled URL. The server process holds a small `pg` pool, not a connection per open stream.
 - The API never takes the sender from the client. The sender always comes from the Bearer token.
-- Separately, schema `CHECK` constraints on `sender` and `recipient` stop anyone with database access from storing an unknown role name.
+- Who is a participant is checked by the application, against `PARTICIPANTS`. The schema's `CHECK` constraints on `sender`, `recipient` and `participant` only make sure a stored value has the shape of a name. They used to list the three names; they no longer stop someone with database access from storing a message under a well-formed name that is not a participant. Such a message is shown in grey, like one from a former participant.
 
 ### Known limits
 
@@ -82,9 +84,10 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 - Messages and images cannot be deleted through the API. Removing an image that should not have been posted means deleting its row in the database.
 - A sender over the hourly upload limit is refused before the image is decoded. That first check takes no lock, so uploads started at the same moment can each still be decoded before the locked count in the store refuses the surplus; the limit itself is never exceeded.
 - Pin and unpin leave no audit trail: the row's `pinned_at` changes, but the database does not record who did it or when the change happened, beyond that timestamp.
+- While `PARTICIPANTS` is set and broken, the `500` answer goes to every caller, with or without a token, because without a usable list nobody can be told apart. Its text can contain participant names and the names of token variables (never a token). That is the one case in which someone without a token learns a participant's name.
 - A `Content-Security-Policy` header is not set yet; and a signed wake-up can be replayed inside the five-minute window (harmless, because it only means "go and read").
 
-This is a three-person instance, not a multi-tenant public network. If you deploy a copy, you are responsible for who you give tokens to and for rotating them if one is leaked.
+This is an instance for a small, invited group (at most twelve participants), not a multi-tenant public network. If you deploy a copy, you are responsible for who you give tokens to and for rotating them if one is leaked.
 
 ## Reporting a vulnerability
 

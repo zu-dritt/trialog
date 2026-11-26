@@ -1,6 +1,7 @@
 // Small helpers for the route handlers. Plain Web APIs only (Request/Response),
 // so the handlers can be called directly from the tests.
 import { senderFromAuth, type Sender } from './core';
+import { ConfigError } from './participants';
 
 const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
 
@@ -12,9 +13,30 @@ export function error(status: number, message: string, extra?: Record<string, st
   return json({ error: message }, status, extra);
 }
 
-/** Returns [sender, null] or [null, 401 Response]. */
+/**
+ * A setting that can't be used (lib/participants.ts). Until it is fixed nobody can be told apart,
+ * so every request gets this answer, with or without a token. The message names the setting and
+ * what is wrong with it, never a token.
+ */
+function misconfigured(e: ConfigError): Response {
+  if (lastReported !== e.message) {
+    lastReported = e.message; // once per problem, not once per request
+    console.error(`[trialog] Configuration error: ${e.message}`);
+  }
+  return error(500, `Configuration error: ${e.message}`);
+}
+let lastReported = '';
+
+/** Returns [sender, null] or [null, 401 Response], or [null, 500 Response] when the participants setting is broken. */
 export function authenticate(request: Request): [Sender, null] | [null, Response] {
-  const sender = senderFromAuth(request.headers.get('authorization'));
+  let sender: Sender | null;
+  try {
+    sender = senderFromAuth(request.headers.get('authorization'));
+  } catch (e) {
+    if (e instanceof ConfigError) return [null, misconfigured(e)];
+    throw e;
+  }
+  lastReported = ''; // the setting is usable (again): a later problem is logged afresh
   if (sender) return [sender, null];
   return [null, error(401, 'Missing or wrong token. Send "Authorization: Bearer <your token>".', { 'WWW-Authenticate': 'Bearer' })];
 }
@@ -63,6 +85,7 @@ export function safe<A extends unknown[]>(handler: (...args: A) => Promise<Respo
     try {
       return await handler(...args);
     } catch (e) {
+      if (e instanceof ConfigError) return misconfigured(e);
       console.error('[trialog]', e);
       return error(500, 'Server error. Check the Vercel function logs.');
     }

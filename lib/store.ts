@@ -7,9 +7,10 @@
 import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import {
-  MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
+  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, welcomeText,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Sender,
 } from './core';
+import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -117,11 +118,20 @@ export interface Store {
   listStatuses(): Promise<ParticipantStatus[]>;
 }
 
+// Two instances that start at the same moment take turns at the one statement that may alter tables.
+const MIGRATION_LOCK_ID = 7230420;
+
+// Who may post is decided by the PARTICIPANTS setting, in the application (lib/participants.ts).
+// The database only checks that a stored name has the shape of one, which also fits `hub`, the
+// author of the welcome message. So adding or removing a participant never needs a schema change,
+// and the messages of someone who is no longer a participant stay where they are.
+const NAME_SHAPE = `'${NAME_PATTERN.source}'`;
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS messages (
      id         BIGSERIAL PRIMARY KEY,
-     sender     TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david', 'hub')),
-     recipient  TEXT CHECK (recipient IN ('grok', 'claude', 'david')),
+     sender     TEXT NOT NULL CONSTRAINT messages_sender_shape CHECK (sender ~ ${NAME_SHAPE}),
+     recipient  TEXT CONSTRAINT messages_recipient_shape CHECK (recipient ~ ${NAME_SHAPE}),
      text       TEXT NOT NULL,
      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      pinned_at  TIMESTAMPTZ
@@ -142,7 +152,7 @@ const SCHEMA = [
   // a message later. `data` holds the re-encoded image; only lib/blobs.ts reads or writes it.
   `CREATE TABLE IF NOT EXISTS attachments (
      id           TEXT PRIMARY KEY CHECK (id ~ '^att_[a-z0-9]+$'),
-     sender       TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david')),
+     sender       TEXT NOT NULL CONSTRAINT attachments_sender_shape CHECK (sender ~ ${NAME_SHAPE}),
      message_id   BIGINT REFERENCES messages (id) ON DELETE CASCADE,
      position     SMALLINT NOT NULL DEFAULT 0,
      content_type TEXT NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
@@ -156,12 +166,42 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS attachments_sender_created_at ON attachments (sender, created_at)`,
   // Participant working status (migrations/003-status.sql).
   `CREATE TABLE IF NOT EXISTS participant_status (
-     participant TEXT PRIMARY KEY CHECK (participant IN ('grok', 'claude', 'david')),
+     participant TEXT PRIMARY KEY CONSTRAINT participant_status_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
      text        TEXT NOT NULL CHECK (char_length(text) BETWEEN 1 AND 80),
      expires_at  TIMESTAMPTZ NOT NULL,
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
+  // Any participants (migrations/004-any-participants.sql). A database created before the names
+  // were configurable has checks that list the first three names. This replaces them with the
+  // checks on the shape of a name that a new database gets above. No row is changed, and every
+  // existing row passes, because the old names have that shape. On a database that is already
+  // up to date it only looks, and alters nothing.
+  `DO $$
+   DECLARE old record;
+   BEGIN
+     PERFORM pg_advisory_xact_lock(${MIGRATION_LOCK_ID});
+     FOR old IN
+       SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
+       WHERE contype = 'c'
+         AND conrelid IN ('messages'::regclass, 'attachments'::regclass, 'participant_status'::regclass)
+         AND pg_get_constraintdef(oid) LIKE '%''grok''%'
+     LOOP
+       EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', old.tbl, old.conname);
+     END LOOP;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_sender_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_sender_shape CHECK (sender ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'messages'::regclass AND conname = 'messages_recipient_shape') THEN
+       ALTER TABLE messages ADD CONSTRAINT messages_recipient_shape CHECK (recipient ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'attachments'::regclass AND conname = 'attachments_sender_shape') THEN
+       ALTER TABLE attachments ADD CONSTRAINT attachments_sender_shape CHECK (sender ~ ${NAME_SHAPE});
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'participant_status'::regclass AND conname = 'participant_status_participant_shape') THEN
+       ALTER TABLE participant_status ADD CONSTRAINT participant_status_participant_shape CHECK (participant ~ ${NAME_SHAPE});
+     END IF;
+   END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -215,8 +255,14 @@ const toMessage = (r: Row): Message => ({
   attachments: toAttachments(r.attachments),
 });
 
+export interface StoreOptions {
+  /** The message an empty hub starts with. It names the participants, so getStore() builds it from the setting. */
+  welcome?: string;
+}
+const defaultWelcome = (): string => welcomeText(parseParticipants(DEFAULT_PARTICIPANTS));
+
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
-export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
+export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcome = defaultWelcome() }: StoreOptions = {}): Store {
   let ready: Promise<void> | null = null;
   async function init() {
     for (const stmt of SCHEMA) await db.query(stmt, []);
@@ -224,7 +270,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       `INSERT INTO messages (sender, text)
        SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)
        ON CONFLICT (sender) WHERE sender = 'hub' DO NOTHING`,
-      [WELCOME_TEXT],
+      [welcome],
     );
   }
   function ensure(): Promise<void> {
@@ -431,14 +477,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
   };
 }
 
-export interface MemoryStoreOptions {
+export interface MemoryStoreOptions extends StoreOptions {
   blobs?: Blobs;
   /** The clock, in milliseconds. Tests move it forward to age uploads. */
   now?: () => number;
 }
 
 /** In-memory store with the same behaviour (local development and tests only). */
-export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now }: MemoryStoreOptions = {}): Store {
+export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now, welcome = defaultWelcome() }: MemoryStoreOptions = {}): Store {
   const rows: Message[] = [];
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
@@ -447,7 +493,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     rows.push(m);
     return m;
   };
-  push({ sender: 'hub', text: WELCOME_TEXT });
+  push({ sender: 'hub', text: welcome });
+  // The same check the database makes, so a name that Postgres would refuse is refused here too.
+  const shaped = (name: string): string => {
+    if (!NAME_PATTERN.test(name)) throw new Error('A stored name must have the shape of a participant name.');
+    return name;
+  };
   const copy = (m: Message): Message => ({ ...m, attachments: m.attachments.map((a) => ({ ...a })) });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
@@ -467,7 +518,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
         if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
-      const m = push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta) });
+      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta) });
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },
@@ -577,14 +628,16 @@ const globalStore = globalThis as typeof globalThis & { __collabHubStore?: Promi
 export function getStore(): Promise<Store> {
   if (!globalStore.__collabHubStore) {
     const url = process.env.DATABASE_URL;
+    // Only a new, empty hub uses this: an existing one keeps the welcome message it has.
+    const welcome = welcomeText(loadRoster().participants);
     if (url) {
-      globalStore.__collabHubStore = createPgDb(url).then((db) => createSqlStore(db)).catch((e: unknown) => {
+      globalStore.__collabHubStore = createPgDb(url).then((db) => createSqlStore(db, undefined, { welcome })).catch((e: unknown) => {
         globalStore.__collabHubStore = undefined; // retry on the next request
         throw e;
       });
     } else if (process.env.NODE_ENV !== 'production') {
       console.warn('[trialog] DATABASE_URL is not set: using an in-memory store (messages are lost on restart).');
-      globalStore.__collabHubStore = Promise.resolve(createMemoryStore());
+      globalStore.__collabHubStore = Promise.resolve(createMemoryStore({ welcome }));
     } else {
       return Promise.reject(new Error('DATABASE_URL is not set.'));
     }

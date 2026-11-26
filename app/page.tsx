@@ -1,15 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Author, Message, Sender } from '../lib/core';
-import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
+import type { Message, Sender } from '../lib/core';
+import { MAX_ATTACHMENTS_PER_MESSAGE, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { StatusBar } from './status';
 
-const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
 const POLL_MS = 1500;
@@ -17,14 +16,6 @@ const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
-
-// Full class names per sender, so Tailwind sees them at build time.
-const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
-  grok: { text: 'text-grok', bg: 'bg-grok', border: 'border-l-grok' },
-  claude: { text: 'text-claude', bg: 'bg-claude', border: 'border-l-claude' },
-  david: { text: 'text-david', bg: 'bg-david', border: 'border-l-david' },
-  hub: { text: 'text-hub', bg: 'bg-hub', border: 'border-l-hub' },
-};
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
@@ -36,6 +27,11 @@ interface MessagesResponse {
   me: Sender;
   messages: Message[];
   pinned: Message[];
+}
+/** GET /api/participants: who takes part here. The page has no names of its own. */
+interface ParticipantsResponse {
+  me: Sender;
+  participants: Participant[];
 }
 
 /** Merge new messages into the list, de-duplicated by id and sorted. */
@@ -75,6 +71,8 @@ export default function Page() {
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [drafts, setDrafts] = useState<Draft[]>([]); // images waiting in the composer
   const [dragging, setDragging] = useState(false);
   const lastId = useRef(0);
@@ -173,6 +171,27 @@ export default function Page() {
     const abort = new AbortController();
     lastId.current = 0;
     setMessages([]);
+    setParticipants([]);
+    setSetupError('');
+
+    /**
+     * Asks who takes part and who this token belongs to: the names, the recipient picker and the
+     * colours all come from the answer. Asked again whenever the stream reconnects, so a change to
+     * the server's setting shows up without a reload. A failure here stops nothing: messages are
+     * still shown, in the neutral colour, until an answer arrives.
+     */
+    const loadParticipants = async () => {
+      try {
+        const data = (await (await api('/api/participants', { signal: abort.signal })).json()) as ParticipantsResponse;
+        if (stopped) return;
+        setParticipants(data.participants);
+        setMe(data.me);
+        setSetupError('');
+      } catch (e) {
+        if (errorMessage(e) === 'unauthorized') throw e; // the token was refused: the caller stops
+        if (!stopped && errorMessage(e).startsWith('Configuration error')) setSetupError(errorMessage(e));
+      }
+    };
 
     const addMessages = (incoming: Message[]) => {
       if (!incoming.length) return;
@@ -222,6 +241,8 @@ export default function Page() {
       while (!stopped) {
         let clean = false;
         try {
+          await loadParticipants();
+          if (stopped) return;
           clean = await readStream();
         } catch (e) {
           if (stopped || errorMessage(e) === 'unauthorized') return;
@@ -246,6 +267,11 @@ export default function Page() {
     void run();
     return () => { stopped = true; abort.abort(); };
   }, [token, api]);
+
+  // A recipient who is no longer a participant can't stay selected.
+  useEffect(() => {
+    if (to && participants.length && !participants.some((p) => p.name === to)) setTo('');
+  }, [to, participants]);
 
   // Auto-scroll, unless the reader scrolled up.
   useLayoutEffect(() => {
@@ -344,6 +370,10 @@ export default function Page() {
 
   const pinnedIds = new Set(pinned.map((m) => m.id));
   let lastDay = '';
+  // A name the server doesn't list (the hub's welcome, a former participant) gets the neutral colour.
+  const color = (name: string) => colorOf(name, participants);
+  const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
+  const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
 
   return (
     <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
@@ -351,7 +381,7 @@ export default function Page() {
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
         <span className="flex-1" />
-        {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
+        {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
@@ -362,7 +392,7 @@ export default function Page() {
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
+                <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{displayName(m.sender)}</span>{' '}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -377,22 +407,23 @@ export default function Page() {
           const showDay = day !== lastDay;
           lastDay = day;
           const isPinned = pinnedIds.has(m.id);
-          const s = STYLE[m.sender];
+          const own = color(m.sender);
           return (
             <div key={m.id}>
               {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
               <article
                 id={`m-${m.id}`}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
+                style={{ borderLeftColor: own }}
               >
-                <div className={`grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg ${s.bg}`}>
-                  {NAMES[m.sender]?.[0] ?? '?'}
+                <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
+                  {displayName(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2 text-[13px] text-muted">
-                    <span className={`font-bold ${s.text}`}>{NAMES[m.sender] ?? m.sender}</span>
+                    <span className="font-bold" style={{ color: own }}>{displayName(m.sender)}</span>
                     {m.recipient && (
-                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {NAMES[m.recipient]}</span>
+                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {displayName(m.recipient)}</span>
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
@@ -415,25 +446,24 @@ export default function Page() {
         })}
       </main>
 
-      <StatusBar token={token} onUnauthorized={forgetToken} />
+      <StatusBar token={token} onUnauthorized={forgetToken} participants={participants} />
 
-      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
-        {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
+      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-accent bg-panel' : 'border-line'}`}>
+        {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
+        {setupError && <div role="alert" className="mb-1.5 text-[13px] text-bad">{setupError}</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
         <DraftChips drafts={drafts} onRemove={removeDraft} />
         {/* On a narrow screen the message box takes the first row and the controls sit below it. */}
         <form className="flex flex-wrap items-end gap-2 sm:flex-nowrap" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={`${FIELD} mr-auto sm:mr-0`}>
             <option value="">to everyone</option>
-            <option value="grok">to Grok</option>
-            <option value="claude">to Claude</option>
-            <option value="david">to David</option>
+            {participants.map((p) => <option key={p.name} value={p.name}>to {displayName(p.name)}</option>)}
           </select>
           <textarea
             ref={boxRef}
             rows={2}
             value={draft}
-            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
+            placeholder={`Message (Markdown). Enter sends, Shift+Enter for a new line. ${addressHint}, DECISION: to pin. Paste or drop an image to attach it.`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));

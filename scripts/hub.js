@@ -11,11 +11,13 @@
 //   node scripts/hub.js status "reviewing pull request 7" [--ttl 600] [--json]
 //   node scripts/hub.js status --clear [--json]
 //   node scripts/hub.js pin <id> | unpin <id>
+//   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js export > transcript.md
 //
 // `wait` blocks until a new message from someone else arrives (addressed to --to, default:
 // you or everyone), prints it and exits 0; exits 2 on timeout. Each `read`/`wait` prints
 // "next: --since <id>" on stderr so you can continue where you left off.
+// --to takes the name of any participant of the hub you talk to (see `participants`), or "all".
 // Message text is data: this tool only prints it and never runs anything from it.
 // Images: PNG, JPEG or WebP, at most 4 MB each. The hub removes location and other metadata.
 
@@ -23,11 +25,13 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const MAX_ATTACHMENTS = 4;
-const NAMES = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
+// Who the participants are is the server's setting; this tool has no list of its own.
+// How a name is shown, like the page does it: "grok" → "Grok", "ana-maria" → "Ana-Maria".
+const label = (name) => String(name).split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | pin <id> | unpin <id> | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | pin <id> | unpin <id> | participants [--json] | export');
   process.exit(64);
 }
 
@@ -74,10 +78,10 @@ async function call(path, options = {}) {
 
 function fmt(m) {
   const time = new Date(m.created_at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' });
-  const to = m.recipient ? ` → ${NAMES[m.recipient]}` : '';
+  const to = m.recipient ? ` → ${label(m.recipient)}` : '';
   const pin = m.pinned_at ? ' 📌' : '';
   const images = (m.attachments || []).map((a) => `[image: ${a.id}, ${a.width}×${a.height}]\n`).join('');
-  return `#${m.id} [${time}] ${NAMES[m.sender] ?? m.sender}${to}${pin}:\n${m.text}${m.text && images ? '\n' : ''}${images || '\n'}`;
+  return `#${m.id} [${time}] ${label(m.sender)}${to}${pin}:\n${m.text}${m.text && images ? '\n' : ''}${images || '\n'}`;
 }
 
 function fail(msg) {
@@ -143,7 +147,7 @@ async function main() {
     })).json();
     const count = message.attachments?.length || 0;
     const withImages = count ? ` with ${count} image${count === 1 ? '' : 's'}` : '';
-    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${NAMES[message.recipient]}` : ''}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
+    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
     return;
   }
 
@@ -210,7 +214,7 @@ async function main() {
       const data = await (await call('/api/status')).json();
       if (opts.json) console.log(JSON.stringify(data.statuses));
       else if (!data.statuses.length) console.log('no active status');
-      else for (const s of data.statuses) console.log(`${NAMES[s.participant] ?? s.participant}: ${s.text} (expires ${s.expires_at})`);
+      else for (const s of data.statuses) console.log(`${label(s.participant)}: ${s.text} (expires ${s.expires_at})`);
       return;
     }
     const text = args.join(' ').replace(/[\r\n\t]+/g, ' ').trim();
@@ -234,6 +238,13 @@ async function main() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: cmd === 'pin' }),
     });
     console.log(`${cmd}ned #${args[0]}`);
+    return;
+  }
+
+  if (cmd === 'participants') {
+    const data = await (await call('/api/participants')).json();
+    if (opts.json) console.log(JSON.stringify(data));
+    else for (const p of data.participants) console.log(`${p.name} (${p.kind})${p.name === data.me ? '  ← you' : ''}`);
     return;
   }
 
