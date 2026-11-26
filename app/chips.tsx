@@ -21,9 +21,10 @@ export interface ChipProps {
   /**
    * When the chip can be opened (to look at what it holds, or to change it): what a click on the
    * chip does. The chip's sign and text then are one button, reachable with Tab and pressed with
-   * Enter. The ✕ stays a button of its own next to it.
+   * Enter. The ✕ stays a button of its own next to it. `opener` is that button, for whoever wants
+   * to give the focus back to it later.
    */
-  onOpen?: () => void;
+  onOpen?: (opener: HTMLButtonElement) => void;
   /** What opening does, in words. Needed with `onOpen`. */
   openLabel?: string;
 }
@@ -35,7 +36,7 @@ export function Chip({ visual, children, title, tone = 'plain', onRemove, remove
     <li className={`flex h-[38px] max-w-full flex-none items-center gap-2 rounded-md border bg-panel py-1 pl-2 pr-1 text-[13px] ${tone === 'bad' ? 'border-bad' : 'border-line'}`}>
       {onOpen ? (
         <button
-          type="button" onClick={onOpen} aria-label={openLabel} title={title ?? openLabel}
+          type="button" onClick={(e) => onOpen(e.currentTarget)} aria-label={openLabel} title={title ?? openLabel}
           className="flex min-w-0 cursor-pointer items-center gap-2 self-stretch rounded border-none bg-transparent p-0 text-left text-[13px] text-fg hover:text-white"
         >{sign}{text}</button>
       ) : <>{sign}{text}</>}
