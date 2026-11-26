@@ -5,6 +5,7 @@ import type { Author, Message, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
+import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { StatusBar } from './status';
 
@@ -83,6 +84,9 @@ export default function Page() {
   const draftsRef = useRef<Draft[]>([]);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
+  const cursorAfterInsert = useRef<number | null>(null);
   draftsRef.current = drafts;
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); }, []);
@@ -253,6 +257,24 @@ export default function Page() {
     if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
+  /** Puts an emoji into the message box at the cursor, replacing a selection. The box keeps its place. */
+  const insertEmoji = useCallback((char: string, focusBox: boolean) => {
+    const box = boxRef.current;
+    if (!box) return;
+    const next = insertAtCursor(box.value, box.selectionStart, box.selectionEnd, char);
+    cursorAfterInsert.current = next.cursor;
+    setDraft(next.text);
+    if (focusBox) box.focus();
+  }, []);
+  // React puts the cursor at the end when it writes the new text into the box. Move it back
+  // behind the emoji, so the next one, or the next key, lands where the reader expects.
+  useLayoutEffect(() => {
+    const at = cursorAfterInsert.current;
+    if (at === null) return;
+    cursorAfterInsert.current = null;
+    boxRef.current?.setSelectionRange(at, at);
+  }, [draft]);
+
   const uploading = drafts.some((d) => d.state === 'uploading');
   const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
   const canSend = !sending && !uploading && (draft.trim() !== '' || ready.length > 0);
@@ -261,6 +283,7 @@ export default function Page() {
     if (!canSend) return;
     setSending(true);
     setNotice('');
+    setEmojiOpen(false);
     try {
       const body: { text: string; to?: string; attachments?: string[] } = { text: draft };
       if (to) body.to = to;
@@ -394,7 +417,7 @@ export default function Page() {
 
       <StatusBar token={token} onUnauthorized={forgetToken} />
 
-      <footer className={`border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
+      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
         <DraftChips drafts={drafts} onRemove={removeDraft} />
@@ -407,6 +430,7 @@ export default function Page() {
             <option value="david">to David</option>
           </select>
           <textarea
+            ref={boxRef}
             rows={2}
             value={draft}
             placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
@@ -424,6 +448,7 @@ export default function Page() {
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
           />
+          <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={BUTTON} />
           <button
             type="button" className={BUTTON} onClick={() => fileInput.current?.click()}
             disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}

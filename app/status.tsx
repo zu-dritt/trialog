@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { NAMES, type ParticipantStatus, type Sender } from '../lib/shared';
 
 export const STATUS_POLL_MS = 5_000;
+export const STATUS_EXPIRY_TICK_MS = 1_000;
+export const STATUS_MAX_FAILURES = 3;
 
 // Full class names per participant so Tailwind keeps them at build time.
 const STYLE: Record<Sender, string> = {
@@ -11,6 +13,14 @@ const STYLE: Record<Sender, string> = {
   claude: 'text-claude',
   david: 'text-david',
 };
+
+/** Returns only statuses whose expires_at is strictly in the future relative to `now`. */
+export function activeStatuses(statuses: ParticipantStatus[], now: number = Date.now()): ParticipantStatus[] {
+  return statuses.filter((s) => {
+    const exp = Date.parse(s.expires_at);
+    return Number.isFinite(exp) && exp > now;
+  });
+}
 
 /** Fetches active statuses using the Bearer token. Calls onUnauthorized on 401. */
 export async function fetchStatuses(
@@ -36,15 +46,16 @@ export async function fetchStatuses(
 }
 
 /** Renders the active participant status line above the message composer. */
-export function StatusList({ statuses }: { statuses: ParticipantStatus[] }) {
-  if (!statuses.length) return null;
+export function StatusList({ statuses, now }: { statuses: ParticipantStatus[]; now?: number }) {
+  const active = activeStatuses(statuses, now);
+  if (!active.length) return null;
   return (
     <div
       role="status"
       aria-live="polite"
       className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line/70 bg-panel/60 px-4 py-1.5 text-xs"
     >
-      {statuses.map((s) => (
+      {active.map((s) => (
         <span key={s.participant} className={`inline-flex min-w-0 items-baseline gap-1 ${STYLE[s.participant]}`}>
           <span className="font-semibold">{NAMES[s.participant]}:</span>
           <span className="max-w-[48ch] truncate opacity-90">{s.text}</span>
@@ -59,17 +70,29 @@ export function StatusList({ statuses }: { statuses: ParticipantStatus[] }) {
   );
 }
 
-/** Polls GET /api/status on a light 5 s cadence and renders active participant statuses. */
+/** Polls GET /api/status on a light 5 s cadence and drops statuses locally when expires_at passes. */
 export function StatusBar({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
   const [statuses, setStatuses] = useState<ParticipantStatus[]>([]);
+  const [now, setNow] = useState(() => Date.now());
   const onUnauthRef = useRef(onUnauthorized);
   onUnauthRef.current = onUnauthorized;
+  const failuresRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    failuresRef.current = 0;
     const load = async () => {
       const next = await fetchStatuses(token, () => onUnauthRef.current());
-      if (!cancelled && next) setStatuses(next);
+      if (cancelled) return;
+      const current = Date.now();
+      setNow(current);
+      if (next !== null) {
+        failuresRef.current = 0;
+        setStatuses(activeStatuses(next, current));
+      } else {
+        failuresRef.current += 1;
+        if (failuresRef.current >= STATUS_MAX_FAILURES) setStatuses([]);
+      }
     };
     void load();
     const timer = window.setInterval(() => {
@@ -86,5 +109,18 @@ export function StatusBar({ token, onUnauthorized }: { token: string; onUnauthor
     };
   }, [token]);
 
-  return <StatusList statuses={statuses} />;
+  useEffect(() => {
+    if (!statuses.length) return undefined;
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNow(current);
+      setStatuses((prev) => {
+        const next = activeStatuses(prev, current);
+        return next.length === prev.length ? prev : next;
+      });
+    }, STATUS_EXPIRY_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [statuses.length]);
+
+  return <StatusList statuses={statuses} now={now} />;
 }

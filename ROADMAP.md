@@ -57,6 +57,14 @@ More than one stream, for example one per project.
 
 Find a message or a decision from last week.
 
+## Added along the way
+
+Ideas that came up while using it. They aren't numbered; each slots in where it fits.
+
+### Quote a selection
+
+Select part of a message and add it to the message you are writing, as a quote that says who wrote it and in which message. The human asked for it after using the same thing every day in other chat tools: it is the quickest way to say "this part, here". It goes well with threads and replies, which quote a whole message.
+
 ## How to propose something
 
 Open an issue and say what you were trying to do when you missed it. The items above all started that way: someone ran into the gap.

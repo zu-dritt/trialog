@@ -79,7 +79,7 @@ test('status sends PUT, DELETE and GET with the Bearer token', async () => {
       else res.end(JSON.stringify({ statuses: [] }));
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const addr = server.address();
   const port = typeof addr === 'object' && addr ? addr.port : 0;
   const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {

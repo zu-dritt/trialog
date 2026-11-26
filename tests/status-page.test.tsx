@@ -3,20 +3,21 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { StatusList, fetchStatuses } from '../app/status';
+import { StatusList, activeStatuses, fetchStatuses } from '../app/status';
 import type { ParticipantStatus } from '../lib/shared';
 
+const BASE_NOW = Date.parse('2026-11-26T04:06:00.000Z');
 const sample: ParticipantStatus[] = [
   { participant: 'grok', text: 'reviewing pull request 7', expires_at: '2026-11-26T04:10:00.000Z', updated_at: '2026-11-26T04:05:00.000Z' },
   { participant: 'claude', text: '<script>alert(1)</script> polishing UI', expires_at: '2026-11-26T04:10:00.000Z', updated_at: '2026-11-26T04:04:00.000Z' },
 ];
 
 test('StatusList renders nothing when there are no active statuses', () => {
-  assert.equal(renderToStaticMarkup(<StatusList statuses={[]} />), '');
+  assert.equal(renderToStaticMarkup(<StatusList statuses={[]} now={BASE_NOW} />), '');
 });
 
 test('StatusList renders participant colours, animated dots, and escapes HTML', () => {
-  const out = renderToStaticMarkup(<StatusList statuses={sample} />);
+  const out = renderToStaticMarkup(<StatusList statuses={sample} now={BASE_NOW} />);
   assert.match(out, /role="status"/);
   assert.match(out, /aria-live="polite"/);
   assert.match(out, /text-grok/);
@@ -25,7 +26,25 @@ test('StatusList renders participant colours, animated dots, and escapes HTML', 
   assert.match(out, /reviewing pull request 7/);
   assert.match(out, /status-dot/);
   assert.ok(!out.includes('<script'), 'HTML in status text must be escaped');
-  assert.ok(out.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert.ok(out.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+});
+
+test('activeStatuses and StatusList hide statuses once expires_at has passed', () => {
+  const mixed: ParticipantStatus[] = [
+    { participant: 'grok', text: 'already expired', expires_at: '2026-11-26T04:06:00.000Z', updated_at: '2026-11-26T04:01:00.000Z' },
+    { participant: 'claude', text: 'still working', expires_at: '2026-11-26T04:08:00.000Z', updated_at: '2026-11-26T04:05:00.000Z' },
+    { participant: 'david', text: 'bad timestamp', expires_at: 'not-a-date', updated_at: '2026-11-26T04:05:00.000Z' },
+  ];
+  assert.deepEqual(activeStatuses(mixed, BASE_NOW).map((s) => s.participant), ['claude']);
+
+  const partial = renderToStaticMarkup(<StatusList statuses={mixed} now={BASE_NOW} />);
+  assert.ok(!partial.includes('already expired'));
+  assert.ok(!partial.includes('bad timestamp'));
+  assert.match(partial, /still working/);
+
+  // Once the remaining status passes its expires_at, StatusList renders nothing.
+  const allExpired = renderToStaticMarkup(<StatusList statuses={mixed} now={Date.parse('2026-11-26T04:08:00.000Z')} />);
+  assert.equal(allExpired, '');
 });
 
 test('globals.css disables dot animation under prefers-reduced-motion', async () => {
