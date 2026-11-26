@@ -77,15 +77,36 @@ test('post and read: addressing, since, DECISION pin, export', async () => {
 
 test('pin and unpin through the API', async () => {
   const m = await posted({ text: 'pin me' }, 'claude');
-  const call = (pinned: unknown, id = String(m.id)) => pin.POST(
-    new Request(`${URL_BASE}/api/messages/${id}/pin`, { method: 'POST', headers: auth('david'), body: JSON.stringify({ pinned }) }),
+  const call = (body: unknown, id = String(m.id)) => pin.POST(
+    new Request(`${URL_BASE}/api/messages/${id}/pin`, { method: 'POST', headers: auth('david'), body: JSON.stringify(body) }),
     { params: Promise.resolve({ id }) },
   );
   const pins = async (res: Response) => ((await res.json()) as { pinned: Message[] }).pinned;
-  assert.ok((await pins(await call(true))).some((p) => p.id === m.id));
-  assert.ok(!(await pins(await call(false))).some((p) => p.id === m.id));
-  assert.equal((await call(true, '999999')).status, 404);
-  assert.equal((await call('yes')).status, 400);
+  const listed = await pins(await call({ pinned: true }));
+  const pinned = listed.find((p) => p.id === m.id);
+  assert.ok(pinned);
+  assert.equal(pinned.pin_title, null);
+
+  const named = await call({ pinned: true, title: 'Roadmap board' });
+  assert.equal(named.status, 200);
+  const namedBody = (await named.json()) as { message: Message; pinned: Message[] };
+  assert.equal(namedBody.message.pin_title, 'Roadmap board');
+  assert.equal(namedBody.pinned.find((p) => p.id === m.id)?.pin_title, 'Roadmap board');
+
+  const renamed = await call({ title: 'How to give feedback' });
+  assert.equal(renamed.status, 200);
+  assert.equal(((await renamed.json()) as { message: Message }).message.pin_title, 'How to give feedback');
+
+  const unpinned = await pins(await call({ pinned: false }));
+  assert.ok(!unpinned.some((p) => p.id === m.id));
+  assert.equal((await call({ title: 'Too soon' })).status, 400, 'a title on an unpinned message');
+  const again = await call({ pinned: true });
+  assert.equal(((await again.json()) as { message: Message }).message.pin_title, null, 'unpinning clears the title');
+  assert.equal((await call({ pinned: true }, '999999')).status, 404);
+  assert.equal((await call({ pinned: 'yes' })).status, 400);
+  assert.equal((await call({ pinned: true, title: '' })).status, 400);
+  assert.equal((await call({ pinned: true, title: 'x'.repeat(81) })).status, 400);
+  assert.equal((await call({ pinned: false, title: 'nope' })).status, 400);
 });
 
 test('bad input is rejected with clear errors', async () => {

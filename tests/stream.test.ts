@@ -64,11 +64,11 @@ for (const [name, make] of STORES) {
     assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: 'main:1' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${b.id}:`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id}:,${b.id}:`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id}:`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
   });
 }
 

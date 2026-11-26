@@ -26,6 +26,7 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) =
 // GET /api/wake?since=<id>&limit=<n>&wait=<seconds>&room=<id>
 // Messages after `since` that should wake the caller (an agent), oldest first. Those of one room:
 // `main` when none is named, like every other list, and every room with `room=all`.
+// `untitled_pins` are pinned messages that still need a short title (not filtered by `since`).
 // `wait` (0–25, default 0) holds the request until one arrives or the time runs out, then
 // returns whatever is there (possibly none). Polling agents can keep using GET /api/messages?since=
 // unchanged; this is the cheaper filter, and a short long-poll for a listener that cannot take
@@ -56,5 +57,8 @@ export const GET = safe(async (request: Request) => {
     if (request.signal.aborted) break;
     messages = await read();
   }
-  return json({ me, messages });
+  // Untitled pins are not filtered by `since`, and they do not end a long-poll on their own
+  // (a still-untitled pin would otherwise make every wait return at once).
+  const untitled_pins = (await store.pinned(room)).filter((m) => !m.pin_title);
+  return json({ me, messages, untitled_pins });
 });

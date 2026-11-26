@@ -17,7 +17,7 @@
 //   node scripts/hub.js vote poll_… 2
 //   node scripts/hub.js vote poll_… --clear
 //   node scripts/hub.js poll --close poll_…
-//   node scripts/hub.js pin <id> | unpin <id>
+//   node scripts/hub.js pin <id> [--title "Roadmap board"] | unpin <id>
 //   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
 //   node scripts/hub.js decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> [--title words] | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -122,7 +122,7 @@ async function loadLabels() {
 function fmt(m) {
   const time = new Date(m.created_at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' });
   const to = m.recipient ? ` → ${label(m.recipient)}` : '';
-  const pin = m.pinned_at ? ' 📌' : '';
+  const pin = m.pinned_at ? (m.pin_title ? ` 📌 ${m.pin_title}` : ' 📌') : '';
   // The room is shown when it is not main, so a hub with one room reads as it always did.
   const room = m.room && m.room !== 'main' ? ` [${m.room}]` : '';
   const reply = m.reply_to ? ` ↳ #${m.reply_to}` : '';
@@ -375,10 +375,22 @@ async function main() {
 
   if (cmd === 'pin' || cmd === 'unpin') {
     if (!/^\d+$/.test(args[0] || '')) usage(`${cmd} needs a message id`);
-    await call(`/api/messages/${args[0]}/pin`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: cmd === 'pin' }),
-    });
-    console.log(`${cmd}ned #${args[0]}`);
+    if (cmd === 'unpin' && opts.title !== undefined) usage('unpin does not take --title');
+    if (cmd === 'pin' && opts.title !== undefined) {
+      const title = String(opts.title).replace(/[\r\n\t]+/g, ' ').trim();
+      if (!title) usage('--title needs a short title');
+      if ([...title].length > 80) usage('--title must be at most 80 characters');
+    }
+    const body = { pinned: cmd === 'pin' };
+    if (cmd === 'pin' && opts.title !== undefined) body.title = String(opts.title).replace(/[\r\n\t]+/g, ' ').trim();
+    const data = await (await call(`/api/messages/${args[0]}/pin`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    if (opts.json) console.log(JSON.stringify(data));
+    else {
+      const title = data.message && data.message.pin_title;
+      console.log(cmd === 'unpin' ? `unpinned #${args[0]}` : (title ? `pinned #${args[0]} as «${title}»` : `pinned #${args[0]}`));
+    }
     return;
   }
 

@@ -48,6 +48,11 @@ export interface WakeupPayload {
   last_id: number;
   count: number;
   sent_at: number;
+  /**
+   * When true, this notice is (also) a request to write a short title for the pinned message
+   * (`POST /api/messages/<id>/pin` with `{"title": "..."}`). Do not treat it as a new message to answer.
+   */
+  needs_pin_title?: true;
 }
 
 /**
@@ -271,7 +276,11 @@ export function payloadRecipients(message: Pick<Message, 'recipient'>, names: re
   return message.recipient === null ? [...names] : [message.recipient];
 }
 
-export function wakeupPayload(message: Pick<Message, 'id' | 'sender' | 'recipient' | 'text' | 'room'>, names: readonly string[], sentAt: number): WakeupPayload {
+export function wakeupPayload(
+  message: Pick<Message, 'id' | 'sender' | 'recipient' | 'text' | 'room'> & { needs_pin_title?: boolean },
+  names: readonly string[],
+  sentAt: number,
+): WakeupPayload {
   return {
     id: message.id,
     sender: message.sender,
@@ -282,6 +291,7 @@ export function wakeupPayload(message: Pick<Message, 'id' | 'sender' | 'recipien
     last_id: message.id,
     count: 1,
     sent_at: sentAt,
+    ...(message.needs_pin_title ? { needs_pin_title: true as const } : {}),
   };
 }
 
@@ -355,7 +365,7 @@ export function createWakeup(options: WakeupOptions) {
 
   async function deliverOne(row: PendingWake, target: WebhookConfig, names: readonly string[]): Promise<WakeDelivery> {
     const sentAt = Math.floor(now() / 1000);
-    const payload = wakeupPayload({ id: row.message_id, sender: row.sender, recipient: row.recipient, text: row.text, room: row.room }, names, sentAt);
+    const payload = wakeupPayload({ id: row.message_id, sender: row.sender, recipient: row.recipient, text: row.text, room: row.room, needs_pin_title: row.needs_pin_title }, names, sentAt);
     const body = JSON.stringify(payload);
     const timestamp = String(sentAt);
     const headers = {
@@ -450,6 +460,28 @@ export function createWakeup(options: WakeupOptions) {
       })().catch((e: unknown): DeliveryResult => {
         const safe = publicDeliveryError(describe(e), Object.values(options.fallbackTargets ?? {}));
         console.error('[trialog] wake-up webhook job failed:', safe);
+        return { status: 'error', error: safe };
+      });
+    },
+    /**
+     * When a message is pinned without a title, wake an agent to write one. The pinner is the
+     * sender for whoToWake: a human wakes every agent, an agent wakes the others.
+     */
+    onPinTitle(message: Pick<Message, 'id'>, pinner: Message['sender']): Promise<DeliveryResult> | null {
+      const roster = rosterOf();
+      const targets = whoToWake({ sender: pinner, recipient: null }, roster);
+      if (!targets.length) return null;
+      return (async () => {
+        const withTarget: string[] = [];
+        for (const name of targets) {
+          if (await credentials(name)) withTarget.push(name);
+        }
+        if (!withTarget.length) return { status: 'idle' as const };
+        await store.enqueueWakesForPinTitle(message.id, withTarget);
+        return deliver();
+      })().catch((e: unknown): DeliveryResult => {
+        const safe = publicDeliveryError(describe(e), Object.values(options.fallbackTargets ?? {}));
+        console.error('[trialog] pin-title wake-up webhook job failed:', safe);
         return { status: 'error', error: safe };
       });
     },

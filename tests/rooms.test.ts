@@ -185,7 +185,7 @@ for (const [name, make] of STORES) {
     assert.notEqual(main.rooms, mainBefore.rooms, 'but the rooms fingerprint says another room has news');
     assert.equal(main.rooms, `calm:${c.id},main:${a.id}`);
     const calm = await store.version('calm');
-    assert.deepEqual([calm.last_id, calm.pins], [c.id, String(b.id)]);
+    assert.deepEqual([calm.last_id, calm.pins], [c.id, `${b.id}:`]);
     assert.equal((await store.version()).last_id, c.id, 'no room named: the newest of all');
 
     const rooms = await store.listRooms({ seen: { main: a.id, calm: 0 }, me: 'david' });
@@ -392,7 +392,7 @@ const columns = async (pg: PGlite, table: string) =>
 const tables = async (pg: PGlite) =>
   (await pg.query<{ t: string }>(`SELECT table_name AS t FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1`)).rows.map((r) => r.t);
 /** Every message as it was stored, without the room. */
-const history = async (pg: PGlite) => JSON.stringify((await pg.query(`SELECT (to_jsonb(m) - 'room')::text AS row FROM messages m ORDER BY id`)).rows);
+const history = async (pg: PGlite) => JSON.stringify((await pg.query(`SELECT (to_jsonb(m) - 'room' - 'pin_title')::text AS row FROM messages m ORDER BY id`)).rows);
 
 test('the fixture really is a database from before rooms', async () => {
   const pg = await databaseBeforeRooms();
@@ -410,7 +410,8 @@ test('first request on an old database: it gains the table and the column, and e
   const store = createSqlStore(pgliteDb(pg));
   await store.ensure();
   assert.ok((await tables(pg)).includes('rooms'));
-  assert.equal((await columns(pg, 'messages')).at(-1), 'room');
+  assert.ok((await columns(pg, 'messages')).includes('room'));
+  assert.equal((await columns(pg, 'messages')).at(-1), 'pin_title');
   assert.equal(await history(pg), before, 'no message was added, changed or removed');
   assert.deepEqual((await pg.query(`SELECT DISTINCT room FROM messages`)).rows, [{ room: 'main' }]);
 
@@ -462,6 +463,7 @@ test('the migration is idempotent: a second start, and the file run by hand twic
   const old = await history(byHand);
   await byHand.exec(migration);
   assert.equal(await history(byHand), old);
+  await byHand.exec(await file('../migrations/013-pin-titles.sql'));
   assert.deepEqual(await columns(byHand, 'messages'), await columns(pg, 'messages'));
   assert.deepEqual((await byHand.query(`SELECT participant, room, up_to::int AS up_to FROM read_positions ORDER BY participant`)).rows, [{ participant: 'david', room: 'main', up_to: 4 }, { participant: 'grok', room: 'main', up_to: 3 }]);
   assert.deepEqual((await byHand.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'read_positions_pkey'`)).rows, [{ def: 'PRIMARY KEY (participant, room)' }]);

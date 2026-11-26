@@ -171,6 +171,8 @@ export function parseSeen(value: string): Record<string, number> | null {
 }
 
 export const STATUS_MAX_LENGTH = 80;
+/** A short title stored with a pin: a few words, at most 80 characters. */
+export const PIN_TITLE_MAX_LENGTH = 80;
 export const STATUS_DEFAULT_TTL_SECONDS = 300;
 export const STATUS_MIN_TTL_SECONDS = 30;
 export const STATUS_MAX_TTL_SECONDS = 1800;

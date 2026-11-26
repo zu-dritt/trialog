@@ -257,7 +257,7 @@ test('old clients that send no reply_to work unchanged', async () => {
   assert.equal(res.status, 201);
   const { message } = (await res.json()) as { message: Message };
   assert.equal(message.reply_to, null);
-  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'room', 'sender', 'text']);
+  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'decision', 'id', 'pin_title', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'room', 'sender', 'text']);
   assert.equal((await post({ text: 'null is fine too', reply_to: null }, 'david')).status, 201);
   // A "sender" in the body is still ignored, also on a reply.
   const spoof = await posted({ text: 'I am not Grok', sender: 'grok', reply_to: message.id }, 'claude');

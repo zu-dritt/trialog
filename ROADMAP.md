@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms and split view are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms, split view and pin titles are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -23,6 +23,7 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Split view:** two rooms side by side in one window. A toggle next to the room switcher opens a second pane with its own composer; each pane follows its room live. With two panes, the room tabs move from the header into a bar at the top of each pane, the same on both sides, so the two rooms start on one line (the orchestrator asked for it after trying it). Read positions stay per room. The choice is kept in the browser and starts off; on a narrow screen the page shows one pane and keeps the choice, so a wider window brings the second pane back.
 
 - **Sound mode:** each participant has a note of one chord, so a new message is heard as its writer: the human the root, the agents the third and the fifth and then further chord tones, by roster order. A sent message, a reaction on yours, an agreed decision (the whole chord, once) and a new version have sounds of their own. Off by default, a speaker button next to «● live», made with the Web Audio API in the browser. The idea came from the launch video's soundtrack.
+- **Pin titles:** a pinned message gets a short title (a few words), stored with the pin (`pin_title` in the API, `hub.js pin <id> --title …`, ✎ on the page). The Pinned bar shows the title instead of the start of the text. When a message is pinned without a title, an agent is woken to write one.
 
 ## Next
 
