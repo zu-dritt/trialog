@@ -24,8 +24,9 @@
 //   node scripts/hub.js export > transcript.md
 //
 // `wait` blocks until a new message from someone else arrives (addressed to --to, default:
-// you or everyone), prints it and exits 0; exits 2 on timeout. Each `read`/`wait` prints
-// "next: --since <id>" on stderr so you can continue where you left off.
+// you or everyone), prints it and exits 0; exits 2 on timeout. Each `read`/`wait` records
+// what it returns as read and prints "next: --since <id>" on stderr so you can continue
+// where you left off. `--peek` fetches without marking anything as read.
 // `search` prints the messages that contain every word, in upper or lower case, newest first.
 // --decisions: only messages that start with DECISION: (pinned or not). --pinned: only pinned ones.
 // --to takes the name of any participant of the hub you talk to (see `participants`), or "all".
@@ -42,7 +43,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | export');
   process.exit(64);
 }
 
@@ -52,6 +53,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
+    else if (a === '--peek') opts.peek = true;
     else if (a === '--clear') opts.clear = true;
     else if (a === '--pinned') opts.pinned = true;
     else if (a === '--decisions') opts.decisions = true;
@@ -204,13 +206,14 @@ async function main() {
 
   if (cmd === 'read') {
     if (opts['up-to'] !== undefined) {
+      if (opts.peek) usage('read --peek cannot be combined with --up-to');
       if (!/^[1-9]\d{0,14}$/.test(opts['up-to'] || '')) usage('read --up-to needs a message id');
       const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo: Number(opts['up-to']) }) })).json();
       if (opts.json) console.log(JSON.stringify(data.read));
       else console.log(`read up to #${data.read.up_to}`);
       return;
     }
-    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, markRead: '1' })}`)).json();
+    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, markRead: opts.peek ? undefined : '1' })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
     else for (const m of data.messages) console.log(fmt(m));
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
@@ -234,13 +237,15 @@ async function main() {
     const deadline = Date.now() + timeoutMs;
     let since = opts.since;
     let me;
+    const markRead = opts.peek ? undefined : '1';
     if (since === undefined) {
+      // Only find the watermark; this request is not a delivery, so it does not mark as read.
       const data = await (await call('/api/messages?limit=1')).json();
       since = data.messages.at(-1)?.id ?? 0;
       me = data.me;
     }
     while (Date.now() < deadline) {
-      const data = await (await call(`/api/messages${query({ since })}`)).json();
+      const data = await (await call(`/api/messages${query({ since, markRead })}`)).json();
       me = data.me;
       const target = opts.to ? opts.to.replace(/^@/, '').toLowerCase() : me;
       const hits = data.messages.filter((m) => m.sender !== me && (m.recipient === target || (!opts.to && m.recipient === null)));

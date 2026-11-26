@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import { parseReadInput, type Message } from '../lib/core';
 import {
-  UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenByAgents,
+  UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenAgents, unseenByAgents, unseenFlagText,
   type Participant, type ReadPosition,
 } from '../lib/shared';
 import { ReadError, createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
@@ -85,6 +85,17 @@ test('addressedAgents and unseenByAgents follow the recipients and the two-minut
     { participant: 'claude', up_to: 20, updated_at: old },
   ], THREE, now), false);
   assert.equal(UNSEEN_LABEL, '⏰ not seen yet');
+
+  assert.deepEqual(unseenAgents(toEveryone, [], THREE, now), ['grok', 'claude']);
+  assert.deepEqual(unseenAgents(toEveryone, [{ participant: 'grok', up_to: 20, updated_at: old }], THREE, now), ['claude']);
+  assert.equal(unseenFlagText(toGrok, [], THREE, now), '⏰ not seen by Grok yet');
+  assert.equal(unseenFlagText(toEveryone, [], THREE, now), '⏰ not seen by Grok and Claude yet');
+  assert.equal(unseenFlagText(toEveryone, [{ participant: 'grok', up_to: 20, updated_at: old }], THREE, now), null, 'the flag itself stays off once any addressed agent has read');
+  const four: Participant[] = [
+    ...THREE,
+    { name: 'quill-2', kind: 'agent', color: 3 },
+  ];
+  assert.equal(unseenFlagText(toEveryone, [], four, now), '⏰ not seen by Grok, Claude and Quill-2 yet');
 });
 
 test('applyReads merges and never moves a position backwards', () => {

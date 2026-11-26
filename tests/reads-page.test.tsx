@@ -2,7 +2,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ReadReceipts, UnseenFlag, UNSEEN_LABEL, UNSEEN_AFTER_MS } from '../app/reads';
+import { ReadReceipts, UnseenFlag, UNSEEN_AFTER_MS } from '../app/reads';
 import type { Participant, ReadPosition } from '../lib/shared';
 
 const PARTICIPANTS: Participant[] = [
@@ -36,7 +36,8 @@ test('the unseen flag appears after two minutes when no addressed agent has read
     text: 'hello',
   };
   const shown = renderToStaticMarkup(<UnseenFlag message={message} reads={[]} participants={PARTICIPANTS} now={now} />);
-  assert.ok(shown.includes(UNSEEN_LABEL), shown);
+  assert.ok(shown.includes('⏰ not seen by Grok yet'), shown);
+  assert.ok(shown.includes('title="⏰ not seen by Grok yet"'), shown);
   const seen = renderToStaticMarkup(<UnseenFlag message={message} reads={[{ participant: 'grok', up_to: 11, updated_at: message.created_at }]} participants={PARTICIPANTS} now={now} />);
   assert.equal(seen, '');
 });

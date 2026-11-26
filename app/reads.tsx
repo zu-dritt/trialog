@@ -4,10 +4,10 @@
 // a subtle flag on a message that no addressed agent has seen after two minutes, and the
 // hook that records the highest visible message while the tab is focused.
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { colorOf, displayName, UNSEEN_AFTER_MS, UNSEEN_LABEL, unseenByAgents, type Participant, type ReadPosition, type Sender } from '../lib/shared';
+import { colorOf, displayName, UNSEEN_AFTER_MS, unseenFlagText, type Participant, type ReadPosition, type Sender } from '../lib/shared';
 import type { Message } from '../lib/core';
 
-export { applyReads, UNSEEN_LABEL, UNSEEN_AFTER_MS, unseenByAgents } from '../lib/shared';
+export { applyReads, UNSEEN_LABEL, UNSEEN_AFTER_MS, unseenByAgents, unseenFlagText } from '../lib/shared';
 
 /** Small initials at the last message this person has read. Hidden for the viewer themselves. */
 export function ReadReceipts({
@@ -45,7 +45,7 @@ export function ReadReceipts({
   );
 }
 
-/** The subtle flag on a message addressed to agents that none of them have read after two minutes. */
+/** The subtle flag on a message addressed to agents that none of them have read after two minutes, naming who has not seen it. */
 export function UnseenFlag({
   message,
   reads,
@@ -57,8 +57,9 @@ export function UnseenFlag({
   participants: readonly Participant[];
   now: number;
 }) {
-  if (!unseenByAgents(message, reads, participants, now)) return null;
-  return <p className="mb-0 mt-1 text-xs text-muted">{UNSEEN_LABEL}</p>;
+  const text = unseenFlagText(message, reads, participants, now);
+  if (!text) return null;
+  return <p className="mb-0 mt-1 text-xs text-muted" title={text}>{text}</p>;
 }
 
 /**

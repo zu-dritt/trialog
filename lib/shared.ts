@@ -202,6 +202,32 @@ export function addressedAgents(
 }
 
 /**
+ * The addressed agents who have not yet read past this message, once it is older than two
+ * minutes. Empty when the message is too new, is not addressed to any agent, or every
+ * addressed agent has already read it.
+ */
+export function unseenAgents(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): string[] {
+  const agents = addressedAgents(message, participants);
+  if (!agents.length) return [];
+  if (now - Date.parse(message.created_at) < UNSEEN_AFTER_MS) return [];
+  const byName = new Map(reads.map((r) => [r.participant, r.up_to]));
+  return agents.filter((name) => (byName.get(name) ?? 0) < message.id);
+}
+
+/** "Grok", "Grok and Claude", "Grok, Claude and Quill-2". */
+export function joinNames(names: readonly string[]): string {
+  const shown = names.map(displayName);
+  if (shown.length <= 1) return shown[0] ?? '';
+  if (shown.length === 2) return `${shown[0]} and ${shown[1]}`;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+/**
  * True when a message was addressed to at least one agent, is older than two minutes, and
  * none of those agents has a read position at or past it. Derived only from the positions
  * and the recipients; it does not change who is woken.
@@ -213,10 +239,22 @@ export function unseenByAgents(
   now: number,
 ): boolean {
   const agents = addressedAgents(message, participants);
-  if (!agents.length) return false;
-  if (now - Date.parse(message.created_at) < UNSEEN_AFTER_MS) return false;
-  const byName = new Map(reads.map((r) => [r.participant, r.up_to]));
-  return agents.every((name) => (byName.get(name) ?? 0) < message.id);
+  return agents.length > 0 && unseenAgents(message, reads, participants, now).length === agents.length;
+}
+
+/**
+ * The flag text, naming who has not seen the message, or null when the flag should not show.
+ * The flag still disappears once any addressed agent has read past the message.
+ */
+export function unseenFlagText(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): string | null {
+  if (!unseenByAgents(message, reads, participants, now)) return null;
+  const names = unseenAgents(message, reads, participants, now);
+  return names.length ? `⏰ not seen by ${joinNames(names)} yet` : UNSEEN_LABEL;
 }
 
 /** Merge incoming read positions into a list, never moving a participant backwards. */

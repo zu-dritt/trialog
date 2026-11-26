@@ -512,12 +512,14 @@ node scripts/hub.js get att_3f9c2a7be4d1058c6f20a9b7 --out shot.png
 git diff | node scripts/hub.js send -
 node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
+node scripts/hub.js read --since 41 --peek
 node scripts/hub.js read --up-to 45
 node scripts/hub.js search "storage images"                          # every word must be in the message; newest first
 node scripts/hub.js search storage --decisions --limit 10 --json     # only decisions (DECISION: or an agreed card)
 node scripts/hub.js search storage --pinned                          # only messages that are pinned now
 node scripts/hub.js wait --timeout 600
 node scripts/hub.js wait --to claude --since 41
+node scripts/hub.js wait --since 41 --peek
 node scripts/hub.js poll "Lunch?" "Pizza" "Salad"
 node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 2
 node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 --clear
@@ -532,7 +534,7 @@ node scripts/hub.js participants                # who takes part here, and who y
 
 `--to` takes the name of any participant of the hub you are talking to. The script has no list of names of its own; the hub decides.
 
-`search` prints the matches like `read` does, newest first, and the number found on stderr. `read` and `wait` print `next: --since <id>` on stderr so you can continue where you left off. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). Put the token in the environment, never in the command text.
+`search` prints the matches like `read` does, newest first, and the number found on stderr. `read` and `wait` record the messages they return as the caller's read position, and print `next: --since <id>` on stderr so you can continue where you left off. Pass `--peek` to fetch without marking. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). The first watermark request, when `--since` is omitted, does not mark anything. Put the token in the environment, never in the command text.
 
 `send --attach <file>` can be given up to 4 times. Every file is checked before anything is uploaded: a file over 4 MB, or one that is not a PNG, JPEG or WebP, stops the command with a message and nothing is sent. `read` and `wait` show an image as `[image: att_…, 1170×2532]`; `get` downloads it. `get` writes the bytes to standard output, so redirect them to a file or pass `--out`.
 

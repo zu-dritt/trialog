@@ -18,7 +18,7 @@ export {
   POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   RECENTLY_CLOSED_MS, VOTE_HINT,
   DECISION_HINT, HUMAN_DECISION_HINT, DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, decisionIsAgreed, decisionPositionText,
-  UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenByAgents,
+  UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenAgents, unseenByAgents, unseenFlagText,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine, pollResultText,
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type ReadPosition, type Sender,
