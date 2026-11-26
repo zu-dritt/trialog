@@ -61,14 +61,14 @@ for (const [name, make] of STORES) {
   test(`${name}: version changes with new messages and with pins`, async () => {
     const store = await make();
     await store.ensure();
-    assert.deepEqual(await store.version(), { last_id: 1, pins: '' }, 'only the welcome message');
+    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0:0::' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id) });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0:0::' });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}` });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0:0::' });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id) });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0:0::' });
   });
 }
 
