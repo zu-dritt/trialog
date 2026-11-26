@@ -45,7 +45,7 @@ for (const [name, make] of KITS) {
     const { store } = await make();
     const a = must(await store.addAttachment({ sender: 'david', content_type: 'image/webp', width: 1170, height: 2532, data: bytes('a') }));
     assert.match(a.id, ATTACHMENT_ID);
-    assert.deepEqual(a, { id: a.id, content_type: 'image/webp', width: 1170, height: 2532, bytes: bytes('a').length });
+    assert.deepEqual(a, { id: a.id, content_type: 'image/webp', width: 1170, height: 2532, bytes: bytes('a').length, scale: 1 });
     const found = must(await store.getAttachment(a.id));
     assert.deepEqual(found.attachment, { ...a, sender: 'david', message_id: null });
     assert.ok(found.data.equals(bytes('a')));

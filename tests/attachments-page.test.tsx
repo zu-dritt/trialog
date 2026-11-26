@@ -4,11 +4,11 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DraftChips, MessageImages, fetchImage, withoutSent, type Draft } from '../app/attachments';
+import { DraftChips, MessageImages, fetchImage, fitLimits, scaleOf, screenScale, thumbSize, withoutSent, type Draft } from '../app/attachments';
 import { DOWNSIZE_LONG_EDGE, fitWithin, firstLine, type Attachment } from '../lib/shared';
 
-const shot: Attachment = { id: 'att_0123456789abcdef01234567', content_type: 'image/png', width: 1170, height: 2532, bytes: 184322 };
-const wide: Attachment = { id: 'att_89abcdef0123456789abcdef', content_type: 'image/jpeg', width: 1600, height: 900, bytes: 90000 };
+const shot: Attachment = { id: 'att_0123456789abcdef01234567', content_type: 'image/png', width: 1170, height: 2532, bytes: 184322, scale: 1 };
+const wide: Attachment = { id: 'att_89abcdef0123456789abcdef', content_type: 'image/jpeg', width: 1600, height: 900, bytes: 90000, scale: 1 };
 const never = () => new Promise<string>(() => {});
 
 test('a thumbnail never points an <img> at the API: the address alone carries no token', () => {
@@ -20,6 +20,69 @@ test('a thumbnail never points an <img> at the API: the address alone carries no
   // The placeholder already has the image's shape, so the stream does not jump when it loads.
   assert.match(out, /width:111px;aspect-ratio:1170 \/ 2532/);
   assert.match(out, /width:320px;aspect-ratio:1600 \/ 900/);
+});
+
+test('a thumbnail is never larger than the image itself: its pixels divided by its scale', () => {
+  const image = (width: number, height: number, scale: number): Attachment => ({ id: `att_${width}x${height}at${scale}000000000000`, content_type: 'image/png', width, height, bytes: 1000, scale });
+  const boxOf = (a: Attachment) => {
+    const out = renderToStaticMarkup(<MessageImages attachments={[a]} load={never} />);
+    return Number((/style="width:(\d+)px;aspect-ratio:(\d+) \/ (\d+)"/.exec(out) ?? assert.fail(out))[1]);
+  };
+  // The case that started this: a 384×230 screenshot from a screen with two pixels per point.
+  assert.equal(boxOf(image(384, 230, 2)), 192, 'shown at 192×115, the size it was taken');
+  assert.deepEqual(thumbSize(image(384, 230, 2)), { width: 192, height: 115 });
+  // A small ordinary image: its own size, not stretched to the thumbnail's.
+  assert.equal(boxOf(image(200, 100, 1)), 200);
+  assert.equal(boxOf(image(8, 8, 1)), 8);
+  assert.equal(boxOf(image(201, 101, 2)), 100, 'half of an odd number of pixels is rounded down');
+  // A large image is still fitted into the thumbnail, whatever its scale.
+  assert.equal(boxOf(image(4000, 3000, 1)), 320);
+  assert.equal(boxOf(image(4000, 3000, 2)), 320);
+  assert.deepEqual(thumbSize(image(2340, 5064, 2)), { width: 111, height: 240 }, 'a tall phone screenshot');
+  assert.deepEqual(thumbSize(image(1600, 900, 3)), { width: 320, height: 180 });
+  // The width is the image's own, with the border around it and not taken out of it: on a screen
+  // with two pixels per point, the 384 pixels land on exactly 384 pixels of the screen.
+  assert.match(renderToStaticMarkup(<MessageImages attachments={[image(384, 230, 2)]} load={never} />), /class="box-content /);
+  // The shape always comes from the pixels, so the placeholder and the image agree.
+  assert.match(renderToStaticMarkup(<MessageImages attachments={[image(384, 230, 2)]} load={never} />), /width:192px;aspect-ratio:384 \/ 230/);
+  // An attachment from a server that does not send the scale yet is treated as 1, as before.
+  const { scale: _scale, ...old } = image(200, 100, 1);
+  assert.equal(boxOf(old as Attachment), 200);
+
+  // And for every size: never more than width / scale by height / scale, never more than the largest thumbnail.
+  for (const scale of [1, 2, 3, 4]) {
+    for (const [w, h] of [[1, 1], [3, 5], [37, 911], [320, 240], [321, 241], [384, 230], [640, 480], [1170, 2532], [5120, 2880], [9999, 13]]) {
+      const box = thumbSize(image(w, h, scale));
+      assert.ok(box.width <= w / scale || box.width === 1, `${w}×${h} at ${scale}: width ${box.width}`);
+      assert.ok(box.height <= h / scale || box.height === 1, `${w}×${h} at ${scale}: height ${box.height}`);
+      assert.ok(box.width >= 1 && box.height >= 1 && box.width <= 320 && box.height <= 240);
+    }
+  }
+});
+
+test('the large view does not enlarge either, until the reader asks for the real size', () => {
+  const a: Attachment = { ...shot, width: 384, height: 230, scale: 2 };
+  // While it fits the window: the window or the image's own size, whichever is smaller.
+  assert.deepEqual(fitLimits(a), { maxWidth: 'min(100%, 192px)', maxHeight: 'min(100%, 115px)' });
+  assert.deepEqual(fitLimits({ ...a, scale: 1 }), { maxWidth: 'min(100%, 384px)', maxHeight: 'min(100%, 230px)' });
+  assert.deepEqual(fitLimits(wide), { maxWidth: 'min(100%, 1600px)', maxHeight: 'min(100%, 900px)' });
+});
+
+test('what the page says about an image it uploads: the file first, then the screen for a paste, else nothing', () => {
+  // The screen: its device pixel ratio as a whole number from 1 to 3.
+  assert.deepEqual([1, 2, 3, 1.25, 1.5, 2.2, 2.625, 3.5, 4, 0.8, 0, Number.NaN].map((r) => screenScale(r)), [1, 2, 3, 1, 2, 2, 3, 3, 3, 1, 1, 1]);
+  assert.equal(screenScale(undefined), 1, 'no window (this test), no screen: 1');
+  // Pasted from the clipboard, where the file no longer says: the screen it was pasted on.
+  assert.equal(scaleOf(null, true, 2), 2);
+  assert.equal(scaleOf(96, true, 2), 2);
+  assert.equal(scaleOf(null, true, 1), 1);
+  // A dropped or picked file may come from anywhere: no guess.
+  assert.equal(scaleOf(null, false, 2), null);
+  assert.equal(scaleOf(72, false, 3), null);
+  // What the file records counts either way, and wins over the screen.
+  assert.equal(scaleOf(144, false, 1), 2);
+  assert.equal(scaleOf(143.99, true, 3), 2);
+  assert.equal(scaleOf(216, true, 1), 3);
 });
 
 test('a message without images renders nothing extra', () => {

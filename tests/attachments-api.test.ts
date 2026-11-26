@@ -156,7 +156,7 @@ test('a message links its sender\'s uploads; they come back in the list and the 
   const { message } = (await res.json()) as { message: Message };
   assert.equal(message.text, '');
   assert.deepEqual(message.attachments, [b, a]);
-  for (const att of message.attachments) assert.deepEqual(Object.keys(att).sort(), ['bytes', 'content_type', 'height', 'id', 'width']);
+  for (const att of message.attachments) assert.deepEqual(Object.keys(att).sort(), ['bytes', 'content_type', 'height', 'id', 'scale', 'width']);
 
   const seen = (await list('grok')).find((m) => m.id === message.id);
   assert.deepEqual(seen?.attachments, [b, a], 'another participant sees the same attachments');

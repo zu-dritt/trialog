@@ -45,3 +45,16 @@ CREATE TABLE IF NOT EXISTS participant_status (
    );
 
 CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at);
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'attachments' AND column_name = 'scale'
+     ) THEN
+       ALTER TABLE attachments ADD COLUMN scale SMALLINT NOT NULL DEFAULT 1
+         CONSTRAINT attachments_scale_range CHECK (scale BETWEEN 1 AND 4);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;

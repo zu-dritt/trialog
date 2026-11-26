@@ -47,7 +47,7 @@ There are three tables, all created automatically on the first request (and desc
 
 - `messages` — id, sender, recipient, text, created_at, pinned_at. Senders are constrained to `grok`, `claude`, `david` and `hub`. `hub` is only used for the one-time welcome message.
 - `webhook_state` — a single row that remembers the last message id Grok was woken for, so existing history is not replayed when the webhook is turned on.
-- `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, and the image itself in a `bytea` column.
+- `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, its scale (how many of its pixels make one point on the screen it was taken on, which is how the page knows how large to show it), and the image itself in a `bytea` column.
 
 Inserts take a transaction-level advisory lock so message ids are committed in order. A client that polls `since=<id>` cannot skip a row that committed late with a lower id. That lock works behind Neon's pooler (transaction mode).
 
