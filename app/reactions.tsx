@@ -4,7 +4,7 @@
 // pills for the current tally, and a quiet hint. The allow-list is the picker catalog.
 import { useEffect, useId, useRef, useState } from 'react';
 import { REACTION_HINT, type Message, type Reaction, type Sender } from '../lib/core';
-import { colorOf, displayName, type Participant } from '../lib/shared';
+import { displayName, type Participant } from '../lib/shared';
 import type { MessageReactions } from '../lib/store';
 import { EmojiPanel, RECENT_KEY, parseRecent, pushRecent } from './emoji';
 
@@ -41,7 +41,7 @@ function labelFor(reaction: Reaction, me: Sender | null): string {
 interface BarProps {
   message: Message;
   me: Sender | null;
-  /** From GET /api/participants: gives a single reactor their colour. */
+  /** From GET /api/participants, the same roster PollCard uses. Names are shown with displayName. */
   participants?: readonly Participant[];
   /** PUT or DELETE the emoji, then hand the updated message back. */
   onToggle: (emoji: string, on: boolean) => void;
@@ -96,7 +96,7 @@ export function ReactionBar({ message, me, participants = [], onToggle }: BarPro
               title={r.by.map((v) => displayName(v)).join(', ')}
               onClick={() => toggle(r.emoji)}
             >
-              {r.emoji} <span style={r.by.length === 1 ? { color: colorOf(r.by[0], participants) } : undefined}>{r.by.length}</span>
+              {r.emoji} {r.by.length}
             </button>
           );
         })}
