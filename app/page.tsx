@@ -12,7 +12,7 @@ import { PollCard, PollComposer, withPolls } from './polls';
 import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
-import { NewVersionPill } from './version';
+import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -81,6 +81,9 @@ export default function Page() {
   const [pinned, setPinned] = useState<Message[]>([]);
   const [status, setStatus] = useState('connecting…');
   const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  // The server runs another build than this page was loaded with. The page says so and waits for a click.
+  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
+  const newVersionWaitsLong = useWaitingLong(newVersion);
   const [draft, setDraft] = useState('');
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
@@ -492,29 +495,24 @@ export default function Page() {
   const pinnedIds = new Set(pinned.map((m) => m.id));
   const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
-  // The server runs another build than this page was loaded with. The page says so and waits for a click.
-  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
   const reload = () => window.location.reload();
 
   return (
     <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
-      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+      {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
+      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        {/* The free space of the header holds the "New version available" pill, at its right end, so
-            nothing else in the header moves when the pill appears. A narrow header has no room for it. */}
-        <span role="status" className="flex flex-1 justify-end">
-          {newVersion && <NewVersionPill onReload={reload} className="max-md:hidden" />}
+        {/* The free space of the header starts with the "New version available" pill, directly after
+            the status, so the state of the page reads in one spot and nothing else moves when it
+            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
+        <span role="status" className="flex flex-1">
+          {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
         {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
-
-      {/* On a narrow screen the pill sits right under the header, still at the right. */}
-      <div role="status" className="flex justify-end px-4 md:hidden">
-        {newVersion && <NewVersionPill onReload={reload} className="my-1.5" />}
-      </div>
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">

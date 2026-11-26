@@ -1,10 +1,10 @@
 // The "New version available" pill: when the page knows of another build, what the pill looks
 // like, and how the page learns which build the server runs. Reloading itself needs a browser and
 // two builds, and is checked by hand (see the pull request).
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { NEW_VERSION_HINT, NewVersionPill } from '../app/version';
+import { ACCENT_AFTER_MS, NEW_VERSION_HINT, NewVersionPill, after } from '../app/version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { createMemoryStore } from '../lib/store';
@@ -25,23 +25,63 @@ test('the pill is one button that says "New version available" and what a click 
   // One real button and nothing else: reachable with Tab, pressed with Enter or Space.
   assert.match(out, /^<button type="button"[^>]*>.*<\/button>$/);
   assert.equal(out.match(/<button/g)?.length, 1);
-  // The words are there as text.
+  // The words are there as text, at any width.
   assert.equal(out.replace(/<[^>]+>/g, ''), 'New version available');
   // The tooltip says what the click does, and the name a screen reader reads starts with the visible words.
   assert.equal(NEW_VERSION_HINT, 'Reload to get the newest version. Your unsent message is kept.');
   assert.ok(out.includes(`title="${NEW_VERSION_HINT}"`), out);
   assert.ok(out.includes(`aria-label="New version available. ${NEW_VERSION_HINT}"`), out);
-  // The dot in front is decoration.
-  assert.match(out, /<span aria-hidden="true"[^>]*><\/span>/);
-  // Quiet: shaped as a pill, and nothing in it moves.
-  assert.match(out, /class="[^"]*\brounded-full\b/);
-  assert.ok(!/animate|transition|blink|pulse/.test(out), out);
   // No link, no script, no timer in the markup, and nothing about where the page is hosted.
   assert.ok(!/<a |<script|http|refresh/i.test(out), out);
 });
 
+test('the pill is quiet and does not compete with the "live" indicator', () => {
+  const out = renderToStaticMarkup(<NewVersionPill onReload={() => {}} />);
+  const classes = /^<button [^>]*class="([^"]*)"/.exec(out)?.[1].split(' ') ?? [];
+  // An outline, no fill, the size of the "live" text and its normal weight.
+  for (const c of ['rounded-full', 'border', 'bg-transparent', 'text-[13px]']) assert.ok(classes.includes(c), c);
+  assert.ok(!classes.some((c) => /^font-(bold|semibold|medium)$/.test(c)), 'not heavier than "live"');
+  // Green means "the stream is connected" in the header, red means it is not: neither is in the pill.
+  assert.ok(!/\b(text|bg|border)-(ok|bad)\b/.test(out), out);
+  // Its icon is a small drawn reload arrow, hidden from screen readers; no dot, no emoji.
+  assert.match(out, /<svg aria-hidden="true"[^>]*><path [^>]*><\/path><\/svg>/);
+  assert.ok(!/●|🔄|↻|⟳/.test(out), out);
+  // Nothing in it moves.
+  assert.ok(!/animate|transition|blink|pulse/.test(out), out);
+});
+
 test('the pill takes a class from the page, which places it', () => {
-  assert.match(renderToStaticMarkup(<NewVersionPill onReload={() => {}} className="max-md:hidden" />), /class="[^"]* max-md:hidden"/);
+  assert.match(renderToStaticMarkup(<NewVersionPill onReload={() => {}} className="max-md:absolute" />), /^<button [^>]*class="[^"]* border-muted\/50 max-md:absolute"/);
+});
+
+test('after a long wait only the outline changes', () => {
+  const plain = renderToStaticMarkup(<NewVersionPill onReload={() => {}} />);
+  const accented = renderToStaticMarkup(<NewVersionPill onReload={() => {}} accent />);
+  assert.match(plain, /\bborder-muted\/50\b/);
+  assert.match(accented, /\bborder-david\b/);
+  assert.equal(accented.replace('border-david', 'border-muted/50'), plain, 'the same pill otherwise');
+  assert.ok(!/animate|transition|blink|pulse/.test(accented), accented);
+});
+
+test('the long wait is an hour, and is called off when the pill goes away', () => {
+  assert.equal(ACCENT_AFTER_MS, 60 * 60 * 1000);
+  vi.useFakeTimers();
+  try {
+    let fired = 0;
+    after(ACCENT_AFTER_MS, () => { fired += 1; });
+    vi.advanceTimersByTime(ACCENT_AFTER_MS - 1);
+    assert.equal(fired, 0, 'not before the hour is over');
+    vi.advanceTimersByTime(1);
+    assert.equal(fired, 1);
+    vi.advanceTimersByTime(ACCENT_AFTER_MS * 3);
+    assert.equal(fired, 1, 'once');
+    const callOff = after(ACCENT_AFTER_MS, () => { fired += 1; });
+    callOff();
+    vi.advanceTimersByTime(ACCENT_AFTER_MS * 2);
+    assert.equal(fired, 1, 'called off');
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('a click on the pill asks for the reload; rendering it does not', () => {
