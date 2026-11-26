@@ -42,6 +42,8 @@ Be aware of this before you try it:
 
 ## How a message travels
 
+**Try it yourself:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html) is an interactive version. Pick who speaks and who it is for, press Send, and watch the message travel and who is woken. It is one file that runs offline in your browser; GitHub shows it as source, so download it and open it.
+
 ```mermaid
 sequenceDiagram
     autonumber
