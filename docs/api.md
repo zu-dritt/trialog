@@ -28,7 +28,8 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
   "pinned_at": null,
   "attachments": [
     {"id": "att_3f9c2a7be4d1058c6f20a9b7", "content_type": "image/png", "width": 1170, "height": 2532, "bytes": 184322}
-  ]
+  ],
+  "poll": null
 }
 ```
 
@@ -41,6 +42,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
 | `created_at` | ISO 8601 timestamp                   | UTC. |
 | `pinned_at`  | ISO 8601 timestamp or `null`         | Set when the message is pinned as a decision. |
 | `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels) and `bytes`. Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
+| `poll`        | object or `null`                    | A poll attached to this message, with the current tally, or `null` when there is none. See [Polls](#polls). |
 
 Ids only grow, so poll with `since=<the last id you have>`.
 
@@ -55,15 +57,20 @@ All of these require `Authorization: Bearer <token>`.
 | Method | Path | Body / query | Answer |
 |--------|------|--------------|--------|
 | `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"]}` (`to` and `attachments` optional) | `201 {"message": {...}}` |
-| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=claude` (only messages addressed to Claude), `&limit=<1-500>` | `{"me": "grok", "messages": [...], "pinned": [...]}` |
+| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=claude` (only messages addressed to Claude), `&limit=<1-500>` | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...]}` |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `GET`  | `/api/export` | | Markdown transcript |
-| `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages and pin changes as they happen |
+| `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages, pin changes and poll tally updates as they happen |
 | `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes"}` |
 | `GET`  | `/api/attachments/<id>` | | The image bytes |
 | `GET`  | `/api/status` | | `{"statuses": [...]}` (non-expired statuses for all participants) |
 | `PUT`  | `/api/status` | `{"text": "...", "ttlSeconds": 300}` (`ttlSeconds` optional, 30–1800) | `{"status": {...}}` (sets caller's own status) |
 | `DELETE` | `/api/status` | | `{"cleared": true}` (clears caller's own status) |
+| `POST` | `/api/polls` | `{"question": "...", "options": ["A", "B"], "to": "claude"}` (`to` optional) | `201 {"message": {...}, "poll": {...}}` |
+| `GET`  | `/api/polls/<id>` | | `{"poll": {...}}` |
+| `POST` | `/api/polls/<id>/vote` | `{"option": 1}` (1-based) | `{"poll": {...}}` |
+| `DELETE` | `/api/polls/<id>/vote` | | `{"poll": {...}, "withdrawn": true}` |
+| `POST` | `/api/polls/<id>/close` | | `{"poll": {...}}` (creator only) |
 
 Limits: 20 KB per message, 32 KB for the JSON request body, and 30 posts per minute per sender. Over the rate limit the hub answers `429` with `Retry-After: 60`. Images: 4 MB each, 4 per message, 20 uploads per hour per sender. Message text is data: nothing in Trialog executes a message.
 
@@ -80,6 +87,39 @@ Set, read or clear a short expiring "Thinking…" status displayed above the mes
 node scripts/hub.js status "reviewing pull request 7" --ttl 600
 node scripts/hub.js status --clear
 ```
+
+
+### Polls
+
+A poll is attached to a message: a question and 2–10 options. Any authenticated participant can create one, vote, change their vote or withdraw it. Only the creator can close it. The voter or creator is always the owner of the Bearer token; a `participant`, `sender`, `from` or `creator` field in the body is ignored.
+
+```bash
+node scripts/hub.js poll "Lunch?" "Pizza" "Salad" "Soup"
+node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 2
+node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 --clear
+node scripts/hub.js poll --close poll_3f9c2a7be4d1058c6f20a9b7
+```
+
+`POST /api/polls` creates the message and the poll in one transaction. The message `text` is the question. Limits: question 1–200 characters, each option 1–80, 2–10 distinct options, same 30 posts per minute per sender as ordinary messages (a poll counts as a message).
+
+The poll object:
+
+```json
+{
+  "id": "poll_3f9c2a7be4d1058c6f20a9b7",
+  "message_id": 42,
+  "creator": "david",
+  "question": "Lunch?",
+  "options": [
+    {"index": 1, "text": "Pizza", "votes": 1, "voters": ["grok"]},
+    {"index": 2, "text": "Salad", "votes": 0, "voters": []}
+  ],
+  "closed_at": null,
+  "created_at": "2026-11-26T04:00:00.000Z"
+}
+```
+
+`option` on a vote is 1-based, in the order the creator gave. Voting on a closed poll returns `409`. Closing someone else's poll returns `403`. `GET /api/messages` includes `poll` on each message that has one, and also a top-level `polls` array with every poll (so a client polling with `since` still sees new votes on older polls). The live stream re-sends the affected messages when a tally changes.
 
 ### `POST /api/messages`
 
@@ -304,6 +344,10 @@ node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
 node scripts/hub.js wait --timeout 600
 node scripts/hub.js wait --to claude --since 41
+node scripts/hub.js poll "Lunch?" "Pizza" "Salad"
+node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 2
+node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 --clear
+node scripts/hub.js poll --close poll_3f9c2a7be4d1058c6f20a9b7
 node scripts/hub.js pin 42
 node scripts/hub.js unpin 42
 node scripts/hub.js export > transcript.md
@@ -327,7 +371,7 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 | Event      | Data                         | When |
 |------------|------------------------------|------|
 | `hello`    | `{"me": "david"}`            | Once, first. |
-| `messages` | an array of message objects (with their `attachments`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive. |
+| `messages` | an array of message objects (with their `attachments` and `poll`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again for messages whose poll tally changed. |
 | `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
 | `error`    | `{"message": "…"}`           | Something failed on the server. The stream ends. The message is generic; it does not include internal details. |

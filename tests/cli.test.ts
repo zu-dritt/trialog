@@ -111,3 +111,87 @@ test('status sends PUT, DELETE and GET with the Bearer token', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('poll and vote validate arguments before sending any request', async () => {
+  assert.equal((await hub('poll', 'Only a question')).code, 64);
+  assert.equal((await hub('poll', 'Q', 'A')).code, 64);
+  const tooLong = await hub('poll', 'a'.repeat(201), 'A', 'B');
+  assert.equal(tooLong.code, 1);
+  assert.match(tooLong.stderr, /at most 200 characters/);
+  assert.doesNotMatch(tooLong.stderr, /fetch failed|ECONNREFUSED/);
+  const longOpt = await hub('poll', 'Q', 'A', 'b'.repeat(81));
+  assert.equal(longOpt.code, 1);
+  assert.match(longOpt.stderr, /at most 80 characters/);
+  const dup = await hub('poll', 'Q', 'A', 'A');
+  assert.equal(dup.code, 1);
+  assert.match(dup.stderr, /must be different/);
+  assert.equal((await hub('vote')).code, 64);
+  assert.equal((await hub('vote', '42', '1')).code, 64);
+  assert.equal((await hub('vote', 'poll_aaaabbbbccccddddeeeeffff')).code, 64);
+  assert.equal((await hub('vote', 'poll_aaaabbbbccccddddeeeeffff', '--clear', '1')).code, 64);
+  assert.equal((await hub('poll', '--close')).code, 64);
+});
+
+test('poll and vote send the Bearer token to the poll API', async () => {
+  const seen: { method: string; url: string; auth: string | undefined; body: string }[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ method: req.method || '', url: req.url || '', auth: req.headers.authorization, body: Buffer.concat(chunks).toString() });
+      res.setHeader('Content-Type', 'application/json');
+      const poll = {
+        id: 'poll_aaaabbbbccccddddeeeeffff',
+        message_id: 9,
+        creator: 'grok',
+        question: 'Lunch?',
+        options: [
+          { index: 1, text: 'Pizza', votes: 1, voters: ['grok'] },
+          { index: 2, text: 'Salad', votes: 0, voters: [] },
+        ],
+        closed_at: null,
+        created_at: '2026-11-26T04:00:00.000Z',
+      };
+      if (req.method === 'POST' && req.url === '/api/polls') res.end(JSON.stringify({ message: { id: 9, sender: 'grok', text: 'Lunch?' }, poll }));
+      else if (req.method === 'DELETE') res.end(JSON.stringify({ poll: { ...poll, options: poll.options.map((o) => ({ ...o, votes: 0, voters: [] })) }, withdrawn: true }));
+      else if (req.url?.endsWith('/close')) res.end(JSON.stringify({ poll: { ...poll, closed_at: '2026-11-26T05:00:00.000Z' } }));
+      else res.end(JSON.stringify({ poll }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const created = await run('poll', 'Lunch?', 'Pizza', 'Salad', '--to', 'claude');
+    assert.equal(created.code, 0);
+    assert.match(created.stdout, /poll poll_aaaabbbbccccddddeeeeffff on #9/);
+    const voted = await run('vote', 'poll_aaaabbbbccccddddeeeeffff', '1');
+    assert.equal(voted.code, 0);
+    assert.match(voted.stdout, /voted 1: Pizza/);
+    const cleared = await run('vote', 'poll_aaaabbbbccccddddeeeeffff', '--clear');
+    assert.equal(cleared.code, 0);
+    assert.match(cleared.stdout, /vote withdrawn/);
+    const closed = await run('poll', '--close', 'poll_aaaabbbbccccddddeeeeffff');
+    assert.equal(closed.code, 0);
+    assert.match(closed.stdout, /poll closed: Lunch\?/);
+    assert.equal(seen.length, 4);
+    assert.equal(seen[0].method, 'POST');
+    assert.equal(seen[0].url, '/api/polls');
+    assert.deepEqual(JSON.parse(seen[0].body), { question: 'Lunch?', options: ['Pizza', 'Salad'], to: 'claude' });
+    assert.equal(seen[1].method, 'POST');
+    assert.equal(seen[1].url, '/api/polls/poll_aaaabbbbccccddddeeeeffff/vote');
+    assert.deepEqual(JSON.parse(seen[1].body), { option: 1 });
+    assert.equal(seen[2].method, 'DELETE');
+    assert.equal(seen[3].method, 'POST');
+    assert.equal(seen[3].url, '/api/polls/poll_aaaabbbbccccddddeeeeffff/close');
+    for (const s of seen) assert.equal(s.auth, 'Bearer cli-test-token-0123456789abcdef');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
