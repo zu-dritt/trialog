@@ -47,6 +47,7 @@ test('schema.sql and the migration match the schema the app creates', async () =
   const squash = (sql: string) => sql.replace(/--.*$/gm, '').replace(/\s+/g, ' ').trim();
   // The migrations, one after the other, are the tail of the schema.
   const migration = async (name: string) => squash(await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
-  const tail = `${await migration('001-webhook-state.sql')} ${await migration('002-attachments.sql')} ${await migration('003-status.sql')} ${await migration('004-polls.sql')}`;
-  assert.ok(squash(SCHEMA_SQL).endsWith(tail), 'migrations/001-webhook-state.sql, 002-attachments.sql, 003-status.sql or 004-polls.sql differs from the statements in lib/store.ts');
+  const names = ['001-webhook-state.sql', '002-attachments.sql', '003-status.sql', '004-polls.sql', '005-replies.sql'];
+  const tail = (await Promise.all(names.map(migration))).join(' ');
+  assert.ok(squash(SCHEMA_SQL).endsWith(tail), `one of ${names.join(', ')} differs from the statements in lib/store.ts`);
 });

@@ -10,6 +10,7 @@ import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
+import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -96,7 +97,10 @@ export default function Page() {
   const [pollError, setPollError] = useState('');
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
+  const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [expanded, setExpanded] = useState(false); // the tall writing area
+  const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
+  const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
@@ -352,8 +356,9 @@ export default function Page() {
     setNotice('');
     setEmojiOpen(false);
     try {
-      const body: { text: string; to?: string; attachments?: string[] } = { text: draft };
+      const body: { text: string; to?: string; attachments?: string[]; reply_to?: number } = { text: draft };
       if (to) body.to = to;
+      if (replyTo) body.reply_to = replyTo.id;
       const sent = ready; // the images that go out with this message, as they are right now
       if (sent.length) body.attachments = sent.map((d) => d.attachment!.id);
       const res = await api('/api/messages', {
@@ -367,6 +372,7 @@ export default function Page() {
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
       setDraft(''); // which also removes the stored draft and lets the box shrink back
       setExpanded(false);
+      setReplyTo(null);
       // Only what was sent leaves the composer. An image added while the message was on its way stays.
       for (const d of sent) URL.revokeObjectURL(d.preview);
       setDrafts((list) => withoutSent(list, sent));
@@ -376,6 +382,22 @@ export default function Page() {
     } finally {
       setSending(false);
     }
+  };
+
+  /** Starts a reply to `m`: the composer shows whom it answers, and the cursor goes to the message box. */
+  const startReply = (m: Message) => {
+    setReplyTo(m);
+    boxRef.current?.focus();
+  };
+  /** Goes to a message in the stream and marks it for a moment, so the eye finds it. */
+  const jumpTo = (id: number) => {
+    const target = document.getElementById(`m-${id}`);
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.focus({ preventScroll: true }); // for a screen reader, and so Tab goes on from there
+    setMarked(id);
+    clearTimeout(markTimer.current);
+    markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
 
   const togglePin = async (m: Message, isPinned: boolean) => {
@@ -459,6 +481,7 @@ export default function Page() {
   if (!token) return <TokenForm onSave={saveToken} />;
 
   const pinnedIds = new Set(pinned.map((m) => m.id));
+  const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
 
   return (
@@ -501,7 +524,8 @@ export default function Page() {
               {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
               <article
                 id={`m-${m.id}`}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
+                tabIndex={-1}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-david)]' : ''}`}
               >
                 <div className={`grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg ${s.bg}`}>
                   {NAMES[m.sender]?.[0] ?? '?'}
@@ -514,11 +538,16 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    <ReplyButton
+                      messageId={m.id}
+                      onReply={() => startReply(m)}
+                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                    />
                     <QuoteMessageButton
                       messageId={m.id}
                       // With text selected in this message, the button quotes that text; otherwise the whole message.
                       onQuote={() => { const pick = pickSelection(window.getSelection()); addQuote(m, pick?.messageId === m.id ? pick.text : null); }}
-                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                      className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
                     />
                     <button
                       className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
@@ -526,6 +555,16 @@ export default function Page() {
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
+                  {m.reply_to != null && (() => {
+                    const parent = byId.get(m.reply_to);
+                    return (
+                      <ReplyContext
+                        replyTo={m.reply_to} parent={parent} onJump={jumpTo}
+                        author={parent ? NAMES[parent.sender] ?? parent.sender : undefined}
+                        authorClass={parent ? STYLE[parent.sender].text : undefined}
+                      />
+                    );
+                  })()}
                   {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
                     <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
                       <MessageBody text={m.text} />
@@ -552,6 +591,7 @@ export default function Page() {
       <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
+        {replyTo && <ReplyingTo parent={replyTo} author={NAMES[replyTo.sender] ?? replyTo.sender} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
         <DraftChips drafts={drafts} onRemove={removeDraft} />
         {pollOpen && (
           <PollComposer
