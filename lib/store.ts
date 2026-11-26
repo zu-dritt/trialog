@@ -8,7 +8,8 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import { MAX_SCALE, validScale } from './shared';
 import {
-  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, welcomeText,
+  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, welcomeText,
+  pollResultText,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
 } from './core';
 import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
@@ -155,15 +156,23 @@ export interface Store {
    */
   createPoll(input: NewPoll, limitPerMin?: number): Promise<{ message: Message; poll: Poll } | null>;
   getPoll(id: string): Promise<Poll | null>;
+  /** Open polls, plus polls closed within the last 24 hours. */
   listPolls(): Promise<Poll[]>;
   /** Every message that has a poll, with the current tally, oldest first. */
   listPollMessages(): Promise<Message[]>;
+  /** Messages with the given ids, in id order. Missing ids are skipped. */
+  listMessagesByIds(ids: number[]): Promise<Message[]>;
   /** Records or changes the caller's vote. */
   vote(pollId: string, participant: Sender, option: number): Promise<Poll>;
   /** Withdraws the caller's vote. `withdrawn` is false when they had no vote. */
   unvote(pollId: string, participant: Sender): Promise<{ poll: Poll; withdrawn: boolean }>;
-  /** Closes the poll. Only the creator may do this. Idempotent if already closed. */
-  closePoll(pollId: string, participant: Sender): Promise<Poll>;
+  /**
+   * Closes the poll and, the first time, posts a result message from the closer (question, counts,
+   * voter names) as a reply to the poll message. Only the creator may do this. Idempotent if already
+   * closed (`message` is then null). Returns null when the sender is over the message rate limit;
+   * the poll stays open so they can retry.
+   */
+  closePoll(pollId: string, participant: Sender, limitPerMin?: number): Promise<{ poll: Poll; message: Message | null } | null>;
 }
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
@@ -366,10 +375,23 @@ const UPLOAD_LOCK_ID = 7230419;
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
-const POLLS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM polls) || ':' ||
-  (SELECT count(*)::text FROM poll_votes) || ':' ||
-  (SELECT coalesce(max(updated_at)::text, '') FROM poll_votes) || ':' ||
-  (SELECT coalesce(max(closed_at)::text, '') FROM polls)`;
+// One entry per poll: messageId:voteCount:latest, so the stream can re-send only what changed.
+// `latest` is the newest of the last vote, the close time and the poll's created_at (so a vote
+// change at a constant count still shows). Empty: `0|`.
+const POLLS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM polls) || '|' ||
+  coalesce((
+    SELECT string_agg(message_id::text || ':' || n::text || ':' || latest, ',' ORDER BY message_id)
+    FROM (
+      SELECT p.message_id,
+             (SELECT count(*)::int FROM poll_votes v WHERE v.poll_id = p.id) AS n,
+             greatest(
+               coalesce((SELECT max(updated_at) FROM poll_votes v WHERE v.poll_id = p.id), '-infinity'::timestamptz),
+               coalesce(p.closed_at, '-infinity'::timestamptz),
+               p.created_at
+             )::text AS latest
+      FROM polls p
+    ) t
+  ), '')`;
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
@@ -702,7 +724,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async listPolls() {
       await ensure();
-      const rows = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p ORDER BY p.created_at, p.id`, []);
+      const rows = await db.query(
+        `SELECT ${POLL_JSON} AS poll FROM polls p
+         WHERE p.closed_at IS NULL OR p.closed_at > now() - interval '24 hours'
+         ORDER BY p.created_at, p.id`,
+        [],
+      );
       return rows.map((r) => toPoll(r.poll)).filter((p): p is Poll => p !== null);
     },
     async listPollMessages() {
@@ -710,6 +737,15 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const rows = await db.query(
         `SELECT ${COLS} FROM messages WHERE id IN (SELECT message_id FROM polls) ORDER BY id`,
         [],
+      );
+      return rows.map(toMessage);
+    },
+    async listMessagesByIds(ids) {
+      await ensure();
+      if (!ids.length) return [];
+      const rows = await db.query(
+        `SELECT ${COLS} FROM messages WHERE id = ANY($1::bigint[]) ORDER BY id`,
+        [ids],
       );
       return rows.map(toMessage);
     },
@@ -752,19 +788,39 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { poll: result, withdrawn: gone.length > 0 };
       });
     },
-    async closePoll(pollId, participant) {
+    async closePoll(pollId, participant, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
-      const [existing] = await db.query(`SELECT creator, closed_at FROM polls WHERE id = $1::text`, [pollId]);
-      if (!existing) throw new PollError('not found');
-      if (existing.creator !== participant) throw new PollError('not the creator');
-      await db.query(
-        `UPDATE polls SET closed_at = coalesce(closed_at, now()) WHERE id = $1::text`,
-        [pollId],
-      );
-      const [row] = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
-      const result = toPoll(row.poll);
-      if (!result) throw new PollError('not found');
-      return result;
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
+        const [existing] = await tx.query(
+          `SELECT creator, closed_at, message_id FROM polls WHERE id = $1::text FOR UPDATE`,
+          [pollId],
+        );
+        if (!existing) throw new PollError('not found');
+        if (existing.creator !== participant) throw new PollError('not the creator');
+        if (existing.closed_at) {
+          const [row] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
+          const poll = toPoll(row.poll);
+          if (!poll) throw new PollError('not found');
+          return { poll, message: null };
+        }
+        const [{ n }] = await tx.query(
+          `SELECT count(*)::int AS n FROM messages WHERE sender = $1::text AND created_at > now() - interval '60 seconds'`,
+          [participant],
+        );
+        if ((n as number) >= limitPerMin) return null;
+        await tx.query(`UPDATE polls SET closed_at = now() WHERE id = $1::text`, [pollId]);
+        const [row] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
+        const poll = toPoll(row.poll);
+        if (!poll) throw new PollError('not found');
+        const inserted = await tx.query(
+          `INSERT INTO messages (sender, recipient, text, reply_to)
+           VALUES ($1::text, NULL, $2::text, $3::bigint)
+           RETURNING ${BASE_COLS}`,
+          [participant, pollResultText(poll), existing.message_id],
+        );
+        return { poll, message: { ...toMessage(inserted[0]), attachments: [], poll: null } };
+      });
     },
   };
 }
@@ -817,13 +873,15 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     return row ? assemblePoll(row) : null;
   };
   const pollsFingerprint = (): string => {
-    const voteList = [...voteRows.values()];
-    const maxVote = voteList.reduce((latest, v) => (latest === '' || v.updated_at > latest ? v.updated_at : latest), '');
-    const maxClosed = [...pollRows.values()].reduce((latest, p) => {
-      if (!p.closed_at) return latest;
-      return latest === '' || p.closed_at > latest ? p.closed_at : latest;
-    }, '');
-    return `${pollRows.size}:${voteRows.size}:${maxVote}:${maxClosed}`;
+    const entries = [...pollRows.values()]
+      .sort((a, b) => a.message_id - b.message_id || a.id.localeCompare(b.id))
+      .map((p) => {
+        const votes = [...voteRows.values()].filter((v) => v.poll_id === p.id);
+        const latestVote = votes.reduce((latest, v) => (latest === '' || v.updated_at > latest ? v.updated_at : latest), '');
+        const latest = [latestVote, p.closed_at, p.created_at].filter((t): t is string => Boolean(t)).sort().at(-1) ?? '';
+        return `${p.message_id}:${votes.length}:${latest}`;
+      });
+    return `${pollRows.size}|${entries.join(',')}`;
   };
   const requireOpenPoll = (pollId: string): PollRow => {
     const row = pollRows.get(pollId);
@@ -956,12 +1014,18 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       return row ? assemblePoll(row) : null;
     },
     async listPolls() {
+      const cutoff = now() - RECENTLY_CLOSED_MS;
       return [...pollRows.values()]
+        .filter((p) => !p.closed_at || Date.parse(p.closed_at) > cutoff)
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assemblePoll);
     },
     async listPollMessages() {
       return rows.filter((m) => pollForMessage(m.id)).map(copy);
+    },
+    async listMessagesByIds(ids) {
+      const want = new Set(ids);
+      return rows.filter((m) => want.has(m.id)).map(copy);
     },
     async vote(pollId, participant, option) {
       shaped(participant);
@@ -986,12 +1050,23 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (!row) throw new PollError('not found');
       return { poll: assemblePoll(row), withdrawn };
     },
-    async closePoll(pollId, participant) {
+    async closePoll(pollId, participant, limitPerMin = RATE_LIMIT_PER_MIN) {
       const row = pollRows.get(pollId);
       if (!row) throw new PollError('not found');
       if (row.creator !== participant) throw new PollError('not the creator');
-      row.closed_at = row.closed_at ?? timestamp();
-      return assemblePoll(row);
+      if (row.closed_at) return { poll: assemblePoll(row), message: null };
+      const cutoff = now() - 60_000;
+      const recent = rows.filter((m) => m.sender === participant && Date.parse(m.created_at) > cutoff).length;
+      if (recent >= limitPerMin) return null;
+      row.closed_at = timestamp();
+      const poll = assemblePoll(row);
+      const message = push({
+        sender: participant,
+        recipient: null,
+        text: pollResultText(poll),
+        reply_to: row.message_id,
+      });
+      return { poll, message: copy(message) };
     },
   };
 }

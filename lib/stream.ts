@@ -3,7 +3,7 @@
 //
 // There is no LISTEN/NOTIFY: the database is reached through Neon's pooler, which doesn't keep a
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
-// pinned ids, poll tallies) and only reads messages when that changed. The stream ends itself well inside the
+// pinned ids, poll tallies) and only reads messages when that changed. A vote re-sends only the poll whose fingerprint entry changed. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
 import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
@@ -13,6 +13,30 @@ export const INTERVAL_MS = 1_000;
 export const HEARTBEAT_MS = 15_000;
 export const MAX_STREAM_MS = 240_000; // 4 minutes; the route allows 5
 const BATCH = 200;
+
+/** Parse a polls fingerprint (`count|id:votes:latest,...`) into message-id → entry. */
+export function pollEntriesInFingerprint(fingerprint: string): Map<number, string> {
+  const pipe = fingerprint.indexOf('|');
+  const entries = pipe === -1 ? '' : fingerprint.slice(pipe + 1);
+  const map = new Map<number, string>();
+  if (!entries) return map;
+  for (const part of entries.split(',')) {
+    const id = Number(part.split(':', 1)[0]);
+    if (Number.isInteger(id) && id > 0) map.set(id, part);
+  }
+  return map;
+}
+
+/** Message ids whose poll entry appeared or changed (not merely arrived as a new last_id). */
+export function pollMessageIdsChanged(previous: string, next: string): number[] {
+  const before = pollEntriesInFingerprint(previous);
+  const after = pollEntriesInFingerprint(next);
+  const ids: number[] = [];
+  for (const [id, entry] of after) {
+    if (before.get(id) !== entry) ids.push(id);
+  }
+  return ids.sort((a, b) => a - b);
+}
 
 export interface StreamOptions {
   store: Store;
@@ -116,9 +140,12 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
           // Vote and close changes do not move last_id, so they need their own fingerprint.
           // Re-send those messages without moving `last`, or a lower id would make the next tick replay the stream.
           if (version.polls !== polls) {
+            const ids = pollMessageIdsChanged(polls, version.polls);
             polls = version.polls;
-            const updated = await store.listPollMessages();
-            if (updated.length) send('messages', updated);
+            if (ids.length) {
+              const updated = await store.listMessagesByIds(ids);
+              if (updated.length) send('messages', updated);
+            }
             wrote = true;
           }
           if (wrote) lastWrite = now();

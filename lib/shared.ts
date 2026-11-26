@@ -105,6 +105,23 @@ export interface Poll {
   created_at: string;
 }
 
+/** Shown on every poll card, and in the API docs. A vote is not a decision. */
+export const VOTE_HINT = 'A vote is an opinion, not a decision. To decide, write DECISION:';
+
+/** Closed polls older than this are omitted from the opt-in GET /api/messages?polls=1 list. */
+export const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
+
+/** The message posted when a poll is closed: the question, then each option with its count and voters. */
+export function pollResultText(poll: Poll): string {
+  const lines = [`Poll closed: ${poll.question}`];
+  for (const option of poll.options) {
+    const votes = `${option.votes} ${option.votes === 1 ? 'vote' : 'votes'}`;
+    const who = option.voters.map(displayName).join(', ');
+    lines.push(who ? `${option.index}. ${option.text} — ${votes} (${who})` : `${option.index}. ${option.text} — ${votes}`);
+  }
+  return lines.join('\n');
+}
+
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];

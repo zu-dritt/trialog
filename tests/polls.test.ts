@@ -115,10 +115,15 @@ for (const [name, make] of STORES) {
     assert.deepEqual(withdrawn.poll.options[1].voters, ['claude']);
     assert.equal((await store.unvote(created.poll.id, 'grok')).withdrawn, false);
 
-    const closed = await store.closePoll(created.poll.id, 'david');
-    assert.ok(closed.closed_at);
-    const again = await store.closePoll(created.poll.id, 'david');
-    assert.equal(again.closed_at, closed.closed_at);
+    const closed = must(await store.closePoll(created.poll.id, 'david'));
+    assert.ok(closed.poll.closed_at);
+    assert.equal(closed.message?.sender, 'david');
+    assert.equal(closed.message?.reply_to, created.message.id);
+    assert.match(closed.message?.text ?? '', /Poll closed: Lunch\?/);
+    assert.match(closed.message?.text ?? '', /Salad — 1 vote \(Claude\)/);
+    const again = must(await store.closePoll(created.poll.id, 'david'));
+    assert.equal(again.poll.closed_at, closed.poll.closed_at);
+    assert.equal(again.message, null, 'a second close does not post another result');
 
     await assert.rejects(store.vote(created.poll.id, 'claude', 1), (e: unknown) => e instanceof PollError && e.reason === 'closed');
     await assert.rejects(store.unvote(created.poll.id, 'claude'), (e: unknown) => e instanceof PollError && e.reason === 'closed');
@@ -182,11 +187,16 @@ test('API /api/polls: create, list on messages, spoofing ignored, vote/change/wi
   assert.deepEqual(body.poll.options.map((o) => o.text), ['Yes', 'No', 'Later']);
   const pollId = body.poll.id;
 
-  const listed = await messagesRoute.GET(new Request(`${BASE}/api/messages?since=0`, { headers: auth('grok') }));
+  const listedPlain = await messagesRoute.GET(new Request(`${BASE}/api/messages?since=0`, { headers: auth('grok') }));
+  assert.equal(listedPlain.status, 200);
+  const plainBody = (await listedPlain.json()) as { messages: Message[]; polls?: Poll[] };
+  const onMessage = plainBody.messages.find((m) => m.id === body.message.id);
+  assert.equal(onMessage?.poll?.id, pollId);
+  assert.equal(plainBody.polls, undefined, 'top-level polls is omitted unless asked for');
+
+  const listed = await messagesRoute.GET(new Request(`${BASE}/api/messages?since=0&polls=1`, { headers: auth('grok') }));
   assert.equal(listed.status, 200);
   const listBody = (await listed.json()) as { messages: Message[]; polls: Poll[] };
-  const onMessage = listBody.messages.find((m) => m.id === body.message.id);
-  assert.equal(onMessage?.poll?.id, pollId);
   assert.ok(listBody.polls.some((p) => p.id === pollId));
 
   const spoofVote = await voteRoute.POST(new Request(`${BASE}/api/polls/${pollId}/vote`, {
@@ -219,7 +229,11 @@ test('API /api/polls: create, list on messages, spoofing ignored, vote/change/wi
 
   const closed = await closeRoute.POST(new Request(`${BASE}/api/polls/${pollId}/close`, { method: 'POST', headers: auth('david') }), params(pollId));
   assert.equal(closed.status, 200);
-  assert.ok(((await closed.json()) as { poll: Poll }).poll.closed_at);
+  const closedBody = (await closed.json()) as { poll: Poll; message: Message | null };
+  assert.ok(closedBody.poll.closed_at);
+  assert.equal(closedBody.message?.sender, 'david');
+  assert.equal(closedBody.message?.reply_to, body.message.id);
+  assert.match(closedBody.message?.text ?? '', /Poll closed: Ship it\?/);
 
   assert.equal((await voteRoute.POST(new Request(`${BASE}/api/polls/${pollId}/vote`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...auth('claude') }, body: JSON.stringify({ option: 1 }),
@@ -233,15 +247,71 @@ test('API /api/polls: create, list on messages, spoofing ignored, vote/change/wi
   assert.equal((await getRoute.GET(new Request(`${BASE}/api/polls/poll_ffffffffffffffffffffffff`, { headers: auth('david') }), params('poll_ffffffffffffffffffffffff'))).status, 404);
 });
 
-test('the live stream pushes an updated poll message when someone votes', async () => {
+
+test('pollResultText names the question, counts and voters', async () => {
+  const { pollResultText } = await import('../lib/core');
+  const text = pollResultText({
+    id: 'poll_aaaabbbbccccddddeeeeffff',
+    message_id: 12,
+    creator: 'david',
+    question: 'Lunch?',
+    options: [
+      { index: 1, text: 'Pizza', votes: 1, voters: ['grok'] },
+      { index: 2, text: 'Salad', votes: 2, voters: ['claude', 'david'] },
+      { index: 3, text: 'Soup', votes: 0, voters: [] },
+    ],
+    closed_at: '2026-11-26T05:00:00.000Z',
+    created_at: '2026-11-26T04:00:00.000Z',
+  });
+  assert.equal(text, [
+    'Poll closed: Lunch?',
+    '1. Pizza — 1 vote (Grok)',
+    '2. Salad — 2 votes (Claude, David)',
+    '3. Soup — 0 votes',
+  ].join('\n'));
+});
+
+test('sql: listPolls omits a poll closed more than 24 hours ago', async () => {
+  const pg = new PGlite();
+  const store = createSqlStore(pgliteDb(pg));
+  await store.ensure();
+  const open = must(await store.createPoll({ creator: 'david', question: 'Open?', options: ['A', 'B'] }));
+  const recent = must(await store.createPoll({ creator: 'david', question: 'Just closed?', options: ['A', 'B'] }));
+  const old = must(await store.createPoll({ creator: 'david', question: 'Long closed?', options: ['A', 'B'] }));
+  must(await store.closePoll(recent.poll.id, 'david'));
+  must(await store.closePoll(old.poll.id, 'david'));
+  await pg.query(`UPDATE polls SET closed_at = now() - interval '25 hours' WHERE id = $1`, [old.poll.id]);
+  const ids = (await store.listPolls()).map((p) => p.id);
+  assert.ok(ids.includes(open.poll.id), 'an open poll is listed');
+  assert.ok(ids.includes(recent.poll.id), 'a just-closed poll is listed');
+  assert.ok(!ids.includes(old.poll.id), 'a poll closed more than 24 hours ago is omitted');
+});
+
+test('memory: a poll closed more than 24 hours ago drops off the list', async () => {
+  const { RECENTLY_CLOSED_MS } = await import('../lib/core');
+  let now = Date.parse('2026-11-26T12:00:00.000Z');
+  const store = createMemoryStore({ now: () => now });
+  await store.ensure();
+  const open = must(await store.createPoll({ creator: 'david', question: 'Still open?', options: ['A', 'B'] }));
+  const closed = must(await store.createPoll({ creator: 'david', question: 'Old?', options: ['A', 'B'] }));
+  must(await store.closePoll(closed.poll.id, 'david'));
+  assert.deepEqual((await store.listPolls()).map((p) => p.id).sort(), [open.poll.id, closed.poll.id].sort());
+  now += RECENTLY_CLOSED_MS + 1;
+  const later = (await store.listPolls()).map((p) => p.id);
+  assert.ok(later.includes(open.poll.id));
+  assert.ok(!later.includes(closed.poll.id));
+});
+
+test('the live stream re-sends only the poll that changed, without moving last', async () => {
   const store = createMemoryStore();
-  const created = must(await store.createPoll({ creator: 'david', question: 'Ready?', options: ['Yes', 'No'] }));
-  const events: SseEvent[] = [];
+  const first = must(await store.createPoll({ creator: 'david', question: 'Ready?', options: ['Yes', 'No'] }));
+  const second = must(await store.createPoll({ creator: 'david', question: 'Colour?', options: ['Red', 'Blue'] }));
   const abort = new AbortController();
-  const stream = createEventStream({ store, me: 'claude', since: null, signal: abort.signal, intervalMs: 20, heartbeatMs: 10_000, maxMs: 5_000 });
+  const rEvents: SseEvent[] = [];
+  const stream = createEventStream({ store, me: 'claude', since: second.message.id, signal: abort.signal, intervalMs: 20, heartbeatMs: 10_000, maxMs: 5_000 });
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  const parser = createSseParser((e) => events.push(e));
+  const parser = createSseParser((e) => rEvents.push(e));
   const pump = (async () => {
     for (;;) {
       const { done, value } = await reader.read();
@@ -252,18 +322,38 @@ test('the live stream pushes an updated poll message when someone votes', async 
   const waitFor = async (event: string, after = 0) => {
     const start = Date.now();
     while (Date.now() - start < 2000) {
-      const hit = events.slice(after).find((e) => e.event === event);
+      const hit = rEvents.slice(after).find((e) => e.event === event);
       if (hit) return hit;
       await new Promise((r) => setTimeout(r, 15));
     }
     throw new Error(`no ${event} event`);
   };
   await waitFor('hello');
-  await store.vote(created.poll.id, 'grok', 2);
-  const update = await waitFor('messages', 2);
+  const afterHello = rEvents.length;
+  await store.vote(first.poll.id, 'grok', 2);
+  const update = await waitFor('messages', afterHello);
   const messages = JSON.parse(update.data) as Message[];
-  const pollMessage = messages.find((m) => m.poll?.id === created.poll.id);
-  assert.deepEqual(pollMessage?.poll?.options[1].voters, ['grok']);
+  assert.deepEqual(messages.map((m) => m.id), [first.message.id], 'the unchanged poll is not re-sent');
+  assert.deepEqual(messages[0].poll?.options[1].voters, ['grok']);
+
+  // A later ordinary message still arrives after the vote; the cursor was not moved back.
+  const after = must(await store.add({ sender: 'david', recipient: null, text: 'after the vote' }));
+  const fresh = await waitFor('messages', rEvents.indexOf(update) + 1);
+  assert.deepEqual((JSON.parse(fresh.data) as Message[]).map((m) => m.id), [after.id]);
+
   abort.abort();
   await pump.catch(() => {});
+});
+
+test('closing a poll posts a result message that would wake Grok', async () => {
+  const { wakesGrok } = await import('../lib/store');
+  const store = createMemoryStore();
+  const created = must(await store.createPoll({ creator: 'david', question: 'Ship it?', options: ['Yes', 'No'] }));
+  await store.vote(created.poll.id, 'claude', 1);
+  const closed = must(await store.closePoll(created.poll.id, 'david'));
+  assert.equal(closed.message?.sender, 'david');
+  assert.equal(closed.message?.recipient, null);
+  assert.ok(closed.message && wakesGrok(closed.message));
+  assert.match(closed.message?.text ?? '', /Poll closed: Ship it\?/);
+  assert.match(closed.message?.text ?? '', /Yes — 1 vote \(Claude\)/);
 });

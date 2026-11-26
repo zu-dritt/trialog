@@ -15,8 +15,9 @@ export {
   MAX_TEXT_BYTES,
   IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, NAME_PATTERN, RESERVED_NAMES,
   POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
+  RECENTLY_CLOSED_MS, VOTE_HINT,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
-  attachmentLabel, displayName, firstLine,
+  attachmentLabel, displayName, firstLine, pollResultText,
   type Attachment, type Author, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Sender,
 } from './shared';
 // Who the participants are is a setting: lib/participants.ts.

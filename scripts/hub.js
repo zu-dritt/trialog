@@ -256,8 +256,11 @@ async function main() {
     if (opts.close !== undefined) {
       if (args.length || opts.to !== undefined) usage('poll --close takes a poll id and no question');
       if (!/^poll_[a-z0-9]{8,48}$/.test(opts.close || '')) usage('poll --close needs a poll id (poll_…)');
-      const { poll } = await (await call(`/api/polls/${opts.close}/close`, { method: 'POST' })).json();
-      console.log(opts.json ? JSON.stringify(poll) : `poll closed: ${poll.question}`);
+      const data = await (await call(`/api/polls/${opts.close}/close`, { method: 'POST' })).json();
+      const { poll, message } = data;
+      console.log(opts.json ? JSON.stringify(data) : (message
+        ? `poll closed: ${poll.question} (result #${message.id})`
+        : `poll closed: ${poll.question}`));
       return;
     }
     if (args.length < 3) usage('poll needs a question and at least two options');

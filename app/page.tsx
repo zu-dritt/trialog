@@ -239,8 +239,9 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const query = lastId.current ? `?since=${lastId.current}` : '';
-      const data = (await (await api(`/api/messages${query}`, { signal: abort.signal })).json()) as MessagesResponse;
+      const params = new URLSearchParams({ polls: '1' });
+      if (lastId.current) params.set('since', String(lastId.current));
+      const data = (await (await api(`/api/messages?${params}`, { signal: abort.signal })).json()) as MessagesResponse;
       if (stopped) return;
       setMe(data.me);
       addMessages(data.messages);
@@ -545,8 +546,9 @@ export default function Page() {
 
   const closePoll = async (pollId: string) => {
     try {
-      const data = (await (await api(`/api/polls/${pollId}/close`, { method: 'POST' })).json()) as { poll: Poll };
+      const data = (await (await api(`/api/polls/${pollId}/close`, { method: 'POST' })).json()) as { poll: Poll; message: Message | null };
       applyPoll(data.poll);
+      if (data.message) setMessages((list) => merge(list, [data.message!]));
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
     }
