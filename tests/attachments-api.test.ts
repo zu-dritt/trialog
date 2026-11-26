@@ -236,19 +236,38 @@ test('old clients that never send "attachments" still work', async () => {
   assert.ok((await list()).every((m) => Array.isArray(m.attachments)), 'every message in the list has the field');
 });
 
-test('uploads are limited to 20 per sender per hour', async () => {
-  // Grok has uploaded nothing in this file so far.
-  const tiny = await png(4, 4);
-  for (let i = 0; i < 20; i++) assert.equal((await upload(tiny, 'grok')).status, 201, `upload ${i + 1}`);
-  const limited = await upload(tiny, 'grok');
-  assert.equal(limited.status, 429);
-  assert.ok(Number(limited.headers.get('retry-after')) > 0);
-  assert.match(await errorOf(limited), /20 image uploads per hour/);
-  assert.equal((await upload(tiny, 'claude')).status, 201, 'another sender is not affected');
+test('uploads are limited per sender per hour, by the UPLOADS_PER_HOUR setting', async () => {
+  // Grok has uploaded nothing in this file so far; the other senders have, but fewer than 20.
+  const before = process.env.UPLOADS_PER_HOUR;
+  process.env.UPLOADS_PER_HOUR = '20';
+  try {
+    const tiny = await png(4, 4);
+    for (let i = 0; i < 20; i++) assert.equal((await upload(tiny, 'grok')).status, 201, `upload ${i + 1}`);
+    const limited = await upload(tiny, 'grok');
+    assert.equal(limited.status, 429);
+    assert.ok(Number(limited.headers.get('retry-after')) > 0);
+    assert.match(await errorOf(limited), /20 image uploads per hour/);
+    assert.equal((await upload(tiny, 'claude')).status, 201, 'another sender is not affected');
+    // Raising the setting lets the same sender go on.
+    process.env.UPLOADS_PER_HOUR = '22';
+    assert.equal((await upload(tiny, 'grok')).status, 201, 'upload 21 under a limit of 22');
+  } finally {
+    if (before === undefined) delete process.env.UPLOADS_PER_HOUR; else process.env.UPLOADS_PER_HOUR = before;
+  }
 });
 
 test('a sender over the limit is refused before the image is decoded', async () => {
-  // Runs after the test above: Grok is over the limit, Claude and the third sender are not.
+  // Runs after the test above: with a limit of 20, Grok (21 uploads) is over it, Claude and the third sender are not.
+  const before = process.env.UPLOADS_PER_HOUR;
+  process.env.UPLOADS_PER_HOUR = '20';
+  try {
+    await overTheLimit();
+  } finally {
+    if (before === undefined) delete process.env.UPLOADS_PER_HOUR; else process.env.UPLOADS_PER_HOUR = before;
+  }
+});
+
+async function overTheLimit() {
   // These two bodies only show what they are when a decoder opens them. Under the limit that
   // gives 400 (damaged) and 413 (too many pixels) ...
   const damaged = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('not a real PNG after the first eight bytes')]);
@@ -267,4 +286,4 @@ test('a sender over the limit is refused before the image is decoded', async () 
   const tooBig = new Uint8Array(MAX_ATTACHMENT_BYTES + 1);
   tooBig.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   assert.equal((await upload(tooBig, 'grok')).status, 413);
-});
+}
