@@ -4,7 +4,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DraftChips, MessageImages, fetchImage, fitLimits, scaleOf, screenScale, thumbSize, withoutSent, type Draft } from '../app/attachments';
+import { DraftChips, MessageImages, fetchImage, fitLimits, scaleOf, screenScale, thumbSize, viewLabel, viewedDraft, viewedInfo, withoutSent, type Draft } from '../app/attachments';
 import { DOWNSIZE_LONG_EDGE, fitWithin, firstLine, type Attachment } from '../lib/shared';
 
 const shot: Attachment = { id: 'att_0123456789abcdef01234567', content_type: 'image/png', width: 1170, height: 2532, bytes: 184322, scale: 1 };
@@ -105,6 +105,58 @@ test('preview chips show the state of each upload and have a remove button', () 
   assert.equal(renderToStaticMarkup(<DraftChips drafts={[]} onRemove={() => {}} />), '');
   // A failed upload is marked, so it is clear that it will not be sent.
   assert.equal((out.match(/border-bad/g) ?? []).length, 1);
+});
+
+test('an image in the composer can be looked at: its preview is a button, apart from the one that removes it', () => {
+  const drafts: Draft[] = [
+    { key: 1, name: 'a.png', preview: 'blob:local-1', state: 'uploading' },
+    { key: 2, name: 'b.png', preview: 'blob:local-2', state: 'ready', attachment: shot },
+    { key: 3, name: 'c.gif', preview: 'blob:local-3', state: 'failed', error: 'Only PNG, JPEG and WebP images are accepted.' },
+    { key: 4, name: 'image', preview: 'blob:local-4', state: 'uploading' },
+  ];
+  const out = renderToStaticMarkup(<DraftChips drafts={drafts} onRemove={() => {}} />);
+  const chips = [...out.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]);
+  assert.equal(chips.length, 4);
+  for (const [i, chip] of chips.entries()) {
+    // Two buttons, side by side, neither inside the other: look at it, remove it.
+    const buttons = [...chip.matchAll(/<button type="button"[^>]*aria-label="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g)].map((m) => ({ label: m[1], inside: m[2] }));
+    assert.equal(buttons.length, 2, chip);
+    assert.equal(buttons[0].label, i === 3 ? 'View image' : `View image ${drafts[i].name}`);
+    assert.equal(buttons[1].label, `Remove image ${drafts[i].name}`);
+    // The preview is what is pressed to look at it: the small picture sits inside the first button.
+    assert.ok(buttons[0].inside.includes(`<img src="${drafts[i].preview}"`), buttons[0].inside);
+    assert.ok(!buttons[0].inside.includes('<button') && !buttons[1].inside.includes('<img'));
+    assert.equal(buttons[1].inside, '×');
+  }
+  // Available in every state: while it uploads, when it is ready, and when the upload failed.
+  assert.match(chips[0], /uploading…/);
+  assert.match(chips[2], /Only PNG, JPEG and WebP/);
+  // Nothing is open until a chip is pressed.
+  assert.ok(!out.includes('role="dialog"'));
+  assert.equal(viewLabel({ name: 'shot.png' }), 'View image shot.png');
+  assert.equal(viewLabel({ name: 'image' }), 'View image');
+  assert.equal(viewLabel({ name: '' }), 'View image');
+});
+
+test('the large view of an image in the composer shows the local file, at the size it will have in the stream', () => {
+  const retina: Attachment = { ...shot, id: 'att_aaaaaaaaaaaaaaaaaaaaaaaa', width: 768, height: 400, scale: 2 };
+  // Stored already: the local file, with the stored pixels and scale. No address of the API, and nothing to save.
+  assert.deepEqual(viewedDraft({ key: 1, name: 'a.png', preview: 'blob:local-1', state: 'ready', attachment: retina }),
+    { url: 'blob:local-1', size: { width: 768, height: 400, scale: 2 }, bytes: retina.bytes });
+  // Still uploading, or failed: the file measures itself once it is shown; the page adds the scale it knows.
+  assert.deepEqual(viewedDraft({ key: 2, name: 'b.png', preview: 'blob:local-2', state: 'uploading', scale: 2 }), { url: 'blob:local-2', scale: 2 });
+  assert.deepEqual(viewedDraft({ key: 3, name: 'c.gif', preview: 'blob:local-3', state: 'failed', error: 'no' }), { url: 'blob:local-3' });
+  for (const d of [viewedDraft({ key: 1, name: 'a', preview: 'blob:x', state: 'ready', attachment: retina }), viewedDraft({ key: 2, name: 'b', preview: 'blob:y', state: 'uploading' })]) {
+    assert.ok(d.url.startsWith('blob:') && d.saveAs === undefined);
+  }
+  // Fitted to the window, and not larger than its own size: 768 pixels at 2× are 384 on the page.
+  assert.deepEqual(fitLimits({ width: 768, height: 400, scale: 2 }), { maxWidth: 'min(100%, 384px)', maxHeight: 'min(100%, 200px)' });
+  assert.deepEqual(fitLimits({ width: 768, height: 400 }), { maxWidth: 'min(100%, 768px)', maxHeight: 'min(100%, 400px)' });
+  // The line at the top says what is known.
+  assert.equal(viewedInfo({ width: 768, height: 400, scale: 2 }, 184322), '768×400 at 2× · 180 KB');
+  assert.equal(viewedInfo({ width: 1600, height: 900, scale: 1 }, 90000), '1600×900 · 88 KB');
+  assert.equal(viewedInfo({ width: 1600, height: 900 }), '1600×900');
+  assert.equal(viewedInfo(undefined), '');
 });
 
 test('fitWithin keeps the shape, never enlarges, and brings the long edge to the limit', () => {
