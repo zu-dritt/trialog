@@ -3,7 +3,7 @@
 //
 // There is no LISTEN/NOTIFY: the database is reached through Neon's pooler, which doesn't keep a
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
-// pinned ids, poll tallies, reaction tallies, decision-card positions) and only reads messages when that changed. A vote, a reaction or a decision-card change re-sends only the message whose fingerprint entry changed. The stream ends itself well inside the
+// pinned ids, poll tallies, reaction tallies, decision-card positions, read positions) and only reads messages when that changed. A vote, a reaction or a decision-card change re-sends only the message whose fingerprint entry changed. A moved read position is sent on its own, without re-sending messages. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
 import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
@@ -94,6 +94,33 @@ export function decisionMessageIdsChanged(previous: string, next: string): numbe
   return [...ids].sort((a, b) => a - b);
 }
 
+/** Parse a reads fingerprint (`count|name:upTo,name:upTo,...`) into participant → up_to. */
+export function readEntriesInFingerprint(fp: string): Map<string, number> {
+  const pipe = fp.indexOf('|');
+  const entries = pipe === -1 ? '' : fp.slice(pipe + 1);
+  const map = new Map<string, number>();
+  if (!entries) return map;
+  for (const part of entries.split(',')) {
+    const cut = part.lastIndexOf(':');
+    if (cut <= 0) continue;
+    const name = part.slice(0, cut);
+    const upTo = Number(part.slice(cut + 1));
+    if (name && Number.isInteger(upTo) && upTo > 0) map.set(name, upTo);
+  }
+  return map;
+}
+
+/** Participant names whose read position appeared or moved forward. */
+export function readParticipantsChanged(previous: string, next: string): string[] {
+  const before = readEntriesInFingerprint(previous);
+  const after = readEntriesInFingerprint(next);
+  const names: string[] = [];
+  for (const [name, upTo] of after) {
+    if (before.get(name) !== upTo) names.push(name);
+  }
+  return names.sort();
+}
+
 export interface StreamOptions {
   store: Store;
   me: Sender;
@@ -113,6 +140,7 @@ export interface StreamOptions {
  *   hello     {"me": "david", "build": "…"}   once, first; "build" is the server's build id (lib/build.ts)
  *   messages  [Message, …]           new messages, oldest first
  *   pins      [Message, …]           the full list of pinned messages, at the start and on every change
+ *   reads     [ReadPosition, …]      read positions: the full list at the start, then only the ones that moved
  *   bye       {"reason": "…"}        the server is ending the stream; reconnect with ?since=<last id>
  *   error     {"message": "…"}       something failed; the stream ends
  */
@@ -156,6 +184,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       let polls = '';
       let reactions = '';
       let decisions = '';
+      let reads = '';
       const sendMessages = (messages: Message[]) => {
         if (!messages.length) return;
         last = messages[messages.length - 1].id;
@@ -170,8 +199,10 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
         polls = version.polls;
         reactions = version.reactions;
         decisions = version.decisions;
+        reads = version.reads;
         sendMessages(await store.list({ since, limit: BATCH }));
         send('pins', await store.pinned());
+        send('reads', await store.listReads());
       } catch (e) {
         return fail(e);
       }
@@ -227,6 +258,18 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             if (ids.length) {
               const updated = await store.listMessagesByIds(ids);
               if (updated.length) send('messages', updated);
+            }
+            wrote = true;
+          }
+          // Read-position changes do not move last_id and are not part of a message, so they
+          // have their own fingerprint. Only the positions that moved are sent.
+          if (version.reads !== reads) {
+            const names = readParticipantsChanged(reads, version.reads);
+            reads = version.reads;
+            if (names.length) {
+              const listed = await store.listReads();
+              const changed = listed.filter((r) => names.includes(r.participant));
+              if (changed.length) send('reads', changed);
             }
             wrote = true;
           }

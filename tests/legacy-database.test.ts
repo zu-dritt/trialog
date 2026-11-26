@@ -74,6 +74,7 @@ const SHAPE_CHECKS = [
   /^poll_votes\.poll_votes_participant_shape: CHECK \(\(participant ~ /,
   /^polls\.polls_creator_shape: CHECK \(\(creator ~ /,
   /^reactions\.reactions_participant_shape: CHECK \(\(participant ~ /,
+  /^read_positions\.read_positions_participant_shape: CHECK \(\(participant ~ /,
 ];
 const assertShapeChecksOnly = async (pg: PGlite) => {
   const checks = await nameChecks(pg);
@@ -167,7 +168,8 @@ test('an old database, a new database and the migration files by hand all end wi
   const files = (await readdir(new URL('../migrations/', import.meta.url))).filter((f) => f.endsWith('.sql')).sort();
   assert.ok(files.includes('007-any-participants.sql'), 'the migration that replaces the name lists is present');
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
-  assert.equal(files.at(-1), '009-decision-cards.sql', 'decision cards come after reactions, with the same name check');
+  assert.equal(files.at(-1), '010-read-markers.sql', 'read markers come after decision cards, with the same name check');
+  assert.ok(files.includes('009-decision-cards.sql'));
   assert.ok(files.includes('008-reactions.sql'));
   for (const name of files) await byHand.exec(await file(`../migrations/${name}`));
   assert.equal(await contents(byHand), before);

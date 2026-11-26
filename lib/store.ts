@@ -10,7 +10,7 @@ import { MAX_SCALE, validScale } from './shared';
 import {
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
 import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
@@ -89,6 +89,14 @@ export class DecisionError extends Error {
     this.name = 'DecisionError';
   }
 }
+export class ReadError extends Error {
+  constructor(readonly reason: 'not found') {
+    super({
+      'not found': 'That message does not exist.',
+    }[reason]);
+    this.name = 'ReadError';
+  }
+}
 export interface NewPoll {
   creator: Sender;
   question: string;
@@ -142,6 +150,8 @@ export interface StreamVersion {
   reactions: string;
   /** Fingerprint of decision-card positions, so the live stream can push only what changed. */
   decisions: string;
+  /** Fingerprint of read positions, so the live stream can push only the positions that moved. */
+  reads: string;
 }
 
 /** Reactions on one message, as returned at the top level of GET /api/messages. */
@@ -185,7 +195,7 @@ export interface Store {
   pinned(): Promise<Message[]>;
   setPinned(id: number, pinned: boolean): Promise<Message | null>;
   all(): Promise<Message[]>;
-  /** A cheap fingerprint of the stream: the newest message id, the pinned ids, polls and reactions. */
+  /** A cheap fingerprint of the stream: the newest message id, the pinned ids, polls, reactions, decisions and reads. */
   version(): Promise<StreamVersion>;
   /**
    * Claims every message Grok has not been woken for yet (addressed to Grok or to everyone, not
@@ -247,6 +257,13 @@ export interface Store {
   recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
   /** Every decision card, for since-poll and the stream. */
   listDecisions(): Promise<DecisionCard[]>;
+  /**
+   * Moves this participant's read position to `upTo` if that is a higher message id than they
+   * already have. A lower id is ignored. Throws ReadError when the message does not exist.
+   */
+  setReadPosition(participant: Sender, upTo: number): Promise<ReadPosition>;
+  /** Every stored read position, for the opt-in list and the stream. */
+  listReads(): Promise<ReadPosition[]>;
 }
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
@@ -451,6 +468,16 @@ const SCHEMA = [
      CONSTRAINT decision_positions_object_has_note CHECK (stance = 'agree' OR (note IS NOT NULL AND char_length(btrim(note)) > 0))
    )`,
   `CREATE INDEX IF NOT EXISTS decision_cards_message_id ON decision_cards (message_id)`,
+  // Read positions (migrations/010-read-markers.sql).
+  `CREATE TABLE IF NOT EXISTS read_positions (
+     participant TEXT NOT NULL,
+     up_to       BIGINT NOT NULL REFERENCES messages (id),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (participant),
+     CONSTRAINT read_positions_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     CONSTRAINT read_positions_up_to_positive CHECK (up_to > 0)
+   )`,
+  `CREATE INDEX IF NOT EXISTS read_positions_up_to ON read_positions (up_to)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -560,6 +587,9 @@ const DECISIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM decision_cards) |
       FROM decision_cards c
     ) t
   ), '')`;
+
+const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions) || '|' ||
+  coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant) FROM read_positions), '')`;
 
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
@@ -858,10 +888,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
                 (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages WHERE pinned_at IS NOT NULL) AS pins,
                 ${POLLS_FINGERPRINT_SQL} AS polls,
                 ${REACTIONS_FINGERPRINT_SQL} AS reactions,
-                ${DECISIONS_FINGERPRINT_SQL} AS decisions`,
+                ${DECISIONS_FINGERPRINT_SQL} AS decisions,
+                ${READS_FINGERPRINT_SQL} AS reads`,
         [],
       );
-      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls), reactions: String(row.reactions), decisions: String(row.decisions) };
+      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls), reactions: String(row.reactions), decisions: String(row.decisions), reads: String(row.reads) };
     },
     async claimWakeup() {
       await ensure();
@@ -1240,6 +1271,34 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const rows = await db.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c ORDER BY c.created_at, c.id`, []);
       return rows.map((r) => toDecision(r.decision)).filter((d): d is DecisionCard => d !== null);
     },
+    async setReadPosition(participant, upTo) {
+      await ensure();
+      const [exists] = await db.query(`SELECT id FROM messages WHERE id = $1::bigint`, [upTo]);
+      if (!exists) throw new ReadError('not found');
+      const rows = await db.query(
+        `INSERT INTO read_positions (participant, up_to)
+         VALUES ($1::text, $2::bigint)
+         ON CONFLICT (participant) DO UPDATE
+           SET up_to = EXCLUDED.up_to, updated_at = now()
+           WHERE read_positions.up_to < EXCLUDED.up_to
+         RETURNING participant, up_to, updated_at`,
+        [participant, upTo],
+      );
+      const row = rows[0] ?? (await db.query(
+        `SELECT participant, up_to, updated_at FROM read_positions WHERE participant = $1::text`,
+        [participant],
+      ))[0];
+      return { participant: String(row.participant), up_to: Number(row.up_to), updated_at: new Date(row.updated_at as string | Date).toISOString() };
+    },
+    async listReads() {
+      await ensure();
+      const rows = await db.query(`SELECT participant, up_to, updated_at FROM read_positions ORDER BY participant`, []);
+      return rows.map((r) => ({
+        participant: String(r.participant) as Sender,
+        up_to: Number(r.up_to),
+        updated_at: new Date(r.updated_at as string | Date).toISOString(),
+      }));
+    },
   };
 }
 
@@ -1343,6 +1402,8 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type PositionRow = { card_id: string; participant: Sender; stance: DecisionStance; note: string | null; updated_at: string };
   const decisionRows = new Map<string, DecisionRow>();
   const positionRows = new Map<string, PositionRow>();
+  type ReadRow = { participant: Sender; up_to: number; updated_at: string };
+  const readRows = new Map<string, ReadRow>();
   const positionKey = (cardId: string, participant: Sender) => `${cardId}\0${participant}`;
   const assembleDecision = (row: DecisionRow): DecisionCard => ({
     id: row.id,
@@ -1372,6 +1433,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         return `${c.message_id}:${agree}:${object}:${latest}`;
       });
     return `${decisionRows.size}|${entries.join(',')}`;
+  };
+  const readsFingerprint = (): string => {
+    const entries = [...readRows.values()]
+      .sort((a, b) => a.participant.localeCompare(b.participant))
+      .map((r) => `${r.participant}:${r.up_to}`);
+    return `${readRows.size}|${entries.join(',')}`;
   };
   const copy = (m: Message): Message => ({
     ...m,
@@ -1445,7 +1512,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async all() { return rows.map(copy); },
     async version() {
-      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint() };
+      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint() };
     },
     async claimWakeup() {
       const fresh = rows.filter((m) => m.id > lastNotifiedId && wakesGrok(m));
@@ -1637,6 +1704,20 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       return [...decisionRows.values()]
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assembleDecision);
+    },
+    async setReadPosition(participant, upTo) {
+      shaped(participant);
+      if (!rows.some((m) => m.id === upTo)) throw new ReadError('not found');
+      const existing = readRows.get(participant);
+      if (existing && existing.up_to >= upTo) return { ...existing };
+      const row: ReadRow = { participant, up_to: upTo, updated_at: timestamp() };
+      readRows.set(participant, row);
+      return { ...row };
+    },
+    async listReads() {
+      return [...readRows.values()]
+        .sort((a, b) => a.participant.localeCompare(b.participant))
+        .map((r) => ({ ...r }));
     },
   };
 }

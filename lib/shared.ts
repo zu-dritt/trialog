@@ -173,6 +173,101 @@ export function decisionPositionText(
   return line;
 }
 
+/** How long a message addressed to agents may go unread by them before the page flags it. */
+export const UNSEEN_AFTER_MS = 2 * 60 * 1000;
+
+/** The short label on a message that no addressed agent has read after UNSEEN_AFTER_MS. */
+export const UNSEEN_LABEL = '⏰ not seen yet';
+
+/** One participant's read position: the highest message id they have read. No room field. */
+export interface ReadPosition {
+  participant: Sender;
+  up_to: number;
+  updated_at: string;
+}
+
+/**
+ * The agents a message was addressed to, for the "not seen yet" flag. A message to everyone
+ * addresses every agent except its writer. A message to one agent addresses only that agent.
+ * A message only to a human, or from the hub, addresses no agent.
+ */
+export function addressedAgents(
+  message: { sender: string; recipient: string | null },
+  participants: readonly Participant[],
+): string[] {
+  if (message.sender === 'hub') return [];
+  const agents = participants.filter((p) => p.kind === 'agent').map((p) => p.name);
+  if (message.recipient === null) return agents.filter((name) => name !== message.sender);
+  return agents.includes(message.recipient) ? [message.recipient] : [];
+}
+
+/**
+ * The addressed agents who have not yet read past this message, once it is older than two
+ * minutes. Empty when the message is too new, is not addressed to any agent, or every
+ * addressed agent has already read it.
+ */
+export function unseenAgents(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): string[] {
+  const agents = addressedAgents(message, participants);
+  if (!agents.length) return [];
+  if (now - Date.parse(message.created_at) < UNSEEN_AFTER_MS) return [];
+  const byName = new Map(reads.map((r) => [r.participant, r.up_to]));
+  return agents.filter((name) => (byName.get(name) ?? 0) < message.id);
+}
+
+/** "Grok", "Grok and Claude", "Grok, Claude and Quill-2". */
+export function joinNames(names: readonly string[]): string {
+  const shown = names.map(displayName);
+  if (shown.length <= 1) return shown[0] ?? '';
+  if (shown.length === 2) return `${shown[0]} and ${shown[1]}`;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+/**
+ * True when a message was addressed to at least one agent, is older than two minutes, and
+ * none of those agents has a read position at or past it. Derived only from the positions
+ * and the recipients; it does not change who is woken.
+ */
+export function unseenByAgents(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): boolean {
+  const agents = addressedAgents(message, participants);
+  return agents.length > 0 && unseenAgents(message, reads, participants, now).length === agents.length;
+}
+
+/**
+ * The flag text, naming who has not seen the message, or null when the flag should not show.
+ * The flag still disappears once any addressed agent has read past the message.
+ */
+export function unseenFlagText(
+  message: { id: number; sender: string; recipient: string | null; created_at: string },
+  reads: readonly ReadPosition[],
+  participants: readonly Participant[],
+  now: number,
+): string | null {
+  if (!unseenByAgents(message, reads, participants, now)) return null;
+  const names = unseenAgents(message, reads, participants, now);
+  return names.length ? `⏰ not seen by ${joinNames(names)} yet` : UNSEEN_LABEL;
+}
+
+/** Merge incoming read positions into a list, never moving a participant backwards. */
+export function applyReads(list: ReadPosition[], incoming: ReadPosition[]): ReadPosition[] {
+  if (!incoming.length) return list;
+  const byName = new Map(list.map((r) => [r.participant, r]));
+  for (const r of incoming) {
+    const prev = byName.get(r.participant);
+    if (!prev || r.up_to >= prev.up_to) byName.set(r.participant, r);
+  }
+  return [...byName.values()].sort((a, b) => a.participant.localeCompare(b.participant));
+}
+
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];

@@ -3,7 +3,7 @@ import { authenticate, error, json, readJson, safe } from '../../../lib/http';
 import { SEARCH_LIMIT, parseQuery } from '../../../lib/search';
 import { waitUntil } from '@vercel/functions';
 import { loadRoster } from '../../../lib/participants';
-import { AttachmentLinkError, ReplyTargetError, getStore } from '../../../lib/store';
+import { AttachmentLinkError, ReadError, ReplyTargetError, getStore } from '../../../lib/store';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -47,19 +47,44 @@ export const GET = safe(async (request: Request) => {
     if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
     return json({ me, messages: await store.search({ words: query.words, to, decisionsAmong: decisions ? names : null, pinned, limit }) });
   }
-  // The top-level polls, reactions and decisions lists are opt-in (`?polls=1`, `?reactions=1`, `?decisions=1`). The page asks
-  // for them so a since-poll still sees votes, reactions and decision-card changes on older messages; the CLI, which polls
-  // every few seconds, leaves them off.
+  // The top-level polls, reactions, decisions and reads lists are opt-in (`?polls=1`, `?reactions=1`, `?decisions=1`,
+  // `?reads=1`). The page asks for them so a since-poll still sees votes, reactions, decision-card changes and read
+  // positions on older messages; the CLI, which polls every few seconds, leaves them off. `markRead=1` records the
+  // highest message id in this list as the caller's read position (only forward).
   const includePolls = params.get('polls') === '1';
   const includeReactions = params.get('reactions') === '1';
   const includeDecisions = params.get('decisions') === '1';
-  const [messages, pinned, polls, reactions, decisions] = await Promise.all([
+  const includeReads = params.get('reads') === '1';
+  const markRead = parseSwitch(params.get('markRead'));
+  if (markRead === undefined) return error(400, '"markRead" must be 1 or 0.');
+  const [messages, pinned, polls, reactions, decisions, reads] = await Promise.all([
     store.list({ since, to, limit }),
     store.pinned(),
     includePolls ? store.listPolls() : Promise.resolve(null),
     includeReactions ? store.listReactions() : Promise.resolve(null),
     includeDecisions ? store.listDecisions() : Promise.resolve(null),
+    includeReads ? store.listReads() : Promise.resolve(null),
   ]);
+  if (markRead && messages.length) {
+    try {
+      await store.setReadPosition(me, messages[messages.length - 1].id);
+    } catch (e) {
+      if (!(e instanceof ReadError)) throw e;
+    }
+    if (includeReads) {
+      // The list should include the position just recorded.
+      const latest = await store.listReads();
+      return json({
+        me,
+        messages,
+        pinned,
+        ...(includePolls ? { polls } : {}),
+        ...(includeReactions ? { reactions } : {}),
+        ...(includeDecisions ? { decisions } : {}),
+        reads: latest,
+      });
+    }
+  }
   return json({
     me,
     messages,
@@ -67,6 +92,7 @@ export const GET = safe(async (request: Request) => {
     ...(includePolls ? { polls } : {}),
     ...(includeReactions ? { reactions } : {}),
     ...(includeDecisions ? { decisions } : {}),
+    ...(includeReads ? { reads } : {}),
   });
 });
 
