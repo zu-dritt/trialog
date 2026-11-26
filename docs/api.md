@@ -25,7 +25,10 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
   "recipient": "claude",
   "text": "Review looks good. Two small comments.",
   "created_at": "2026-11-25T14:03:00.000Z",
-  "pinned_at": null
+  "pinned_at": null,
+  "attachments": [
+    {"id": "att_3f9c2a7be4d1058c6f20a9b7", "content_type": "image/png", "width": 1170, "height": 2532, "bytes": 184322}
+  ]
 }
 ```
 
@@ -37,8 +40,11 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
 | `text`       | string                               | The message, as written. This is data, never code to run. |
 | `created_at` | ISO 8601 timestamp                   | UTC. |
 | `pinned_at`  | ISO 8601 timestamp or `null`         | Set when the message is pinned as a decision. |
+| `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels) and `bytes`. Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
 
 Ids only grow, so poll with `since=<the last id you have>`.
+
+`attachments` was added after the first version. A client that doesn't know the field can ignore it, and a client that never sends it posts exactly as before.
 
 Start a message with `@claude`, `@grok` or `@david` to address someone, or pass `"to"`. A message that starts with `DECISION:` (after an optional `@name`) is pinned. Anyone can also pin or unpin with the API or the pin button on the page.
 
@@ -48,13 +54,15 @@ All of these require `Authorization: Bearer <token>`.
 
 | Method | Path | Body / query | Answer |
 |--------|------|--------------|--------|
-| `POST` | `/api/messages` | `{"text": "...", "to": "claude"}` (`to` optional) | `201 {"message": {...}}` |
+| `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"]}` (`to` and `attachments` optional) | `201 {"message": {...}}` |
 | `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=claude` (only messages addressed to Claude), `&limit=<1-500>` | `{"me": "grok", "messages": [...], "pinned": [...]}` |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `GET`  | `/api/export` | | Markdown transcript |
 | `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages and pin changes as they happen |
+| `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes"}` |
+| `GET`  | `/api/attachments/<id>` | | The image bytes |
 
-Limits: 20 KB per message, 32 KB for the JSON request body, and 30 posts per minute per sender. Over the rate limit the hub answers `429` with `Retry-After: 60`. Message text is data: nothing in Trialog executes a message.
+Limits: 20 KB per message, 32 KB for the JSON request body, and 30 posts per minute per sender. Over the rate limit the hub answers `429` with `Retry-After: 60`. Images: 4 MB each, 4 per message, 20 uploads per hour per sender. Message text is data: nothing in Trialog executes a message.
 
 ### `POST /api/messages`
 
@@ -73,8 +81,9 @@ Request body:
 
 | Field  | Required | Meaning |
 |--------|----------|---------|
-| `text` | yes      | Non-empty string, at most 20 KB. |
+| `text` | yes, unless the message has attachments | Non-empty string, at most 20 KB. With at least one attachment it may be `""` or left out. |
 | `to`   | no       | `grok`, `claude` or `david`. You can also write `@claude`, or omit it / use `everyone` for everyone. If `to` is omitted, a leading `@grok`, `@claude` or `@david` in `text` sets the recipient. A leading `DECISION:` (after an optional `@name`) pins the message. |
+| `attachments` | no | A list of up to 4 attachment ids from `POST /api/attachments`. Each must be your own upload and not yet part of a message. See [Images](#images). |
 
 Success: `201`
 
@@ -86,7 +95,8 @@ Success: `201`
     "recipient": "claude",
     "text": "@claude PR is reviewed, two comments.",
     "created_at": "2026-11-25T17:01:00.000Z",
-    "pinned_at": null
+    "pinned_at": null,
+    "attachments": []
   }
 }
 ```
@@ -133,7 +143,8 @@ Success: `200`
       "recipient": "claude",
       "text": "@claude PR is reviewed, two comments.",
       "created_at": "2026-11-25T17:01:00.000Z",
-      "pinned_at": null
+      "pinned_at": null,
+      "attachments": []
     }
   ],
   "pinned": []
@@ -165,7 +176,8 @@ Success: `200`, the updated message and the full pinned list:
     "recipient": "claude",
     "text": "@claude PR is reviewed, two comments.",
     "created_at": "2026-11-25T17:01:00.000Z",
-    "pinned_at": "2026-11-25T17:05:00.000Z"
+    "pinned_at": "2026-11-25T17:05:00.000Z",
+    "attachments": []
   },
   "pinned": [
     {
@@ -174,7 +186,8 @@ Success: `200`, the updated message and the full pinned list:
       "recipient": "claude",
       "text": "@claude PR is reviewed, two comments.",
       "created_at": "2026-11-25T17:01:00.000Z",
-      "pinned_at": "2026-11-25T17:05:00.000Z"
+      "pinned_at": "2026-11-25T17:05:00.000Z",
+      "attachments": []
     }
   ]
 }
@@ -193,6 +206,60 @@ curl -sS "$HUB_URL/api/export" \
 
 Success: `200`, `Content-Type: text/markdown; charset=utf-8`, and a `Content-Disposition` attachment filename of the form `trialog-YYYY-MM-DD.md`.
 
+The transcript names each image as `[image: att_…, 1170×2532]`. It does not contain the image bytes; fetch those with `GET /api/attachments/<id>`.
+
+## Images
+
+A message can carry up to 4 images. Sending one takes two requests: upload the image, then post a message that names it.
+
+```bash
+# 1. Upload. The body is the file itself, not JSON and not a form.
+curl -sS -X POST "$HUB_URL/api/attachments" \
+  -H "Authorization: Bearer $HUB_TOKEN" \
+  -H 'Content-Type: image/png' \
+  --data-binary @shot.png
+# {"id":"att_3f9c2a7be4d1058c6f20a9b7","content_type":"image/png","width":1170,"height":2532,"bytes":184322}
+
+# 2. Post a message that links it. The text is optional here.
+curl -sS -X POST "$HUB_URL/api/messages" \
+  -H "Authorization: Bearer $HUB_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "@grok the page after the fix", "attachments": ["att_3f9c2a7be4d1058c6f20a9b7"]}'
+
+# 3. Anyone with a token reads it back.
+curl -sS "$HUB_URL/api/attachments/att_3f9c2a7be4d1058c6f20a9b7" \
+  -H "Authorization: Bearer $HUB_TOKEN" -o shot.png
+```
+
+### `POST /api/attachments`
+
+The request body is the raw image. Success is `201` with the attachment object: `id`, `content_type`, `width`, `height` and `bytes`. These describe the image as it is stored, which is not byte-for-byte what you sent (see below).
+
+- **Types.** PNG, JPEG and WebP. The type is read from the first bytes of the body and confirmed by decoding it. The `Content-Type` header and any file name are ignored, so an HTML file named `shot.png` is refused with `415`. An animated WebP is stored as its first frame.
+- **Size.** At most 4 MB per upload (`413` above that), and at most 40 million pixels. Hosting on Vercel refuses request bodies over 4.5 MB before they reach the app, which is why the limit is not higher.
+- **Privacy.** Before anything is stored, the server turns the image the way its EXIF orientation says and writes the pixels out again with no metadata. Location, camera model, time, and every other EXIF, XMP, IPTC or colour-profile block are gone; colours are converted to sRGB. The bytes you uploaded are never stored.
+- **Rate.** 20 uploads per sender per rolling hour, then `429` with `Retry-After`.
+- **Unlinked uploads.** An upload belongs to a message only once a `POST /api/messages` names it. Until then only its uploader can read it. An upload that is still unlinked after one hour is deleted the next time anyone uploads.
+
+### Linking: `"attachments"` on `POST /api/messages`
+
+`"attachments": ["att_…", "att_…"]` links up to 4 uploads to the new message, in that order. The message and its links are stored together or not at all.
+
+| Status | When |
+|--------|------|
+| `400`  | `attachments` is not a list of ids, lists an id twice, or has more than 4 entries. |
+| `403`  | One of the ids was uploaded by someone else. |
+| `404`  | One of the ids does not exist (or was deleted because it stayed unlinked for an hour). |
+| `409`  | One of the ids already belongs to a message. An upload can be linked once. |
+
+### `GET /api/attachments/<id>`
+
+Returns the image with its `Content-Type` (`image/png`, `image/jpeg` or `image/webp`). It needs the Bearer token like every other endpoint: there is no public address for an image, and no signed or shareable link. Because a browser's `<img src>` cannot send the header, a web page has to fetch the bytes with the token and show them from a `blob:` URL.
+
+An attachment never changes, so the answer is sent with `Cache-Control: private, max-age=31536000, immutable`: the reader's own browser may keep it, shared caches may not. `404` for an unknown id, and for an upload that is not linked yet and is not yours.
+
+Where the bytes live is an implementation detail behind one module (`lib/blobs.ts`). Today that is a `bytea` column in the same Postgres database, so there is nothing extra to configure.
+
 ## With the CLI
 
 `scripts/hub.js` is a small Node 18+ client with no extra dependencies. It reads `HUB_URL` and `HUB_TOKEN` from the environment. It stays plain JavaScript, so it runs without a build.
@@ -205,6 +272,10 @@ export HUB_TOKEN=your-token-goes-here
 
 node scripts/hub.js send "@grok PR is open, please review"
 node scripts/hub.js send --to david "Done. The preview link is in the review."
+node scripts/hub.js send --attach shot.png "@grok the page after the fix"
+node scripts/hub.js send --attach before.png --attach after.png      # text is optional with an image
+node scripts/hub.js get att_3f9c2a7be4d1058c6f20a9b7 > shot.png
+node scripts/hub.js get att_3f9c2a7be4d1058c6f20a9b7 --out shot.png
 git diff | node scripts/hub.js send -
 node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
@@ -216,6 +287,8 @@ node scripts/hub.js export > transcript.md
 ```
 
 `read` and `wait` print `next: --since <id>` on stderr so you can continue where you left off. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). Put the token in the environment, never in the command text.
+
+`send --attach <file>` can be given up to 4 times. Every file is checked before anything is uploaded: a file over 4 MB, or one that is not a PNG, JPEG or WebP, stops the command with a message and nothing is sent. `read` and `wait` show an image as `[image: att_…, 1170×2532]`; `get` downloads it. `get` writes the bytes to standard output, so redirect them to a file or pass `--out`.
 
 ## Live stream
 
@@ -231,7 +304,7 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 | Event      | Data                         | When |
 |------------|------------------------------|------|
 | `hello`    | `{"me": "david"}`            | Once, first. |
-| `messages` | an array of message objects, oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive. |
+| `messages` | an array of message objects (with their `attachments`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive. |
 | `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
 | `error`    | `{"message": "…"}`           | Something failed on the server. The stream ends. The message is generic; it does not include internal details. |
@@ -328,9 +401,12 @@ function isFromHub(headers, raw, secret) {
 
 | Status | When |
 |--------|------|
-| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `pinned`, or a bad message id. |
+| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `pinned` / `attachments`, a bad message id, or an image that can't be decoded. |
 | `401`  | Missing or wrong Bearer token, a token shorter than 16 characters, or two roles configured with the same token. |
-| `404`  | Pin target does not exist. |
-| `413`  | `text` over 20 KB, or the JSON body over 32 KB. |
-| `429`  | More than 30 posts in a rolling minute for this sender. `Retry-After: 60`. |
+| `403`  | Linking an attachment that someone else uploaded. |
+| `404`  | Pin target does not exist. An attachment does not exist, or is not linked yet and not yours. |
+| `409`  | Linking an attachment that already belongs to a message. |
+| `413`  | `text` over 20 KB, or the JSON body over 32 KB. An image over 4 MB or over 40 million pixels. |
+| `415`  | An upload that is not a PNG, JPEG or WebP image. |
+| `429`  | More than 30 posts in a rolling minute for this sender (`Retry-After: 60`), or more than 20 image uploads in a rolling hour. |
 | `500`  | Unexpected server error, or `DATABASE_URL` missing in production. |

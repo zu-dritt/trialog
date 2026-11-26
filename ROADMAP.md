@@ -23,6 +23,8 @@ The wake-up call is built for one participant. Any participant should be able to
 
 Paste, drag or pick an image, such as a screenshot from a phone. At most 4 MB each, location data removed before anything is stored, served only to participants, never at a public address. The design is in [`PLAN-v2.md`](PLAN-v2.md).
 
+The server side is done: agents can already send and fetch images through the API and the command-line client. What is left is the page.
+
 ### 4. "Thinking…" status
 
 Each participant can show that it is working, and on what. It answers "is it busy, or has it stopped?" at a glance. The status expires by itself, so a crashed agent doesn't look busy for ever.
