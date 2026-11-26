@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
 import type { DecisionCard, DecisionStance, ReadPosition } from '../lib/shared';
-import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ROOMS, attachmentLabel, colorOf, displayName, firstLine, formatSeen, type Attachment, type Participant, type Room } from '../lib/shared';
+import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ROOMS, attachmentLabel, colorOf, firstLine, labelOf, formatSeen, type Attachment, type Participant, type Room } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
@@ -121,6 +121,8 @@ export default function Page() {
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
   const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
+  const participantsRef = useRef<Participant[]>([]);
+  participantsRef.current = participants;
   // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
   const names = useMemo(() => participants.map((p) => p.name), [participants]);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
@@ -563,7 +565,7 @@ export default function Page() {
     const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
     const text = selected ?? source;
     if (text.trim() === '') return;
-    const quote: Quote = { author: displayName(m.sender), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
+    const quote: Quote = { author: labelOf(m.sender, participantsRef.current), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
     clearQuotable();
     // The same words are a chip already: its comment opens, instead of a second chip.
     const chip = quotesRef.current.find((q) => sameQuote(q, quote));
@@ -910,6 +912,8 @@ export default function Page() {
   let lastDay = '';
   // A name the server doesn't list (the hub's welcome, a former participant) gets the neutral colour.
   const color = (name: string) => colorOf(name, participants);
+  // How a name is shown: the participant's label (david:human:Orchestrator), else the name with a capital.
+  const shown = (name: string) => labelOf(name, participants);
   const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
   const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
   const reload = () => window.location.reload();
@@ -938,7 +942,7 @@ export default function Page() {
         {tabs('hidden lg:flex lg:max-w-[42%]')}
         {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
         <SearchBox search={runSearch} onPick={(m) => void goToMessage(m.id, m.room)} participants={participants} rooms={rooms} />
-        {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
+        {me && <span className="text-[13px] font-semibold">You: {shown(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
@@ -953,7 +957,7 @@ export default function Page() {
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{displayName(m.sender)}</span>{' '}
+                <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{shown(m.sender)}</span>{' '}
                 {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
@@ -995,13 +999,13 @@ export default function Page() {
                 style={{ borderLeftColor: own }}
               >
                 <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
-                  {displayName(m.sender)[0] ?? '?'}
+                  {shown(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2 text-[13px] text-muted">
-                    <span className="font-bold" style={{ color: own }}>{displayName(m.sender)}</span>
+                    <span className="font-bold" style={{ color: own }}>{shown(m.sender)}</span>
                     {m.recipient && (
-                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {displayName(m.recipient)}</span>
+                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {shown(m.recipient)}</span>
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
@@ -1041,7 +1045,7 @@ export default function Page() {
                     return (
                       <ReplyContext
                         replyTo={m.reply_to} parent={parent} onJump={jumpTo}
-                        author={parent ? displayName(parent.sender) : undefined}
+                        author={parent ? shown(parent.sender) : undefined}
                         authorColor={parent ? color(parent.sender) : undefined}
                       />
                     );
@@ -1089,7 +1093,7 @@ export default function Page() {
         {/* Everything that goes with the next message, in one row: the message it answers, quotes, images. */}
         {(replyTo || quotes.length > 0 || drafts.length > 0) && (
           <ChipRow>
-            {replyTo && <ReplyingTo parent={replyTo} author={displayName(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
+            {replyTo && <ReplyingTo parent={replyTo} author={shown(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
             <QuoteChips quotes={quotes} onRemove={removeQuote} onEdit={editQuote} />
             <DraftChips drafts={drafts} onRemove={removeDraft} />
           </ChipRow>
@@ -1139,7 +1143,7 @@ export default function Page() {
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
           />
           <ComposerTools
-            to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: displayName(p.name) }))}
+            to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: shown(p.name) }))}
             emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
             image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
             decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}

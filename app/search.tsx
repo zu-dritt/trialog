@@ -9,7 +9,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Message } from '../lib/core';
 import { isDecision } from '../lib/decision';
-import { colorOf, displayName, type Participant, type Room } from '../lib/shared';
+import { colorOf, labelOf, type Participant, type Room } from '../lib/shared';
 import { DecisionBadge } from './decision';
 import { SEARCH_LIMIT, debounce, markMatches, matchLine, newestOnly, parseQuery } from '../lib/search';
 
@@ -55,7 +55,7 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
           className={`cursor-pointer border-t border-line px-3 py-1.5 ${i === active ? 'bg-[#2a2f3a]' : ''}`}
         >
           <div className="flex items-baseline gap-2 text-xs text-muted">
-            <span className="font-bold" style={{ color: colorOf(m.sender, participants) }}>{displayName(m.sender)}</span>
+            <span className="font-bold" style={{ color: colorOf(m.sender, participants) }}>{labelOf(m.sender, participants)}</span>
             <time dateTime={m.created_at}>{whenFmt.format(new Date(m.created_at))}</time>
             <span>#{m.id}</span>
             {rooms.length > 1 && <span>in {rooms.find((r) => r.id === m.room)?.name ?? m.room}</span>}

@@ -4,7 +4,7 @@
 // a subtle flag on a message that no addressed agent has seen after two minutes, and the
 // hook that records the highest visible message while the tab is focused.
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { colorOf, displayName, UNSEEN_AFTER_MS, unseenFlagText, type Participant, type ReadPosition, type Sender } from '../lib/shared';
+import { colorOf, labelOf, UNSEEN_AFTER_MS, unseenFlagText, type Participant, type ReadPosition, type Sender } from '../lib/shared';
 import type { Message } from '../lib/core';
 
 export { applyReads, UNSEEN_LABEL, UNSEEN_AFTER_MS, unseenByAgents, unseenFlagText } from '../lib/shared';
@@ -26,7 +26,7 @@ export function ReadReceipts({
   return (
     <ul className="mt-1 mb-0 flex list-none flex-wrap items-center gap-0.5 p-0" aria-label="Who has read up to here">
       {here.map((r) => {
-        const name = displayName(r.participant);
+        const name = labelOf(r.participant, participants);
         const initial = name[0] ?? '?';
         return (
           <li key={r.participant}>

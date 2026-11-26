@@ -2,8 +2,9 @@
 //
 //   PARTICIPANTS=ana:human,ben:human,scout:agent,quill:agent
 //
-// a comma-separated list of name:kind, where kind is "human" or "agent". Each participant's token
-// is read from <NAME>_TOKEN (the name in upper case, "-" written as "_").
+// a comma-separated list of name:kind, where kind is "human" or "agent". An entry may add a third
+// part, a label to show instead of the name (david:human:Orchestrator); the name stays the id.
+// Each participant's token is read from <NAME>_TOKEN (the name in upper case, "-" written as "_").
 //
 // Without the setting, the three participants this project started with apply, and their tokens
 // are treated as leniently as they always were (a missing token just never matches), so a
@@ -18,7 +19,7 @@
 //
 // No Next.js imports here, so Vitest can load it directly.
 import { timingSafeEqual } from 'node:crypto';
-import { NAME_PATTERN, RESERVED_NAMES, type Participant, type ParticipantKind } from './shared';
+import { LABEL_MAX_LENGTH, NAME_PATTERN, RESERVED_NAMES, displayName, validLabel, type Participant, type ParticipantKind } from './shared';
 
 export const DEFAULT_PARTICIPANTS = 'grok:agent,claude:agent,david:human';
 export const MIN_PARTICIPANTS = 2;
@@ -42,6 +43,7 @@ export class ConfigError extends Error {
 export const tokenEnvName = (name: string): string => `${name.toUpperCase().replace(/-/g, '_')}_TOKEN`;
 
 const NAME_RULE = 'A name is lowercase, starts with a letter, continues with letters, digits or "-", and has at most 24 characters.';
+const LABEL_RULE = `A label has 1 to ${LABEL_MAX_LENGTH} characters: letters, digits, spaces and "-", starting and ending with a letter or digit.`;
 const list = (items: string[]): string => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items.join(''));
 
 /**
@@ -60,8 +62,8 @@ export function parseParticipants(value: string): Participant[] {
   for (const [i, entry] of entries.entries()) {
     const where = `PARTICIPANTS entry ${i + 1}`;
     const parts = entry.split(':');
-    if (entry === '' || parts.length !== 2) {
-      throw new ConfigError(`${where} must be name:kind, for example ana:human. Entries are separated by commas.`);
+    if (entry === '' || parts.length < 2 || parts.length > 3) {
+      throw new ConfigError(`${where} must be name:kind or name:kind:Label, for example ana:human or ana:human:Orchestrator. Entries are separated by commas.`);
     }
     const name = parts[0].trim();
     const kind = parts[1].trim();
@@ -71,7 +73,16 @@ export function parseParticipants(value: string): Participant[] {
       throw new ConfigError(`${where} uses the name "${name}", which is reserved (${RESERVED_NAMES.join(', ')}).`);
     }
     if (participants.some((p) => p.name === name)) throw new ConfigError(`PARTICIPANTS lists "${name}" more than once.`);
-    participants.push({ name, kind: kind as ParticipantKind, color: i });
+    // Optional: how the participant is shown. The label is not repeated in an error: it may hold anything.
+    const given = parts.length === 3 ? parts[2].trim() : null;
+    if (given !== null && !validLabel(given)) throw new ConfigError(`${where} ("${name}") has a label that can't be used. ${LABEL_RULE}`);
+    participants.push({ name, kind: kind as ParticipantKind, color: i, label: given ?? displayName(name) });
+  }
+  // Two participants who look the same on the page could be taken for each other.
+  const shown = (p: Participant) => (p.label ?? '').toLowerCase();
+  for (const [i, p] of participants.entries()) {
+    const other = participants.find((q, j) => j !== i && (shown(q) === shown(p) || displayName(q.name).toLowerCase() === shown(p)));
+    if (other) throw new ConfigError(`PARTICIPANTS gives "${p.name}" a label that "${other.name}" is shown with too. Every participant needs a label of their own.`);
   }
   return participants;
 }

@@ -7,7 +7,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { REACTION_HINT, type Message, type Reaction, type Sender } from '../lib/core';
-import { displayName, type Participant } from '../lib/shared';
+import { labelOf, type Participant } from '../lib/shared';
 import type { MessageReactions } from '../lib/store';
 import { EmojiPanel, RECENT_KEY, parseRecent, pushRecent } from './emoji';
 
@@ -60,8 +60,8 @@ function saveRecent(recent: string[]): void {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)); } catch { /* the picker works without it */ }
 }
 
-function labelFor(reaction: Reaction, me: Sender | null): string {
-  const names = reaction.by.map((v) => (v === me ? 'you' : displayName(v)));
+function labelFor(reaction: Reaction, me: Sender | null, participants: readonly Participant[]): string {
+  const names = reaction.by.map((v) => (v === me ? 'you' : labelOf(v, participants)));
   const who = names.join(', ');
   return who ? `${reaction.emoji}, ${reaction.by.length}, ${who}` : `${reaction.emoji}, ${reaction.by.length}`;
 }
@@ -69,7 +69,7 @@ function labelFor(reaction: Reaction, me: Sender | null): string {
 interface BarProps {
   message: Message;
   me: Sender | null;
-  /** From GET /api/participants, the same roster PollCard uses. Names are shown with displayName. */
+  /** From GET /api/participants, the same roster PollCard uses. Names are shown with their labels. */
   participants?: readonly Participant[];
   /** PUT or DELETE the emoji, then hand the updated message back. */
   onToggle: (emoji: string, on: boolean) => void;
@@ -77,7 +77,7 @@ interface BarProps {
 }
 
 /** The pills under a message. The react button itself lives in the action row. */
-export function ReactionBar({ message, me, onToggle }: BarProps) {
+export function ReactionBar({ message, me, onToggle, participants = [] }: BarProps) {
   const reactions = message.reactions ?? [];
   if (!reactions.length) return null;
   return (
@@ -90,8 +90,8 @@ export function ReactionBar({ message, me, onToggle }: BarProps) {
             type="button"
             className={`cursor-pointer rounded-full border px-1.5 py-0.5 text-[13px] ${mine ? 'border-line bg-[#2a2f3a] text-fg' : 'border-line bg-transparent text-muted hover:bg-panel'}`}
             aria-pressed={mine}
-            aria-label={labelFor(r, me)}
-            title={r.by.map((v) => displayName(v)).join(', ')}
+            aria-label={labelFor(r, me, participants)}
+            title={r.by.map((v) => labelOf(v, participants)).join(', ')}
             onClick={() => onToggle(r.emoji, !mine)}
           >
             {r.emoji} {r.by.length}

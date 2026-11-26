@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { Message } from '../lib/core';
 import type { Participant, Poll, Sender } from '../lib/shared';
-import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, VOTE_HINT, colorOf, displayName } from '../lib/shared';
+import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, VOTE_HINT, colorOf, labelOf } from '../lib/shared';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 
@@ -54,7 +54,7 @@ export function PollCard({
           const selected = mine === option.index;
           const label = `${option.index}. ${option.text}`;
           const voters = option.voters.map((name) => (
-            <span key={name} className="font-semibold" style={{ color: colorOf(name, participants) }}>{displayName(name)}</span>
+            <span key={name} className="font-semibold" style={{ color: colorOf(name, participants) }}>{labelOf(name, participants)}</span>
           ));
           const who = voters.length > 0 && (
             <span className="text-xs text-muted">

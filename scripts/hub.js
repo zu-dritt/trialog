@@ -48,8 +48,11 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const MAX_ATTACHMENTS = 4;
 // Who the participants are is the server's setting; this tool has no list of its own.
-// How a name is shown, like the page does it: "grok" → "Grok", "ana-maria" → "Ana-Maria".
-const label = (name) => String(name).split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');
+// How a name is shown, like the page does it: the participant's label when the hub gives one
+// (PARTICIPANTS=david:human:Orchestrator), otherwise "grok" → "Grok", "ana-maria" → "Ana-Maria".
+const capital = (name) => String(name).split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');
+let labels = new Map();
+const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
@@ -99,6 +102,21 @@ async function call(path, options = {}) {
     process.exit(res.status === 401 ? 77 : 1);
   }
   return res;
+}
+
+/**
+ * Reads the labels once, right before a command prints names in text. One request; when it fails,
+ * names are shown with a capital as before. Output with --json carries names only and needs none.
+ */
+async function loadLabels() {
+  try {
+    const res = await fetch(`${base}/api/participants`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return;
+    const data = await res.json();
+    labels = new Map((data.participants || [])
+      .filter((p) => p && typeof p.name === 'string' && typeof p.label === 'string' && p.label)
+      .map((p) => [p.name, p.label]));
+  } catch { /* names with a capital, as before */ }
 }
 
 function fmt(m) {
@@ -200,6 +218,7 @@ async function main() {
     const count = message.attachments?.length || 0;
     const withImages = count ? ` with ${count} image${count === 1 ? '' : 's'}` : '';
     const asReply = message.reply_to ? ` in reply to #${message.reply_to}` : '';
+    if (!opts.json && message.recipient) await loadLabels();
     const inRoom = message.room && message.room !== 'main' ? ` in ${message.room}` : '';
     console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${inRoom}${asReply}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
     return;
@@ -229,7 +248,7 @@ async function main() {
     }
     const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, room: opts.room, markRead: opts.peek ? undefined : '1' })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
-    else for (const m of data.messages) console.log(fmt(m));
+    else { if (data.messages.length) await loadLabels(); for (const m of data.messages) console.log(fmt(m)); }
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
     console.error(`next: --since ${last}`);
     return;
@@ -240,7 +259,7 @@ async function main() {
     if (!q) usage('search needs at least one word, for example: search "storage images"');
     const data = await (await call(`/api/messages${query({ q, to: opts.to, limit: opts.limit, room: opts.room, decisions: opts.decisions ? '1' : undefined, pinned: opts.pinned ? '1' : undefined })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
-    else for (const m of data.messages) console.log(fmt(m));
+    else { if (data.messages.length) await loadLabels(); for (const m of data.messages) console.log(fmt(m)); }
     // Newest first. The count goes to stderr, so stdout holds nothing but the messages.
     console.error(data.messages.length ? `${data.messages.length} found, newest first` : 'nothing found');
     return;
@@ -266,7 +285,7 @@ async function main() {
       if (data.messages.length) since = data.messages.at(-1).id;
       if (hits.length) {
         if (opts.json) console.log(JSON.stringify(hits));
-        else for (const m of hits) console.log(fmt(m));
+        else { await loadLabels(); for (const m of hits) console.log(fmt(m)); }
         console.error(`next: --since ${since}`);
         return;
       }
@@ -289,7 +308,7 @@ async function main() {
       const data = await (await call('/api/status')).json();
       if (opts.json) console.log(JSON.stringify(data.statuses));
       else if (!data.statuses.length) console.log('no active status');
-      else for (const s of data.statuses) console.log(`${label(s.participant)}: ${s.text} (expires ${s.expires_at})`);
+      else { await loadLabels(); for (const s of data.statuses) console.log(`${label(s.participant)}: ${s.text} (expires ${s.expires_at})`); }
       return;
     }
     const text = args.join(' ').replace(/[\r\n\t]+/g, ' ').trim();
@@ -415,7 +434,11 @@ async function main() {
   if (cmd === 'participants') {
     const data = await (await call('/api/participants')).json();
     if (opts.json) console.log(JSON.stringify(data));
-    else for (const p of data.participants) console.log(`${p.name} (${p.kind})${p.name === data.me ? '  ← you' : ''}`);
+    else for (const p of data.participants) {
+      // The label, when it is more than the name with a capital: david (human, shown as Orchestrator).
+      const shownAs = p.label && p.label !== capital(p.name) ? `, shown as ${p.label}` : '';
+      console.log(`${p.name} (${p.kind}${shownAs})${p.name === data.me ? '  ← you' : ''}`);
+    }
     return;
   }
 
@@ -464,6 +487,7 @@ async function main() {
         console.error('hub: only a human can list wake-up targets');
         process.exit(1);
       }
+      labels = new Map(list.filter((p) => typeof p.label === 'string' && p.label).map((p) => [p.name, p.label]));
       const rows = list
         .filter((p) => p.wake_target_host)
         .map((p) => ({ name: p.name, host: p.wake_target_host, set_at: p.wake_target_set_at }));
@@ -495,7 +519,7 @@ async function main() {
     if (opts.json) console.log(JSON.stringify(data.messages));
     else {
       if (!data.messages.length) console.error('nothing to wake you');
-      else for (const m of data.messages) console.log(fmt(m));
+      else { if (data.messages.length) await loadLabels(); for (const m of data.messages) console.log(fmt(m)); }
     }
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
     console.error(`next: --since ${last}`);
