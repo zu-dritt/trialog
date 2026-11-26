@@ -524,7 +524,10 @@ export function RoomPane({
     }
     boxRef.current?.focus();
   };
-  const cancelQuote = (how: 'escape' | 'outside') => {
+  const cancelQuote = (how: 'escape' | 'outside', comment = '') => {
+    // Nothing typed is thrown away: a new quote with words in its comment is kept as a chip (its ×
+    // removes it). Editing an existing chip's comment and cancelling keeps the comment it had.
+    if (commenting?.key === null && comment.trim()) { finishQuote(comment); return; }
     setCommenting(null);
     if (how === 'escape') boxRef.current?.focus();
   };
