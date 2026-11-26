@@ -313,7 +313,7 @@ test('the migration is idempotent: a second start, and the file run by hand twic
   ]);
   const before = await snapshot();
   await createSqlStore(pgliteDb(pg)).ensure(); // a second instance starts
-  const migration = await file('../migrations/010-rooms.sql');
+  const migration = await file('../migrations/011-rooms.sql');
   await pg.exec(migration);
   await pg.exec(migration);
   assert.equal(await snapshot(), before, 'the room of a message and the rooms themselves are untouched');
@@ -403,7 +403,7 @@ for (const [name, make] of STORES) {
     const abort = new AbortController();
     const r = reader(createEventStream({ store, me: 'david', since: null, room: 'calm', seen: { main: 1, calm: old.id }, signal: abort.signal, ...FAST }));
 
-    const [hello, initial, pins, rooms] = await r.next(4);
+    const [hello, initial, pins, , rooms] = await r.next(5); // the fourth is the read positions
     assert.deepEqual(hello, { event: 'hello', data: { me: 'david', room: 'calm' } });
     assert.deepEqual(ids(initial.data as Message[]), [old.id], 'not the welcome message, which is in main');
     assert.deepEqual(ids(pins.data as Message[]), [old.id]);
@@ -665,7 +665,7 @@ test('GET /api/stream takes the room, and refuses one that is not there', async 
   const res = await streamRoute.GET(new Request(`${URL_BASE}/api/stream?room=calm&seen=main:0`, { headers: auth('david'), signal: abort.signal }));
   assert.equal(res.status, 200);
   const r = reader(must(res.body));
-  const [hello, initial, , list4] = await r.next(4);
+  const [hello, initial, , , list4] = await r.next(5);
   assert.deepEqual((hello.data as { me: string; room: string }).room, 'calm');
   assert.ok((initial.data as Message[]).every((m) => m.room === 'calm'));
   assert.ok(must((list4.data as Room[]).find((room) => room.id === 'main')).unread! > 0);

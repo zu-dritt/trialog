@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS decision_positions (
 
 CREATE INDEX IF NOT EXISTS decision_cards_message_id ON decision_cards (message_id);
 
+CREATE TABLE IF NOT EXISTS read_positions (
+     participant TEXT NOT NULL,
+     up_to       BIGINT NOT NULL REFERENCES messages (id),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (participant),
+     CONSTRAINT read_positions_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     CONSTRAINT read_positions_up_to_positive CHECK (up_to > 0)
+   );
+
+CREATE INDEX IF NOT EXISTS read_positions_up_to ON read_positions (up_to);
+
 CREATE TABLE IF NOT EXISTS rooms (
      id         TEXT PRIMARY KEY CONSTRAINT rooms_id_shape CHECK (id ~ '^[a-z][a-z0-9-]{0,23}$'),
      name       TEXT NOT NULL CONSTRAINT rooms_name_length CHECK (char_length(name) BETWEEN 1 AND 40),

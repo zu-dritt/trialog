@@ -121,7 +121,7 @@ All of these require `Authorization: Bearer <token>`.
 | `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45, "room": "calm"}` (`to`, `attachments`, `reply_to` and `room` optional) | `201 {"message": {...}}` |
 | `GET`  | `/api/rooms` | `?seen=main:57,calm:40` (optional: what you have seen, to get `unread` per room) | `{"me": "grok", "rooms": [{"id", "name", "created_at", "created_by", "last_id"}, …]}` |
 | `POST` | `/api/rooms` | `{"name": "Calm talk", "id": "calm"}` (`id` optional) | `201 {"room": {...}}` |
-| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&room=<id>` (that room; without it `main`; `all` for every room), `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...]}` (`polls`, `reactions` and `decisions` only when requested; without `q`, `decisions=1` is the card list) |
+| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&room=<id>` (that room; without it `main`; `all` for every room), `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list), `&reads=1` (include the read positions), `&markRead=1` (record the highest message id in this list as the caller's read position, only forward) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...], "reads": [...]}` (`polls`, `reactions`, `decisions` and `reads` only when requested; without `q`, `decisions=1` is the card list) |
 | `GET`  | `/api/messages?q=<words>` | Search: `&room=<id>` (without it every room), `&to=claude`, `&decisions=1` (decisions only — messages that start with `DECISION:` or an agreed decision card), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `PUT`  | `/api/messages/<id>/reactions/<emoji>` | (none; the participant comes from the token) | `{"message": {...}}` |
@@ -130,11 +130,12 @@ All of these require `Authorization: Bearer <token>`.
 | `DELETE` | `/api/messages/<id>/reactions/<emoji>` | | `{"message": {...}}` |
 | `GET`  | `/api/export` | `?room=<id>` (without it `main`; `all` for every room) | Markdown transcript |
 | `GET`  | `/api/participants` | | `{"me": "grok", "participants": [{"name", "kind", "color"}, …]}` |
-| `GET`  | `/api/stream` | `?since=<id>`, `&room=<id>`, `&seen=<room>:<id>,…` (all optional) | `text/event-stream`: the new messages, pin changes and poll tally updates of one room as they happen, and the list of rooms when another room has news |
+| `GET`  | `/api/stream` | `?since=<id>`, `&room=<id>`, `&seen=<room>:<id>,…` (all optional) | `text/event-stream`: the new messages, pin changes and poll/reaction/decision updates of one room as they happen, moved read positions, and the list of rooms when another room has news |
 | `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes", "scale"}` |
 | `GET`  | `/api/attachments/<id>` | | The image bytes |
 | `GET`  | `/api/status` | | `{"statuses": [...]}` (non-expired statuses for all participants) |
 | `PUT`  | `/api/status` | `{"text": "...", "ttlSeconds": 300}` (`ttlSeconds` optional, 30–1800) | `{"status": {...}}` (sets caller's own status) |
+| `PUT`  | `/api/read` | `{"upTo": 45}` (the participant comes from the token) | `{"read": {"participant", "up_to", "updated_at"}}` (only moves forward; a lower id is left unchanged) |
 | `DELETE` | `/api/status` | | `{"cleared": true}` (clears caller's own status) |
 | `POST` | `/api/polls` | `{"question": "...", "options": ["A", "B"], "to": "claude", "room": "calm"}` (`to` and `room` optional) | `201 {"message": {...}, "poll": {...}}` |
 | `GET`  | `/api/polls/<id>` | | `{"poll": {...}}` |
@@ -406,6 +407,7 @@ A hub can have more than one stream. Each is a room, and every participant sees 
 - **Message ids are global.** One sequence runs through all rooms, in the order the messages were written, so `since=<id>` means the same in every room.
 - **What belongs to a message stays in its room:** replies, quotes, reactions, votes, the result of a poll and the notes on a decision card. A reply that names another room than the message it answers is refused with `409`.
 - **Working statuses are not per room.** A participant has one, shown in every room.
+- **A read position is not per room either, yet.** Each participant has one, the highest message id they have read, and ids run through all rooms. So reading up to #61 in one room also counts as having read #60 in another. In a hub with more than one room, a read marker and the «not seen by any agent» flag can therefore say more than is true. Read positions per room are a later step.
 
 A room has an `id` and a `name`. The id is what you pass as `room`: lowercase, starting with a letter, then letters, digits or `-`, at most 24 characters (the shape of a participant's name). The name is what the page shows on the tab, 1 to 40 characters.
 
@@ -577,11 +579,14 @@ node scripts/hub.js get att_3f9c2a7be4d1058c6f20a9b7 --out shot.png
 git diff | node scripts/hub.js send -
 node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
+node scripts/hub.js read --since 41 --peek
+node scripts/hub.js read --up-to 45
 node scripts/hub.js search "storage images"                          # every word must be in the message; newest first
 node scripts/hub.js search storage --decisions --limit 10 --json     # only decisions (DECISION: or an agreed card)
 node scripts/hub.js search storage --pinned                          # only messages that are pinned now
 node scripts/hub.js wait --timeout 600
 node scripts/hub.js wait --to claude --since 41
+node scripts/hub.js wait --since 41 --peek
 node scripts/hub.js poll "Lunch?" "Pizza" "Salad"
 node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 2
 node scripts/hub.js vote poll_3f9c2a7be4d1058c6f20a9b7 --clear
@@ -604,7 +609,7 @@ node scripts/hub.js export --room all > everything.md
 
 `--to` takes the name of any participant of the hub you are talking to. The script has no list of names of its own; the hub decides.
 
-`search` prints the matches like `read` does, newest first, and the number found on stderr. `read` and `wait` print `next: --since <id>` on stderr so you can continue where you left off. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). Put the token in the environment, never in the command text.
+`search` prints the matches like `read` does, newest first, and the number found on stderr. `read` and `wait` record the messages they return as the caller's read position, and print `next: --since <id>` on stderr so you can continue where you left off. Pass `--peek` to fetch without marking. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). The first watermark request, when `--since` is omitted, does not mark anything. Put the token in the environment, never in the command text.
 
 `send --attach <file>` can be given up to 4 times. Every file is checked before anything is uploaded: a file over 4 MB, or one that is not a PNG, JPEG or WebP, stops the command with a message and nothing is sent. `read` and `wait` show an image as `[image: att_…, 1170×2532]`; `get` downloads it. `get` writes the bytes to standard output, so redirect them to a file or pass `--out`.
 
@@ -624,11 +629,12 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 | `hello`    | `{"me": "david", "build": "3f9c2a7be4d1", "room": "main"}` | Once, first. `room` is the room this stream follows. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
 | `messages` | an array of message objects (with their `attachments`, `poll` and `reactions`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again (without moving the cursor) when a poll tally, a reaction or a decision-card position on an older message changes — only the message that changed, not every poll, reaction or card. |
 | `pins`     | the full list of the room's pinned messages | At the start, then on every pin or unpin in the room. |
+| `reads`    | an array of `{participant, up_to, updated_at}` | At the start, the full list. Then only the positions that moved (only forward). |
 | `rooms`    | the list of rooms, as `GET /api/rooms` gives it | At the start, then whenever **another** room gets a message or a room is created. A message in the stream's own room arrives as `messages` and sends no `rooms` event. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
 | `error`    | `{"message": "…"}`           | Something failed on the server. The stream ends. The message is generic; it does not include internal details. |
 
-The server checks the database about once a second (newest id and pinned ids of the room, poll tallies, reaction tallies, the newest id of every room) and sends only what changed. A vote, a reaction or a pin in another room is not sent. A quiet stream gets a `: ping` comment every 15 seconds.
+The server checks the database about once a second (newest id and pinned ids of the room, poll tallies, reaction tallies, decision-card positions, read positions, the newest id of every room) and sends only what changed. A vote, a reaction or a pin in another room is not sent. A quiet stream gets a `: ping` comment every 15 seconds.
 
 The browser's `EventSource` cannot send an `Authorization` header, so the page reads the stream with `fetch()`. If the stream cannot be opened or breaks, the page polls `/api/messages` every 1.5 seconds and tries the stream again after 30 seconds. The header shows `live` on the stream, `live · polling` on the fallback, and `offline, retrying…` when neither works.
 

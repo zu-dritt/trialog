@@ -19,10 +19,11 @@ export {
   POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   RECENTLY_CLOSED_MS, VOTE_HINT,
   DECISION_HINT, HUMAN_DECISION_HINT, DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, decisionIsAgreed, decisionPositionText,
+  UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenAgents, unseenByAgents, unseenFlagText,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine, pollResultText,
   ALL_ROOMS, MAIN_ROOM, MAX_ROOMS, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, formatSeen, parseSeen, roomIdFromName,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Room, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type ReadPosition, type Room, type Sender,
 } from './shared';
 // Who the participants are is a setting: lib/participants.ts.
 export { MIN_TOKEN_LENGTH } from './participants';
@@ -412,6 +413,19 @@ export function parseSince(value: string | null | undefined): number | null | un
   if (value === null || value === undefined || value === '') return null;
   if (!/^\d{1,15}$/.test(value)) return undefined;
   return Number(value);
+}
+
+/** Parses `{"upTo": <id>}` for PUT /api/read. Only a positive whole number is accepted. */
+export function parseReadInput(body: unknown): { ok: true; upTo: number } | { ok: false; status: 400; error: string } {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Send a JSON object with "upTo" set to a message id.' };
+  }
+  const raw = (body as { upTo?: unknown }).upTo;
+  const upTo = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d{1,15}$/.test(raw) ? Number(raw) : undefined;
+  if (upTo === undefined || !Number.isInteger(upTo) || upTo <= 0) {
+    return { ok: false, status: 400, error: '"upTo" must be a message id (a whole number).' };
+  }
+  return { ok: true, upTo };
 }
 
 /** Parses ?limit=<n>, clamped to 1..500, default 200. */

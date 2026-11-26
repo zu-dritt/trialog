@@ -331,7 +331,7 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
     assert.match(sent.stdout, /^sent #7 to Quill-2/);
 
     const read = await run('read', '--to', 'quill-2');
-    assert.equal(seen[1].url, '/api/messages?to=quill-2');
+    assert.equal(seen[1].url, '/api/messages?to=quill-2&markRead=1');
     assert.match(read.stdout, /^#7 \[\d\d:\d\d\] Ana-Maria → Quill-2:\nhello/);
 
     const who = await run('participants');
@@ -527,6 +527,69 @@ test('search sends the words as q with the token, and prints the results like re
   }
 });
 
+test('wait records the messages it returns as read, and --peek leaves them unmarked', async () => {
+  const seen: string[] = [];
+  const incoming = {
+    id: 9,
+    sender: 'david',
+    recipient: null,
+    text: 'Are you there?',
+    created_at: '2026-11-26T04:00:00.000Z',
+    pinned_at: null,
+    attachments: [],
+  };
+  const watermark = { ...incoming, id: 8, sender: 'claude', text: 'earlier' };
+  const server = createServer((req, res) => {
+    seen.push(req.url ?? '');
+    res.setHeader('Content-Type', 'application/json');
+    const url = new URL(req.url ?? '', 'http://hub.test');
+    if (url.searchParams.get('limit') === '1' && !url.searchParams.has('since')) {
+      res.end(JSON.stringify({ me: 'claude', messages: [watermark], pinned: [] }));
+      return;
+    }
+    res.end(JSON.stringify({ me: 'claude', messages: [incoming], pinned: [] }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const marked = await run('wait', '--since', '8', '--timeout', '5');
+    assert.equal(marked.code, 0, marked.stderr);
+    assert.equal(seen[0], '/api/messages?since=8&markRead=1');
+    assert.match(marked.stdout, /Are you there\?/);
+    assert.match(marked.stderr, /next: --since 9/);
+
+    const peeked = await run('wait', '--since', '8', '--peek', '--timeout', '5');
+    assert.equal(peeked.code, 0, peeked.stderr);
+    assert.equal(seen[1], '/api/messages?since=8');
+    assert.match(peeked.stdout, /Are you there\?/);
+
+    const fromStart = await run('wait', '--timeout', '5');
+    assert.equal(fromStart.code, 0, fromStart.stderr);
+    assert.equal(seen[2], '/api/messages?limit=1', 'the watermark request does not mark as read');
+    assert.equal(seen[3], '/api/messages?since=8&markRead=1');
+
+    const readPeek = await run('read', '--peek', '--to', 'claude');
+    assert.equal(readPeek.code, 0, readPeek.stderr);
+    assert.equal(seen[4], '/api/messages?to=claude');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('read --peek cannot be combined with --up-to, and no request is sent', async () => {
+  const { code, stderr } = await hub('read', '--peek', '--up-to', '9');
+  assert.equal(code, 64);
+  assert.match(stderr, /read --peek cannot be combined with --up-to/);
+  assert.doesNotMatch(stderr, /fetch failed|ECONNREFUSED/, 'no request was attempted');
+});
+
 test('--room goes out with send, read, wait, search, poll, decision and export; rooms lists and creates', async () => {
   const seen: { method: string; url: string; body: string }[] = [];
   const base = { sender: 'grok', recipient: null, created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: null, reactions: [] };
@@ -569,18 +632,18 @@ test('--room goes out with send, read, wait, search, poll, decision and export; 
     assert.deepEqual(JSON.parse(last().body), { text: 'plain' });
 
     const read = await run('read', '--room', 'all', '--since', '44');
-    assert.equal(last().url, '/api/messages?since=44&room=all');
+    assert.equal(last().url, '/api/messages?since=44&room=all&markRead=1');
     const lines = read.stdout.split('\n');
     assert.ok(lines.some((l) => /^#45 \[\d\d:\d\d\] Grok:$/.test(l)), 'a message in main reads as it always did');
     assert.ok(lines.some((l) => /^#46 \[\d\d:\d\d\] \[calm\] Grok:$/.test(l)), read.stdout);
     await run('read');
-    assert.equal(last().url, '/api/messages', 'read without --room asks as before');
+    assert.equal(last().url, '/api/messages?markRead=1', 'read without --room asks as before');
 
     await run('search', 'calm', '--room', 'calm');
     assert.equal(last().url, '/api/messages?q=calm&room=calm');
     const waited = await run('wait', '--room', 'calm', '--since', '44', '--timeout', '5');
     assert.equal(waited.code, 0, waited.stderr);
-    assert.equal(last().url, '/api/messages?since=44&room=calm');
+    assert.equal(last().url, '/api/messages?since=44&room=calm&markRead=1');
 
     await run('poll', 'Lunch?', 'Yes', 'No', '--room', 'calm');
     assert.deepEqual(JSON.parse(last().body), { question: 'Lunch?', options: ['Yes', 'No'], room: 'calm' });

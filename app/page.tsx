@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
-import type { DecisionCard, DecisionStance } from '../lib/shared';
+import type { DecisionCard, DecisionStance, ReadPosition } from '../lib/shared';
 import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ROOMS, attachmentLabel, colorOf, displayName, firstLine, formatSeen, type Attachment, type Participant, type Room } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
@@ -19,6 +19,7 @@ import {
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
+import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
@@ -56,6 +57,7 @@ interface MessagesResponse {
   polls?: Poll[];
   reactions?: { message_id: number; reactions: Message['reactions'] }[];
   decisions?: DecisionCard[];
+  reads?: ReadPosition[];
 }
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
@@ -97,6 +99,7 @@ export default function Page() {
   const [me, setMe] = useState<Sender | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
+  const [reads, setReads] = useState<ReadPosition[]>([]);
   // The room that is open. The stream, the composer and the pinned list are this room's.
   const [room, setRoom] = useState(MAIN_ROOM);
   const [rooms, setRooms] = useState<Room[]>(ONLY_MAIN);
@@ -345,7 +348,7 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1', reactions: '1', decisions: '1' });
+      const params = new URLSearchParams({ polls: '1', reactions: '1', decisions: '1', reads: '1' });
       if (lastId.current) params.set('since', String(lastId.current));
       if (room !== MAIN_ROOM) params.set('room', room);
       const mine = seenParam();
@@ -370,6 +373,7 @@ export default function Page() {
         setMessages((list) => withDecisions(list, data.decisions ?? []));
         setPinned((list) => withDecisions(list, data.decisions ?? []));
       }
+      if (data.reads) setReads((list) => applyReads(list, data.reads ?? []));
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -399,6 +403,7 @@ export default function Page() {
         }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
+        else if (event.event === 'reads') setReads((list) => applyReads(list, JSON.parse(event.data) as ReadPosition[]));
         else if (event.event === 'rooms') {
           const list = JSON.parse(event.data) as Room[];
           // The list at the start fits what the stream was just told, and is shown as it is.
@@ -879,6 +884,21 @@ export default function Page() {
 
 
 
+  const unseenNow = useUnseenClock(messages);
+  const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
+  useVisibleReadMarker(listRef, messageIds, Boolean(token && me), (upTo) => {
+    void (async () => {
+      try {
+        const data = (await (await api('/api/read', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo }),
+        })).json()) as { read: ReadPosition };
+        if (data.read) setReads((list) => applyReads(list, [data.read]));
+      } catch {
+        /* a failed mark is retried when the next visible batch is reported */
+      }
+    })();
+  });
+
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
 
@@ -1046,6 +1066,8 @@ export default function Page() {
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
                   <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
+                  <ReadReceipts messageId={m.id} reads={reads} participants={participants} me={me} />
+                  <UnseenFlag message={m} reads={reads} participants={participants} now={unseenNow} />
                 </div>
               </article>
             </div>
