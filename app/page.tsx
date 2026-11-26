@@ -12,7 +12,7 @@ import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
 import {
-  MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
+  MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage, quoteNotice,
   pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
 } from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -363,7 +363,7 @@ export default function Page() {
     if (text.trim() === '') return;
     const chip: QuoteChip = { key: nextQuoteKey.current++, author: NAMES[m.sender] ?? m.sender, messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
     const result = withQuote(quotesRef.current, chip);
-    setNotice(result.refused === 'full' ? `A message can carry at most ${MAX_QUOTES} quotes.` : '');
+    setNotice(quoteNotice(result.refused));
     quotesRef.current = result.quotes; // so a second quote right away counts this one
     setQuotes(result.quotes);
     clearQuotable();

@@ -143,6 +143,13 @@ export function addQuote<Q extends Quote>(quotes: Q[], quote: Q, max: number = M
   return { quotes: [...quotes, quote], refused: null };
 }
 
+/** What to tell the writer when a quote was not added. Empty when it was. */
+export const quoteNotice = (refused: 'duplicate' | 'full' | null): string => {
+  if (refused === 'full') return `A message can carry at most ${MAX_QUOTES} quotes.`;
+  // Without a word, a second click on the same selection looks like a button that does nothing.
+  return refused === 'duplicate' ? 'That quote is already attached to your message.' : '';
+};
+
 /** One quote as Markdown. */
 export const quoteMarkdown = (q: Quote): string => (q.kind === 'message' ? quoteMessage(q.author, q.messageId, q.text) : quoteSelection(q.author, q.messageId, q.text));
 
@@ -289,18 +296,54 @@ export function placeButton(first: { top: number }, last: { bottom: number; righ
   return { top: Math.round(top), left: Math.round(left) };
 }
 
+/** After a press on the Quote button has ended, the button stays this long for the click to arrive. */
+export const PRESS_GRACE_MS = 800;
+
+/**
+ * Keeps the Quote button in place while it is being pressed. A press on the button is a mouse
+ * button or a finger going down on it, and the click that follows. Between the two a browser may
+ * drop the selection the button stands for: a tap on a phone or tablet does that, and delivers
+ * its click a moment after the finger has left. If the page looked at the selection in that
+ * moment it would find nothing to quote and take the button away, and the click would land on
+ * nothing. So from the press until the click (or `graceMs` after the release, if no click
+ * comes), the page must not look.
+ */
+export function createPressHold(graceMs: number = PRESS_GRACE_MS, now: () => number = () => Date.now()) {
+  let pressed = false;
+  let until = 0;
+  return {
+    /** A mouse button or a finger went down on the Quote button. */
+    press() { pressed = true; },
+    /** It went up again. The click may still be on its way. */
+    release() { if (pressed) { pressed = false; until = now() + graceMs; } },
+    /** The click arrived and was handled, or there is nothing to hold any more. */
+    done() { pressed = false; until = 0; },
+    /** Whether the button must stay as it is: the selection is not to be read now. */
+    holding(): boolean { return pressed || now() < until; },
+    pressed(): boolean { return pressed; },
+  };
+}
+
+/** Whether an event's target is the Quote button (or something inside it). */
+export const isQuoteButton = (target: unknown): boolean =>
+  typeof (target as ElementLike | null)?.closest === 'function' && (target as ElementLike).closest!('[data-quote-selection]') !== null;
+
 /**
  * Watches the selection on the page. Returns what can be quoted right now, or null, and a
  * function that drops it. While a mouse button or a finger is down the answer doesn't change, so
- * the button doesn't chase the pointer during a drag.
+ * the button doesn't chase the pointer during a drag. And while the Quote button itself is being
+ * pressed, the answer stays until the click has arrived (see createPressHold).
  */
 export function useQuotableSelection(): [PickedQuote | null, () => void] {
   const [picked, setPicked] = useState<PickedQuote | null>(null);
   const pointerDown = useRef(false);
+  const hold = useRef(createPressHold());
 
   useEffect(() => {
     let frame = 0;
+    let afterGrace: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
+      if (hold.current.holding()) return; // the Quote button is being pressed: leave it where it is
       const selection = window.getSelection();
       const pick = pickSelection(selection);
       if (!pick || !selection) { setPicked(null); return; }
@@ -313,8 +356,20 @@ export function useQuotableSelection(): [PickedQuote | null, () => void] {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => { if (!pointerDown.current) read(); });
     };
-    const down = () => { pointerDown.current = true; };
-    const up = () => { pointerDown.current = false; schedule(); };
+    const down = (e: Event) => {
+      pointerDown.current = true;
+      if (isQuoteButton(e.target)) hold.current.press();
+    };
+    const up = () => {
+      pointerDown.current = false;
+      if (hold.current.pressed()) {
+        hold.current.release();
+        // If no click comes (the press was moved off the button), look again once the wait is over.
+        clearTimeout(afterGrace);
+        afterGrace = setTimeout(schedule, PRESS_GRACE_MS + 20);
+      }
+      schedule();
+    };
     document.addEventListener('selectionchange', schedule);
     document.addEventListener('pointerdown', down);
     document.addEventListener('pointerup', up);
@@ -324,6 +379,7 @@ export function useQuotableSelection(): [PickedQuote | null, () => void] {
     window.addEventListener('resize', schedule);
     return () => {
       cancelAnimationFrame(frame);
+      clearTimeout(afterGrace);
       document.removeEventListener('selectionchange', schedule);
       document.removeEventListener('pointerdown', down);
       document.removeEventListener('pointerup', up);
@@ -334,6 +390,7 @@ export function useQuotableSelection(): [PickedQuote | null, () => void] {
   }, []);
 
   const clear = useCallback(() => {
+    hold.current.done();
     window.getSelection()?.removeAllRanges();
     setPicked(null);
   }, []);
