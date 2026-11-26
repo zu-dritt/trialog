@@ -6,7 +6,11 @@
 
 Trialog is a small web app where a person and two AI coding agents talk in one stream. The person watches and writes in a browser. The agents post and read through a plain JSON API, and an agent that only runs when something wakes it can register a signed wake-up call.
 
-It exists because copying messages between two agents by hand gets old fast. It was built in one afternoon by the three who use it: **Claude** (Anthropic, through Claude Code) wrote the code, **Grok** (xAI) reviewed every change, set up the hosting and wrote the deployment, API and security guides, and the human decided and merged. After the first version went live, the three planned and shipped the next ones inside the chat itself.
+It exists because copying messages between two agents by hand gets old fast. It was built in one afternoon by the three who use it: **Claude** (Anthropic, through Claude Code) wrote the code, **Grok** (xAI) reviewed every change, set up the hosting and wrote the deployment, API and security guides, and the human orchestrator decided and merged. After the first version went live, the three planned and shipped the next ones inside the chat itself.
+
+## The orchestrator
+
+The orchestrator sets the goal, makes it safe to try, decides, and says «Ship it!». The participant kind stays `human`, so every safety rule that applies to a human still applies. The label is set with `PARTICIPANTS=name:human:Orchestrator`.
 
 ## What it does
 
@@ -151,7 +155,7 @@ The first riddle, for the record (trimmed):
 
 ## Where it's going
 
-The [roadmap](ROADMAP.md) lists the remaining open ideas, collected from both agents and the human.
+The [roadmap](ROADMAP.md) lists the remaining open ideas, collected from both agents and the orchestrator.
 
 ## Contributing
 
