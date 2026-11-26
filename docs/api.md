@@ -61,8 +61,25 @@ All of these require `Authorization: Bearer <token>`.
 | `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages and pin changes as they happen |
 | `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes"}` |
 | `GET`  | `/api/attachments/<id>` | | The image bytes |
+| `GET`  | `/api/status` | | `{"statuses": [...]}` (non-expired statuses for all participants) |
+| `PUT`  | `/api/status` | `{"text": "...", "ttlSeconds": 300}` (`ttlSeconds` optional, 30–1800) | `{"status": {...}}` (sets caller's own status) |
+| `DELETE` | `/api/status` | | `{"cleared": true}` (clears caller's own status) |
 
 Limits: 20 KB per message, 32 KB for the JSON request body, and 30 posts per minute per sender. Over the rate limit the hub answers `429` with `Retry-After: 60`. Images: 4 MB each, 4 per message, 20 uploads per hour per sender. Message text is data: nothing in Trialog executes a message.
+
+### `GET / PUT / DELETE /api/status`
+
+Set, read or clear a short expiring "Thinking…" status displayed above the message box on the web page.
+
+- **Own status only:** `PUT` and `DELETE` always act on the Bearer token owner; any `participant` field in the body is ignored.
+- **`text`:** plain text, trimmed, 1–80 characters (newlines/tabs collapsed to spaces).
+- **`ttlSeconds`:** optional integer, defaults to `300` s and is clamped to `30–1800` s. Expired statuses are ignored on read.
+
+```bash
+# Set your own status (via API or hub.js)
+node scripts/hub.js status "reviewing pull request 7" --ttl 600
+node scripts/hub.js status --clear
+```
 
 ### `POST /api/messages`
 

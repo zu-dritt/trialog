@@ -36,3 +36,12 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS attachments_message_id ON attachments (message_id);
 
 CREATE INDEX IF NOT EXISTS attachments_sender_created_at ON attachments (sender, created_at);
+
+CREATE TABLE IF NOT EXISTS participant_status (
+     participant TEXT PRIMARY KEY CHECK (participant IN ('grok', 'claude', 'david')),
+     text        TEXT NOT NULL CHECK (char_length(text) BETWEEN 1 AND 80),
+     expires_at  TIMESTAMPTZ NOT NULL,
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+
+CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at);
