@@ -12,7 +12,7 @@ import { UNSEEN_AFTER_MS, unseenByAgents, type Participant, type ReadPosition } 
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ReplyTargetError, RoomError, createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 import { createEventStream } from '../lib/stream';
-import { createWakeup, type WakeupPayload } from '../lib/webhook';
+import { createWakeup, sign, type WakeupPayload } from '../lib/webhook';
 
 const must = <T>(v: T | null | undefined): T => { assert.ok(v, 'expected a value'); return v; };
 const ids = (list: Message[]) => list.map((m) => m.id);
@@ -224,15 +224,26 @@ for (const [name, make] of STORES) {
     assert.ok((await store.list({ room: 'main' })).every((m) => m.room === 'main'));
   });
 
-  test(`${name}: a wake-up names the rooms its messages are in`, async () => {
+  test(`${name}: wake-ups work the same in every room, and the list keeps to the room that was asked for`, async () => {
     const store = await make();
     await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
-    const a = must(await store.add({ sender: 'david', recipient: null, text: 'in main' }));
-    assert.deepEqual(await store.claimWakeup(), { first_id: a.id, last_id: a.id, count: 1, previous_id: 0, rooms: ['main'] });
-    const b = must(await store.add({ sender: 'david', recipient: 'grok', text: 'in calm', room: 'calm' }));
-    must(await store.add({ sender: 'david', recipient: 'claude', text: 'not for grok', room: 'calm' }));
-    const c = must(await store.add({ sender: 'claude', recipient: null, text: 'in main again' }));
-    assert.deepEqual(await store.claimWakeup(), { first_id: b.id, last_id: c.id, count: 2, previous_id: a.id, rooms: ['calm', 'main'] });
+    const who = { participant: 'grok', limit: 50, humans: ['david'], agents: ['grok', 'claude'] };
+    const a = must(await store.add({ sender: 'david', recipient: 'claude', text: 'the human, in main' }));
+    const b = must(await store.add({ sender: 'david', recipient: null, text: 'the human, in calm', room: 'calm' }));
+    const c = must(await store.add({ sender: 'claude', recipient: 'grok', text: 'an agent to grok, in calm', room: 'calm' }));
+    must(await store.add({ sender: 'claude', recipient: 'david', text: 'an agent to the human, in calm', room: 'calm' }));
+    const d = must(await store.add({ sender: 'claude', recipient: null, text: 'an agent to everyone, in main' }));
+    // The rule does not look at the room: a human wakes every agent, an agent only those it addresses.
+    assert.deepEqual(ids(await store.listWakingMessages({ ...who, since: 0 })), [a.id, b.id, c.id, d.id], 'no room named: every room');
+    assert.deepEqual(ids(await store.listWakingMessages({ ...who, since: 0, room: 'main' })), [a.id, d.id]);
+    assert.deepEqual(ids(await store.listWakingMessages({ ...who, since: 0, room: 'calm' })), [b.id, c.id]);
+    assert.deepEqual(ids(await store.listWakingMessages({ ...who, since: b.id, room: 'calm' })), [c.id]);
+    assert.deepEqual(ids(await store.listWakingMessages({ ...who, since: null, room: 'calm' })), [b.id, c.id], 'the latest of that room');
+    // A wake-up that waits to be sent knows the room of its message.
+    await store.enqueueWakes(b.id, ['grok']);
+    await store.enqueueWakes(d.id, ['grok']);
+    assert.deepEqual((await store.listPendingWakes()).map((w) => [w.message_id, w.participant, w.room]), [[b.id, 'grok', 'calm'], [d.id, 'grok', 'main']]);
+    assert.deepEqual((await store.claimPendingWakes()).map((w) => [w.message_id, w.room]), [[b.id, 'calm'], [d.id, 'main']]);
   });
 }
 
@@ -441,7 +452,7 @@ test('the migration is idempotent: a second start, and the file run by hand twic
   ]);
   const before = await snapshot();
   await createSqlStore(pgliteDb(pg)).ensure(); // a second instance starts
-  const migration = await file('../migrations/011-rooms.sql');
+  const migration = await file('../migrations/012-rooms.sql');
   await pg.exec(migration);
   await pg.exec(migration);
   assert.equal(await snapshot(), before, 'the room of a message and the rooms themselves are untouched');
@@ -577,7 +588,7 @@ for (const [name, make] of STORES) {
 
 // --- the wake-up webhook ------------------------------------------------------------------------
 
-test('the webhook payload carries the rooms, and is still thin and signed the same way', async () => {
+test('a wake-up says which room its message is in, and is signed the same way', async () => {
   const store = createMemoryStore();
   await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
   const calls: { headers: Record<string, string>; body: string }[] = [];
@@ -586,16 +597,20 @@ test('the webhook payload carries the rooms, and is still thin and signed the sa
     return new Response(null, { status: 200 });
   }) as typeof fetch;
   const secret = 'webhook-test-secret-0123456789';
-  const wakeup = createWakeup({ store, config: { url: 'https://receiver.test/hook', secret }, fetch: fakeFetch, now: () => 1_795_620_000_000, debounceMs: 20, retryDelaysMs: [] });
-  const a = must(await store.add({ sender: 'david', recipient: null, text: 'SECRET-TEXT in calm', room: 'calm' }));
-  const b = must(await store.add({ sender: 'david', recipient: 'grok', text: 'SECRET-TEXT in main' }));
-  await Promise.all([wakeup.onMessage(a), wakeup.onMessage(b)]);
-  assert.equal(calls.length, 1, 'one webhook for both, whatever room they are in');
-  const payload = JSON.parse(calls[0].body) as WakeupPayload;
-  assert.deepEqual(payload, { first_id: a.id, last_id: b.id, count: 2, sent_at: 1795620000, rooms: ['calm', 'main'] });
-  assert.ok(!calls[0].body.includes('SECRET-TEXT') && !calls[0].body.includes('Calm talk'), 'ids only: no text, no room name');
-  const { sign } = await import('../lib/webhook');
-  assert.equal(calls[0].headers['X-Hub-Signature'], sign(secret, '1795620000', calls[0].body), 'the signature covers the bytes as sent, the new field included');
+  const roster: Participant[] = [{ name: 'grok', kind: 'agent', color: 0 }, { name: 'claude', kind: 'agent', color: 1 }, { name: 'david', kind: 'human', color: 2 }];
+  const wakeup = createWakeup({
+    store, roster, fallbackTargets: { grok: { url: 'https://receiver.test/hook', secret } }, fetch: fakeFetch,
+    now: () => 1_795_620_000_000, debounceMs: 20, retryDelaysMs: [], enforcePublicTarget: false,
+  });
+  const inCalm = must(await store.add({ sender: 'david', recipient: null, text: 'a question in the calm room', room: 'calm' }));
+  const inMain = must(await store.add({ sender: 'david', recipient: 'grok', text: 'and one in main' }));
+  await Promise.all([wakeup.onMessage(inCalm), wakeup.onMessage(inMain)]);
+  const payloads = calls.map((call) => JSON.parse(call.body) as WakeupPayload).sort((x, y) => x.id - y.id);
+  assert.deepEqual(payloads.map((p) => [p.id, p.room]), [[inCalm.id, 'calm'], [inMain.id, 'main']], 'one request per message, each with the room of its message');
+  assert.equal(typeof payloads[0].room, 'string', 'one room, not a list');
+  assert.ok(!('rooms' in payloads[0]));
+  assert.ok(calls.every((call) => !call.body.includes('Calm talk')), 'the id of the room, never its name');
+  for (const call of calls) assert.equal(call.headers['X-Hub-Signature'], sign(secret, '1795620000', call.body), 'the signature covers the bytes as sent, the room included');
 });
 
 // --- the API ------------------------------------------------------------------------------------
@@ -615,6 +630,7 @@ let decisionsRoute: { POST: Handler };
 let pinRoute: { POST: Handler };
 let streamRoute: { GET: Handler };
 let readRoute: { PUT: Handler };
+let wakeRoute: { GET: Handler };
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
@@ -632,6 +648,7 @@ beforeAll(async () => {
   pinRoute = (await import('../app/api/messages/[id]/pin/route')) as unknown as typeof pinRoute;
   streamRoute = (await import('../app/api/stream/route')) as unknown as typeof streamRoute;
   readRoute = (await import('../app/api/read/route')) as unknown as typeof readRoute;
+  wakeRoute = (await import('../app/api/wake/route')) as unknown as typeof wakeRoute;
 });
 
 const URL_BASE = 'http://hub.test';
@@ -880,6 +897,23 @@ test('GET /api/messages?decisions=1: only the decision cards of the room that wa
   assert.ok(main.includes(inMain.decision.id) && !main.includes(inCalm.decision.id), 'main must not list a card of calm');
   const all = await cards('&room=all');
   assert.ok(all.includes(inMain.decision.id) && all.includes(inCalm.decision.id));
+});
+
+test('GET /api/wake takes the room like the messages do', async () => {
+  const inMain = await posted({ text: 'wake check, the human in main' }, 'david');
+  const inCalm = await posted({ text: 'wake check, the human in calm', room: 'calm' }, 'david');
+  const wake = async (query: string, who = 'grok') => {
+    const res = await call(wakeRoute.GET, `/api/wake${query}`, who);
+    assert.equal(res.status, 200, await res.clone().text());
+    return ((await res.json()) as { messages: Message[] }).messages;
+  };
+  const since = `since=${inMain.id - 1}`;
+  assert.deepEqual((await wake(`?${since}`)).map((m) => [m.id, m.room]), [[inMain.id, 'main']], 'without a room: main, as for every other list');
+  assert.deepEqual((await wake(`?${since}&room=calm`)).map((m) => [m.id, m.room]), [[inCalm.id, 'calm']]);
+  assert.deepEqual((await wake(`?${since}&room=all`)).map((m) => [m.id, m.room]), [[inMain.id, 'main'], [inCalm.id, 'calm']]);
+  assert.deepEqual(await wake(`?${since}&room=all`, 'david'), [], 'a human is not woken, in any room');
+  assert.equal((await call(wakeRoute.GET, '/api/wake?room=nowhere', 'grok')).status, 404);
+  assert.equal((await call(wakeRoute.GET, '/api/wake?room=Not%20An%20Id', 'grok')).status, 400);
 });
 
 test('a hub has at most twelve rooms', async () => {

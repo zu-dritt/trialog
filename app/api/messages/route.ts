@@ -8,7 +8,7 @@ import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-// Room for the wake-up webhook job after the response: 2 s debounce plus three attempts of up to 5 s.
+// Room for the wake-up webhook job after the response: 2 s debounce plus two attempts of up to 5 s.
 export const maxDuration = 60;
 
 /** A switch in the query, such as `decisions=1`. Left out or 0: off. */
@@ -54,15 +54,18 @@ export const GET = safe(async (request: Request) => {
   }
   const [room, noRoom] = await roomFromQuery(params, store);
   if (noRoom) return noRoom;
-  // The top-level polls, reactions, decisions and reads lists are opt-in (`?polls=1`, `?reactions=1`, `?decisions=1`,
-  // `?reads=1`). The page asks for them so a since-poll still sees votes, reactions, decision-card changes and read
-  // positions on older messages; the CLI, which polls every few seconds, leaves them off. `markRead=1` records the
-  // highest message id in this list as the caller's read position in that room (only forward). The read positions
-  // are those of the room that was asked for.
+  // The top-level polls, reactions, decisions, reads and wakes lists are opt-in (`?polls=1`,
+  // `?reactions=1`, `?decisions=1`, `?reads=1`, `?wakes=1`). The page asks for the first four so a
+  // since-poll still sees votes, reactions, decision-card changes and read positions on older
+  // messages; the CLI, which polls every few seconds, leaves them off. Like the messages, these
+  // lists are those of the room that was asked for. `markRead=1` records the highest message id in
+  // this list as the caller's read position in that room (only forward). `wakes=1` is the delivery
+  // status of wake-ups for the listed messages; it is not sent unless asked for.
   const includePolls = params.get('polls') === '1';
   const includeReactions = params.get('reactions') === '1';
   const includeDecisions = params.get('decisions') === '1';
   const includeReads = params.get('reads') === '1';
+  const includeWakes = params.get('wakes') === '1';
   const markRead = parseSwitch(params.get('markRead'));
   if (markRead === undefined) return error(400, '"markRead" must be 1 or 0.');
   const [messages, pinned, polls, reactions, decisions, reads] = await Promise.all([
@@ -74,6 +77,13 @@ export const GET = safe(async (request: Request) => {
     includeDecisions ? store.listDecisions(room) : Promise.resolve(null),
     includeReads ? store.listReads(room) : Promise.resolve(null),
   ]);
+  const wakes = includeWakes ? await store.listWakes(messages.map((m) => m.id)) : null;
+  const extras = {
+    ...(includePolls ? { polls } : {}),
+    ...(includeReactions ? { reactions } : {}),
+    ...(includeDecisions ? { decisions } : {}),
+    ...(includeWakes ? { wakes } : {}),
+  };
   if (markRead && messages.length) {
     // A position is per room. A list of one room moves that room's; a list of every room
     // (`room=all`) moves each room's to the highest id it has in this list.
@@ -87,24 +97,14 @@ export const GET = safe(async (request: Request) => {
     if (includeReads) {
       // The list should include the position just recorded.
       const latest = await store.listReads(room);
-      return json({
-        me,
-        messages,
-        pinned,
-        ...(includePolls ? { polls } : {}),
-        ...(includeReactions ? { reactions } : {}),
-        ...(includeDecisions ? { decisions } : {}),
-        reads: latest,
-      });
+      return json({ me, messages, pinned, ...extras, reads: latest });
     }
   }
   return json({
     me,
     messages,
     pinned,
-    ...(includePolls ? { polls } : {}),
-    ...(includeReactions ? { reactions } : {}),
-    ...(includeDecisions ? { decisions } : {}),
+    ...extras,
     ...(includeReads ? { reads } : {}),
   });
 });
@@ -136,8 +136,8 @@ export const POST = safe(async (request: Request) => {
   if (!message) {
     return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
   }
-  // Wake the participant named grok, if the webhook is set up (lib/webhook.ts), in the background. The sender's response never waits for the webhook or fails because of it.
-  const job = getWakeup(store)?.onMessage(message);
+  // Wake the agents this message should wake, if they have a target registered (lib/webhook.ts), in the background. The sender's response never waits for the webhook or fails because of it.
+  const job = getWakeup(store).onMessage(message);
   if (job) waitUntil(job);
   return json({ message }, 201);
 });

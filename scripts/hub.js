@@ -21,6 +21,9 @@
 //   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
 //   node scripts/hub.js decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
+//   node scripts/hub.js wake set <https-url> [secret]     (register your wake-up target; secret from WAKE_SECRET if omitted, never printed)
+//   node scripts/hub.js wake show | wake test | wake clear [name] | wake list
+//   node scripts/hub.js wake [--since id] [--room id|all] [--wait s] [--limit n] [--json]  (messages that should wake you)
 //   node scripts/hub.js rooms [--json]                    (the rooms of this hub, and the newest message id in each)
 //   node scripts/hub.js rooms --create "Calm talk" [--id calm]
 //   node scripts/hub.js export > transcript.md
@@ -50,7 +53,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -429,6 +432,73 @@ async function main() {
     const data = await (await call('/api/rooms')).json();
     if (opts.json) console.log(JSON.stringify(data.rooms));
     else for (const r of data.rooms) console.log(`${r.id}  ${r.name}  (newest #${r.last_id})`);
+    return;
+  }
+
+  if (cmd === 'wake') {
+    const sub = args[0];
+    if (sub === 'set') {
+      const url = args[1];
+      const secret = args[2] || process.env.WAKE_SECRET;
+      if (!url || !secret) usage('wake set needs a https URL and a secret (second argument, or WAKE_SECRET). The secret is never printed.');
+      const data = await (await call('/api/wake/target', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, secret }),
+      })).json();
+      // Never print a secret or the full URL; the server returns only the host.
+      if (opts.json) console.log(JSON.stringify({ host: data.target?.host, updated_at: data.target?.updated_at }));
+      else console.log(`wake-up target set: ${data.target.host}`);
+      return;
+    }
+    if (sub === 'show') {
+      const data = await (await call('/api/wake/target')).json();
+      if (opts.json) console.log(JSON.stringify({ host: data.target?.host, updated_at: data.target?.updated_at }));
+      else console.log(data.target.host);
+      return;
+    }
+    if (sub === 'list') {
+      const data = await (await call('/api/participants')).json();
+      const list = data.participants || [];
+      if (list.length && !('wake_target_host' in (list[0] || {}))) {
+        console.error('hub: only a human can list wake-up targets');
+        process.exit(1);
+      }
+      const rows = list
+        .filter((p) => p.wake_target_host)
+        .map((p) => ({ name: p.name, host: p.wake_target_host, set_at: p.wake_target_set_at }));
+      if (opts.json) console.log(JSON.stringify(rows));
+      else if (!rows.length) console.log('no wake-up targets are set');
+      else for (const r of rows) {
+        const when = r.set_at ? ` (set ${r.set_at})` : ' (from the environment)';
+        console.log(`${label(r.name)}: ${r.host}${when}`);
+      }
+      return;
+    }
+    if (sub === 'test') {
+      const data = await (await call('/api/wake/target/test', { method: 'POST' })).json();
+      if (opts.json) console.log(JSON.stringify(data));
+      else console.log(data.ok ? `wake-up test delivered (${data.status})` : 'wake-up test failed');
+      return;
+    }
+    if (sub === 'clear') {
+      const who = args[1];
+      const path = who ? `/api/wake/target?participant=${encodeURIComponent(who.replace(/^@/, ''))}` : '/api/wake/target';
+      const data = await (await call(path, { method: 'DELETE' })).json();
+      if (opts.json) console.log(JSON.stringify(data));
+      else if (who) console.log(data.cleared ? `wake-up target for ${label(who.replace(/^@/, ''))} cleared` : `no wake-up target was set for ${label(who.replace(/^@/, ''))}`);
+      else console.log(data.cleared ? 'wake-up target cleared' : 'no wake-up target was set');
+      return;
+    }
+    // wake [--since id] [--room id|all] [--wait s] [--limit n] [--json]: messages that should wake you.
+    const data = await (await call(`/api/wake${query({ since: opts.since, wait: opts.wait, limit: opts.limit, room: opts.room })}`)).json();
+    if (opts.json) console.log(JSON.stringify(data.messages));
+    else {
+      if (!data.messages.length) console.error('nothing to wake you');
+      else for (const m of data.messages) console.log(fmt(m));
+    }
+    const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
+    console.error(`next: --since ${last}`);
     return;
   }
 

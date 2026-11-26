@@ -119,7 +119,7 @@ for (const [name, make] of STORES) {
     const toAll = must(await store.add({ sender: 'david', recipient: null, text: 'for all', reply_to: fromGrok.id }));
     assert.equal(wakesGrok(toClaude), false);
     assert.equal(wakesGrok(toAll), true);
-    assert.deepEqual(await store.claimWakeup(), { first_id: toAll.id, last_id: toAll.id, count: 1, previous_id: 0, rooms: ['main'] });
+    assert.deepEqual(await store.claimWakeup(), { first_id: toAll.id, last_id: toAll.id, count: 1, previous_id: 0 });
     // Replies count towards the sender's posts per minute like any message.
     for (let i = 0; i < 2; i++) assert.ok(await store.add({ sender: 'claude', recipient: null, text: `r${i}`, reply_to: fromGrok.id }, 2));
     assert.equal(await store.add({ sender: 'claude', recipient: null, text: 'one too many', reply_to: fromGrok.id }, 2), null);

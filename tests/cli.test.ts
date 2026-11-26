@@ -590,6 +590,72 @@ test('read --peek cannot be combined with --up-to, and no request is sent', asyn
   assert.doesNotMatch(stderr, /fetch failed|ECONNREFUSED/, 'no request was attempted');
 });
 
+test('wake set and show print only the host, and wake list / clear work for a human', async () => {
+  const seen: { method?: string; url: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ method: req.method, url: req.url ?? '', body: Buffer.concat(chunks).toString() });
+      res.setHeader('Content-Type', 'application/json');
+      if ((req.url ?? '').startsWith('/api/participants')) {
+        res.end(JSON.stringify({
+          me: 'ana-maria',
+          participants: [
+            { name: 'ana-maria', kind: 'human', color: 0, wake_target_host: null, wake_target_set_at: null },
+            { name: 'quill-2', kind: 'agent', color: 1, wake_target_host: 'quill.example', wake_target_set_at: '2026-11-26T09:00:00.000Z' },
+          ],
+        }));
+        return;
+      }
+      if (req.method === 'PUT') {
+        res.end(JSON.stringify({ target: { host: 'scout.example', updated_at: '2026-11-26T09:00:00.000Z' } }));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        res.end(JSON.stringify({ cleared: true }));
+        return;
+      }
+      res.end(JSON.stringify({ target: { host: 'scout.example', updated_at: '2026-11-26T09:00:00.000Z' } }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const set = await run('wake', 'set', 'https://scout.example/hooks/secret-path', 'a-cli-secret-01234567');
+    assert.equal(set.code, 0, set.stderr);
+    assert.match(set.stdout, /scout\.example/);
+    assert.doesNotMatch(set.stdout, /hooks\/secret-path|https:\/\/|a-cli-secret/);
+    assert.equal(JSON.parse(seen[0].body).url, 'https://scout.example/hooks/secret-path');
+
+    const show = await run('wake', 'show');
+    assert.equal(show.code, 0, show.stderr);
+    assert.equal(show.stdout.trim(), 'scout.example');
+    assert.doesNotMatch(show.stdout, /https:\/\//);
+
+    const list = await run('wake', 'list');
+    assert.equal(list.code, 0, list.stderr);
+    assert.match(list.stdout, /Quill-2: quill\.example/);
+    assert.doesNotMatch(list.stdout, /https:\/\//);
+    assert.equal(seen[2].url, '/api/participants');
+
+    const cleared = await run('wake', 'clear', 'quill-2');
+    assert.equal(cleared.code, 0, cleared.stderr);
+    assert.equal(seen[3].method, 'DELETE');
+    assert.equal(seen[3].url, '/api/wake/target?participant=quill-2');
+    assert.match(cleared.stdout, /Quill-2/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('--room goes out with send, read, wait, search, poll, decision and export; rooms lists and creates', async () => {
   const seen: { method: string; url: string; body: string }[] = [];
   const base = { sender: 'grok', recipient: null, created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: null, reactions: [] };
@@ -651,6 +717,11 @@ test('--room goes out with send, read, wait, search, poll, decision and export; 
     assert.deepEqual(JSON.parse(last().body), { prompt: 'Ship it?', room: 'calm' });
     await run('decision', 'Ship it?');
     assert.deepEqual(JSON.parse(last().body), { prompt: 'Ship it?' });
+
+    await run('wake', '--room', 'all', '--since', '44');
+    assert.equal(last().url, '/api/wake?since=44&room=all');
+    await run('wake', '--since', '44');
+    assert.equal(last().url, '/api/wake?since=44', 'wake without --room asks as before');
 
     const exported = await run('export', '--room', 'all');
     assert.equal(last().url, '/api/export?room=all');

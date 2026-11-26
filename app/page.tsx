@@ -23,6 +23,7 @@ import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMar
 import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
+import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 
@@ -62,7 +63,7 @@ interface MessagesResponse {
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
   me: Sender;
-  participants: Participant[];
+  participants: ParticipantWithWake[];
 }
 /** Until the server has said which rooms there are, the page shows the one that always exists. */
 const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
@@ -119,7 +120,7 @@ export default function Page() {
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
-  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
   // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
   const names = useMemo(() => participants.map((p) => p.name), [participants]);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
@@ -943,6 +944,7 @@ export default function Page() {
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
       <div className="border-b border-line px-4 py-1.5 lg:hidden">{tabs('flex')}</div>
+      <WakeTargetsLine me={me} participants={participants} />
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
