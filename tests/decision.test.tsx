@@ -132,3 +132,41 @@ test('a human sees what Agree means; an agent does not', () => {
   // The proposer already agreed, so they are not listed as waiting.
   assert.match(asHuman, />David<\/span> ✓/);
 });
+
+test('the card shows which answer the reader gave: that button is the chosen one, the other is plain', () => {
+  const at = '2026-11-26T06:00:00.000Z';
+  const view = (positions: DecisionCard['positions'], me: string | null = 'david') =>
+    renderToStaticMarkup(<DecisionCardView card={openCard(positions)} me={me} participants={PARTICIPANTS} onPosition={() => {}} />);
+  /** The two answer buttons of a card: [class, aria-pressed] of each. */
+  const answers = (markup: string) => Object.fromEntries(
+    [...markup.matchAll(/<button type="button" class="([^"]*)" aria-pressed="(true|false)"[^>]*>(Agree|Object, and say why)<\/button>/g)]
+      .map(([, classes, pressed, label]) => [label, { classes, pressed }]),
+  );
+  const CHOSEN = /\bbg-(ok|bad)\/20\b/;
+
+  // No answer yet: neither is pressed, neither is coloured.
+  const none = answers(view([{ participant: 'grok', stance: 'agree', note: null, updated_at: at }]));
+  assert.deepEqual(Object.keys(none), ['Agree', 'Object, and say why']);
+  assert.equal(none['Agree'].pressed, 'false');
+  assert.equal(none['Object, and say why'].pressed, 'false');
+  assert.ok(!CHOSEN.test(none['Agree'].classes) && !CHOSEN.test(none['Object, and say why'].classes));
+
+  // Agreed: the stored position decides, wherever it was given.
+  const agree = answers(view([{ participant: 'david', stance: 'agree', note: null, updated_at: at }]));
+  assert.equal(agree['Agree'].pressed, 'true');
+  assert.match(agree['Agree'].classes, /border-ok bg-ok\/20 text-ok/);
+  assert.equal(agree['Object, and say why'].pressed, 'false');
+  assert.equal(agree['Object, and say why'].classes, none['Object, and say why'].classes, 'the other one stays plain');
+
+  // Objected.
+  const object = answers(view([{ participant: 'david', stance: 'object', note: 'Too early.', updated_at: at }]));
+  assert.equal(object['Object, and say why'].pressed, 'true');
+  assert.match(object['Object, and say why'].classes, /border-bad bg-bad\/20 text-bad/);
+  assert.equal(object['Agree'].pressed, 'false');
+  assert.equal(object['Agree'].classes, none['Agree'].classes, 'the other one stays plain');
+
+  // Somebody else's answer never presses the reader's buttons.
+  const others = answers(view([{ participant: 'david', stance: 'object', note: 'Too early.', updated_at: at }], 'grok'));
+  assert.equal(others['Agree'].pressed, 'false');
+  assert.equal(others['Object, and say why'].pressed, 'false');
+});

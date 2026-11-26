@@ -6,9 +6,9 @@ import type { DecisionCard, DecisionStance, ReadPosition } from '../lib/shared';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
-import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
+import { ComposerTools, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
-import { EmojiPicker, insertAtCursor } from './emoji';
+import { insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
@@ -945,41 +945,20 @@ export default function Page() {
             // handle is switched off: at the bottom of the window there is nowhere to drag it.
             className={`${FIELD} block min-h-[60px] w-full resize-none`}
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
-              <option value="">to everyone</option>
-              {participants.map((p) => <option key={p.name} value={p.name}>to {displayName(p.name)}</option>)}
-            </select>
-            <input
-              ref={fileInput} type="file" accept={ACCEPT} multiple hidden
-              onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
-            />
-            <button
-              type="button" className={TOOL} onClick={() => fileInput.current?.click()}
-              disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
-              title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
-            >Image</button>
-            <button
-              type="button"
-              className={TOOL}
-              aria-pressed={pollOpen}
-              aria-expanded={pollOpen}
-              aria-controls={pollOpen ? 'poll-composer' : undefined}
-              onClick={() => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); }}
-            >Poll</button>
-            <button
-              type="button"
-              className={TOOL}
-              aria-pressed={decisionOpen}
-              aria-expanded={decisionOpen}
-              aria-controls={decisionOpen ? 'decision-composer' : undefined}
-              onClick={() => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); }}
-            >Decision</button>
-            <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={TOOL} />
-            <ExpandButton expanded={expanded} onToggle={() => { setExpanded((v) => !v); boxRef.current?.focus(); }} className={TOOL} />
-            <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
-            <button type="submit" className={`${TOOL} ml-auto md:ml-0`} disabled={!canSend}>{uploading ? 'Uploading…' : 'Send'}</button>
-          </div>
+          <input
+            ref={fileInput} type="file" accept={ACCEPT} multiple hidden
+            onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+          <ComposerTools
+            to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: displayName(p.name) }))}
+            emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
+            image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
+            decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
+            poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
+            expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
+            send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
+            fieldClassName={FIELD} toolClassName={TOOL}
+          />
         </form>
       </footer>
     </div>
