@@ -249,6 +249,8 @@ export const UNSEEN_LABEL = '⏰ not seen yet';
 /** One participant's read position: the highest message id they have read. No room field. */
 export interface ReadPosition {
   participant: Sender;
+  /** The room this position is in. A participant has one position per room; `main` for every position from before rooms. */
+  room: string;
   up_to: number;
   updated_at: string;
 }

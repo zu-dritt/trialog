@@ -416,7 +416,7 @@ export function parseSince(value: string | null | undefined): number | null | un
 }
 
 /** Parses `{"upTo": <id>}` for PUT /api/read. Only a positive whole number is accepted. */
-export function parseReadInput(body: unknown): { ok: true; upTo: number } | { ok: false; status: 400; error: string } {
+export function parseReadInput(body: unknown): { ok: true; upTo: number; room: string | null } | { ok: false; status: 400; error: string } {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     return { ok: false, status: 400, error: 'Send a JSON object with "upTo" set to a message id.' };
   }
@@ -425,7 +425,10 @@ export function parseReadInput(body: unknown): { ok: true; upTo: number } | { ok
   if (upTo === undefined || !Number.isInteger(upTo) || upTo <= 0) {
     return { ok: false, status: 400, error: '"upTo" must be a message id (a whole number).' };
   }
-  return { ok: true, upTo };
+  // Optional: the room the message is in. Without it, the position is recorded in the room of that message.
+  const room = parseRoomId((body as { room?: unknown }).room);
+  if (room === undefined) return { ok: false, status: 400, error: ROOM_ID_HINT };
+  return { ok: true, upTo, room };
 }
 
 /** Parses ?limit=<n>, clamped to 1..500, default 200. */

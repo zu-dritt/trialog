@@ -144,7 +144,7 @@ export interface StreamOptions {
  *   hello     {"me": "david", "build": "…", "room": "main"}   once, first; "build" is the server's build id (lib/build.ts)
  *   messages  [Message, …]           new messages of the room, oldest first
  *   pins      [Message, …]           the full list of the room's pinned messages, at the start and on every change
- *   reads     [ReadPosition, …]      read positions: the full list at the start, then only the ones that moved
+ *   reads     [ReadPosition, …]      the read positions of the room: the full list at the start, then only the ones that moved
  *   rooms     [Room, …]              every room with its newest message id, at the start and whenever another room gets a message or a room is created
  *   bye       {"reason": "…"}        the server is ending the stream; reconnect with ?since=<last id>
  *   error     {"message": "…"}       something failed; the stream ends
@@ -215,7 +215,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
         rooms = others(version.rooms);
         sendMessages(await store.list({ since, room, limit: BATCH }));
         send('pins', await store.pinned(room));
-        send('reads', await store.listReads());
+        send('reads', await store.listReads(room));
         send('rooms', await store.listRooms({ seen, me }));
       } catch (e) {
         return fail(e);
@@ -287,7 +287,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             const names = readParticipantsChanged(reads, version.reads);
             reads = version.reads;
             if (names.length) {
-              const listed = await store.listReads();
+              const listed = await store.listReads(room);
               const changed = listed.filter((r) => names.includes(r.participant));
               if (changed.length) send('reads', changed);
             }

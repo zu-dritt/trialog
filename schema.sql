@@ -218,3 +218,18 @@ DO $$
    END $$;
 
 CREATE INDEX IF NOT EXISTS messages_room_id ON messages (room, id);
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'read_positions' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT 'main'
+         CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
+       ALTER TABLE read_positions DROP CONSTRAINT read_positions_pkey;
+       ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;

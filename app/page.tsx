@@ -259,6 +259,7 @@ export default function Page() {
     lastId.current = 0;
     setMessages([]);
     setPinned([]);
+    setReads([]); // read positions are per room: the other room's say nothing here
     stick.current = true;
     // Another token is another participant: forget who took part. Another room changes none of that.
     if (streamToken.current !== token) {
@@ -892,7 +893,8 @@ export default function Page() {
         const data = (await (await api('/api/read', {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo }),
         })).json()) as { read: ReadPosition };
-        if (data.read) setReads((list) => applyReads(list, [data.read]));
+        // The answer may arrive after another room was opened; its position belongs to the room it names.
+        if (data.read && data.read.room === roomRef.current) setReads((list) => applyReads(list, [data.read]));
       } catch {
         /* a failed mark is retried when the next visible batch is reported */
       }

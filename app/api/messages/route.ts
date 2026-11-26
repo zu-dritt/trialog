@@ -57,7 +57,8 @@ export const GET = safe(async (request: Request) => {
   // The top-level polls, reactions, decisions and reads lists are opt-in (`?polls=1`, `?reactions=1`, `?decisions=1`,
   // `?reads=1`). The page asks for them so a since-poll still sees votes, reactions, decision-card changes and read
   // positions on older messages; the CLI, which polls every few seconds, leaves them off. `markRead=1` records the
-  // highest message id in this list as the caller's read position (only forward).
+  // highest message id in this list as the caller's read position in that room (only forward). The read positions
+  // are those of the room that was asked for.
   const includePolls = params.get('polls') === '1';
   const includeReactions = params.get('reactions') === '1';
   const includeDecisions = params.get('decisions') === '1';
@@ -70,17 +71,21 @@ export const GET = safe(async (request: Request) => {
     includePolls ? store.listPolls() : Promise.resolve(null),
     includeReactions ? store.listReactions() : Promise.resolve(null),
     includeDecisions ? store.listDecisions() : Promise.resolve(null),
-    includeReads ? store.listReads() : Promise.resolve(null),
+    includeReads ? store.listReads(room) : Promise.resolve(null),
   ]);
   if (markRead && messages.length) {
+    // A position is per room. A list of one room moves that room's; a list of every room
+    // (`room=all`) moves each room's to the highest id it has in this list.
+    const highest = new Map<string, number>();
+    for (const m of messages) highest.set(m.room, m.id);
     try {
-      await store.setReadPosition(me, messages[messages.length - 1].id);
+      for (const upTo of highest.values()) await store.setReadPosition(me, upTo);
     } catch (e) {
       if (!(e instanceof ReadError)) throw e;
     }
     if (includeReads) {
       // The list should include the position just recorded.
-      const latest = await store.listReads();
+      const latest = await store.listReads(room);
       return json({
         me,
         messages,

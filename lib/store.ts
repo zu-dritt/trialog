@@ -70,12 +70,13 @@ export class ReplyTargetError extends Error {
  * Nothing is stored in that case.
  */
 export class RoomError extends Error {
-  constructor(readonly reason: 'not found' | 'exists' | 'full' | 'other room', readonly room: string, answered?: { id: number; room: string }) {
+  constructor(readonly reason: 'not found' | 'exists' | 'full' | 'other room' | 'read elsewhere', readonly room: string, answered?: { id: number; room: string }) {
     super({
       'not found': `Room "${room}" does not exist. GET /api/rooms lists the rooms.`,
       exists: `A room with the id "${room}" already exists.`,
       full: `A hub has at most ${MAX_ROOMS} rooms.`,
       'other room': `Message #${answered?.id} is in the room "${answered?.room}", so a reply to it can't go to the room "${room}". Leave "room" out and the reply goes where that message is.`,
+      'read elsewhere': `Message #${answered?.id} is in the room "${answered?.room}", not in "${room}". Leave "room" out and the position is recorded where that message is.`,
     }[reason]);
     this.name = 'RoomError';
   }
@@ -315,12 +316,14 @@ export interface Store {
   /** Every decision card, for since-poll and the stream. */
   listDecisions(): Promise<DecisionCard[]>;
   /**
-   * Moves this participant's read position to `upTo` if that is a higher message id than they
-   * already have. A lower id is ignored. Throws ReadError when the message does not exist.
+   * Moves this participant's read position in the room of message `upTo` to that message, if it
+   * is a higher id than they already have there. A lower id is ignored. A participant has one
+   * position per room: reading one room says nothing about another. Throws ReadError when the
+   * message does not exist, and RoomError when `room` is given and the message is in another room.
    */
-  setReadPosition(participant: Sender, upTo: number): Promise<ReadPosition>;
-  /** Every stored read position, for the opt-in list and the stream. */
-  listReads(): Promise<ReadPosition[]>;
+  setReadPosition(participant: Sender, upTo: number, room?: string | null): Promise<ReadPosition>;
+  /** The read positions of one room, or of every room when none is named. For the opt-in list and the stream. */
+  listReads(room?: string | null): Promise<ReadPosition[]>;
 }
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
@@ -559,6 +562,22 @@ const SCHEMA = [
      NULL;
    END $$`,
   `CREATE INDEX IF NOT EXISTS messages_room_id ON messages (room, id)`,
+  // A read position is per participant and room: reading one room says nothing about another.
+  // The positions from before rooms belong to main, where every message of that time is.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'read_positions' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT '${MAIN_ROOM}'
+         CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
+       ALTER TABLE read_positions DROP CONSTRAINT read_positions_pkey;
+       ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -684,8 +703,16 @@ const DECISIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM decision_cards) |
     ) t
   ), '')`;
 
-const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions) || '|' ||
-  coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant) FROM read_positions), '')`;
+// The read positions of one room ($1), or of every room when $1 is null.
+const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions WHERE ($1::text IS NULL OR room = $1::text)) || '|' ||
+  coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant, room) FROM read_positions
+             WHERE ($1::text IS NULL OR room = $1::text)), '')`;
+const toRead = (r: Row): ReadPosition => ({
+  participant: String(r.participant) as Sender,
+  room: String(r.room ?? MAIN_ROOM),
+  up_to: Number(r.up_to),
+  updated_at: new Date(r.updated_at as string | Date).toISOString(),
+});
 
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
@@ -1421,33 +1448,36 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const rows = await db.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c ORDER BY c.created_at, c.id`, []);
       return rows.map((r) => toDecision(r.decision)).filter((d): d is DecisionCard => d !== null);
     },
-    async setReadPosition(participant, upTo) {
+    async setReadPosition(participant, upTo, room = null) {
       await ensure();
-      const [exists] = await db.query(`SELECT id FROM messages WHERE id = $1::bigint`, [upTo]);
-      if (!exists) throw new ReadError('not found');
+      // The position is recorded in the room the message is in. The message says which room that is.
+      const [message] = await db.query(`SELECT room FROM messages WHERE id = $1::bigint`, [upTo]);
+      if (!message) throw new ReadError('not found');
+      const inRoom = message.room as string;
+      if (room !== null && room !== inRoom) throw new RoomError('read elsewhere', room, { id: upTo, room: inRoom });
       const rows = await db.query(
-        `INSERT INTO read_positions (participant, up_to)
-         VALUES ($1::text, $2::bigint)
-         ON CONFLICT (participant) DO UPDATE
+        `INSERT INTO read_positions (participant, room, up_to)
+         VALUES ($1::text, $3::text, $2::bigint)
+         ON CONFLICT (participant, room) DO UPDATE
            SET up_to = EXCLUDED.up_to, updated_at = now()
            WHERE read_positions.up_to < EXCLUDED.up_to
-         RETURNING participant, up_to, updated_at`,
-        [participant, upTo],
+         RETURNING participant, room, up_to, updated_at`,
+        [participant, upTo, inRoom],
       );
       const row = rows[0] ?? (await db.query(
-        `SELECT participant, up_to, updated_at FROM read_positions WHERE participant = $1::text`,
-        [participant],
+        `SELECT participant, room, up_to, updated_at FROM read_positions WHERE participant = $1::text AND room = $2::text`,
+        [participant, inRoom],
       ))[0];
-      return { participant: String(row.participant), up_to: Number(row.up_to), updated_at: new Date(row.updated_at as string | Date).toISOString() };
+      return toRead(row);
     },
-    async listReads() {
+    async listReads(room = null) {
       await ensure();
-      const rows = await db.query(`SELECT participant, up_to, updated_at FROM read_positions ORDER BY participant`, []);
-      return rows.map((r) => ({
-        participant: String(r.participant) as Sender,
-        up_to: Number(r.up_to),
-        updated_at: new Date(r.updated_at as string | Date).toISOString(),
-      }));
+      const rows = await db.query(
+        `SELECT participant, room, up_to, updated_at FROM read_positions
+         WHERE ($1::text IS NULL OR room = $1::text) ORDER BY participant, room`,
+        [room],
+      );
+      return rows.map(toRead);
     },
   };
 }
@@ -1569,8 +1599,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type PositionRow = { card_id: string; participant: Sender; stance: DecisionStance; note: string | null; updated_at: string };
   const decisionRows = new Map<string, DecisionRow>();
   const positionRows = new Map<string, PositionRow>();
-  type ReadRow = { participant: Sender; up_to: number; updated_at: string };
-  const readRows = new Map<string, ReadRow>();
+  type ReadRow = { participant: Sender; room: string; up_to: number; updated_at: string };
+  const readRows = new Map<string, ReadRow>(); // one per participant and room
+  const readKey = (participant: Sender, room: string) => `${participant}\0${room}`;
   const positionKey = (cardId: string, participant: Sender) => `${cardId}\0${participant}`;
   const assembleDecision = (row: DecisionRow): DecisionCard => ({
     id: row.id,
@@ -1601,11 +1632,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       });
     return `${decisionRows.size}|${entries.join(',')}`;
   };
-  const readsFingerprint = (): string => {
-    const entries = [...readRows.values()]
-      .sort((a, b) => a.participant.localeCompare(b.participant))
+  const readsFingerprint = (room: string | null): string => {
+    const own = [...readRows.values()].filter((r) => room === null || r.room === room);
+    const entries = own
+      .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
       .map((r) => `${r.participant}:${r.up_to}`);
-    return `${readRows.size}|${entries.join(',')}`;
+    return `${own.length}|${entries.join(',')}`;
   };
   const copy = (m: Message): Message => ({
     ...m,
@@ -1683,7 +1715,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       return {
         last_id: own.length ? own[own.length - 1].id : 0,
         pins: own.filter((m) => m.pinned_at).map((m) => m.id).join(','),
-        polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint(),
+        polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint(room),
         rooms: roomRows.map((r) => `${r.id}:${assembleRoom(r, null, null).last_id}`).sort().join(','),
       };
     },
@@ -1897,18 +1929,21 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assembleDecision);
     },
-    async setReadPosition(participant, upTo) {
+    async setReadPosition(participant, upTo, room = null) {
       shaped(participant);
-      if (!rows.some((m) => m.id === upTo)) throw new ReadError('not found');
-      const existing = readRows.get(participant);
+      const message = rows.find((m) => m.id === upTo);
+      if (!message) throw new ReadError('not found');
+      if (room !== null && room !== message.room) throw new RoomError('read elsewhere', room, { id: upTo, room: message.room });
+      const existing = readRows.get(readKey(participant, message.room));
       if (existing && existing.up_to >= upTo) return { ...existing };
-      const row: ReadRow = { participant, up_to: upTo, updated_at: timestamp() };
-      readRows.set(participant, row);
+      const row: ReadRow = { participant, room: message.room, up_to: upTo, updated_at: timestamp() };
+      readRows.set(readKey(participant, message.room), row);
       return { ...row };
     },
-    async listReads() {
+    async listReads(room = null) {
       return [...readRows.values()]
-        .sort((a, b) => a.participant.localeCompare(b.participant))
+        .filter((r) => room === null || r.room === room)
+        .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
         .map((r) => ({ ...r }));
     },
   };

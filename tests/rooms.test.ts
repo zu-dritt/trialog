@@ -8,6 +8,7 @@ import {
   MAX_ROOMS, cleanRoomName, formatSeen, parseRoomId, parseRoomInput, parseSeen, roomIdFromName, toMarkdown,
   type Message, type Room,
 } from '../lib/core';
+import { UNSEEN_AFTER_MS, unseenByAgents, type Participant, type ReadPosition } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ReplyTargetError, RoomError, createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 import { createEventStream } from '../lib/stream';
@@ -235,6 +236,83 @@ for (const [name, make] of STORES) {
   });
 }
 
+
+// --- read positions, per room -------------------------------------------------------------------
+
+for (const [name, make] of STORES) {
+  test(`${name}: a read position is per participant and room, and reading one room says nothing about another`, async () => {
+    const store = await make();
+    await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
+    const m1 = must(await store.add({ sender: 'david', recipient: null, text: 'main, early' }));
+    const c1 = must(await store.add({ sender: 'david', recipient: null, text: 'calm, early', room: 'calm' }));
+    const m2 = must(await store.add({ sender: 'david', recipient: null, text: 'main, late' }));
+    const c2 = must(await store.add({ sender: 'david', recipient: null, text: 'calm, late', room: 'calm' }));
+
+    // Grok reads calm to its end. The id is higher than everything in main, and main is still unread.
+    const inCalm = await store.setReadPosition('grok', c2.id);
+    assert.deepEqual([inCalm.participant, inCalm.room, inCalm.up_to], ['grok', 'calm', c2.id]);
+    assert.deepEqual(await store.listReads('main'), [], 'nothing was read in main');
+    assert.deepEqual((await store.listReads('calm')).map((r) => [r.participant, r.room, r.up_to]), [['grok', 'calm', c2.id]]);
+
+    // Then the first message of main: a lower id than the calm position, and it counts, because it is another room.
+    const inMain = await store.setReadPosition('grok', m1.id);
+    assert.deepEqual([inMain.room, inMain.up_to], ['main', m1.id]);
+    assert.deepEqual((await store.listReads()).map((r) => [r.participant, r.room, r.up_to]), [['grok', 'calm', c2.id], ['grok', 'main', m1.id]]);
+    // Only forward, within a room.
+    assert.equal((await store.setReadPosition('grok', c1.id)).up_to, c2.id);
+    assert.equal((await store.setReadPosition('grok', m2.id)).up_to, m2.id);
+    await store.setReadPosition('claude', c1.id);
+    assert.deepEqual((await store.listReads('calm')).map((r) => [r.participant, r.up_to]), [['claude', c1.id], ['grok', c2.id]]);
+
+    // The room may be named, and must then be the room the message is in.
+    assert.equal((await store.setReadPosition('claude', c2.id, 'calm')).room, 'calm');
+    await assert.rejects(store.setReadPosition('claude', m2.id, 'calm'), (e: unknown) => e instanceof RoomError && e.reason === 'read elsewhere');
+    assert.deepEqual((await store.listReads('main')).map((r) => r.participant), ['grok'], 'the refused one recorded nothing');
+
+    // The fingerprint of a room moves with that room's positions only.
+    const calmBefore = (await store.version('calm')).reads;
+    const mainBefore = (await store.version('main')).reads;
+    assert.equal(mainBefore, `1|grok:${m2.id}`);
+    await store.setReadPosition('david', c2.id);
+    assert.notEqual((await store.version('calm')).reads, calmBefore);
+    assert.equal((await store.version('main')).reads, mainBefore);
+  });
+
+  test(`${name}: the «not seen yet» flag is worked out within a room`, async () => {
+    const store = await make();
+    await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
+    const question = must(await store.add({ sender: 'david', recipient: 'grok', text: '@grok a calm question', room: 'calm' }));
+    const later = must(await store.add({ sender: 'claude', recipient: null, text: 'fast work in main' }));
+    // Grok reads main, past the id of the question it was asked in the other room.
+    await store.setReadPosition('grok', later.id);
+    const roster: Participant[] = [{ name: 'grok', kind: 'agent', color: 0 }, { name: 'claude', kind: 'agent', color: 1 }, { name: 'david', kind: 'human', color: 2 }];
+    const afterAWhile = Date.parse(question.created_at) + UNSEEN_AFTER_MS + 1000;
+    assert.equal(unseenByAgents(question, await store.listReads('calm'), roster, afterAWhile), true, 'the question in calm is still not seen');
+    await store.setReadPosition('grok', question.id);
+    assert.equal(unseenByAgents(question, await store.listReads('calm'), roster, afterAWhile), false);
+  });
+
+  test(`${name}: the stream sends the read positions of its room only`, async () => {
+    const store = await make();
+    await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
+    const m = must(await store.add({ sender: 'david', recipient: null, text: 'in main' }));
+    const c = must(await store.add({ sender: 'david', recipient: null, text: 'in calm', room: 'calm' }));
+    await store.setReadPosition('grok', m.id);
+    const abort = new AbortController();
+    const r = reader(createEventStream({ store, me: 'david', since: c.id, room: 'calm', signal: abort.signal, ...FAST }));
+    const [, , reads] = await r.next(4); // hello, pins, reads, rooms
+    assert.deepEqual(reads, { event: 'reads', data: [] }, 'what was read in main is not sent to calm');
+    await store.setReadPosition('claude', m.id);
+    assert.ok(await r.quiet(120), 'a position that moves in main is not sent either');
+    await store.setReadPosition('grok', c.id);
+    const [moved] = await r.next();
+    assert.equal(moved.event, 'reads');
+    assert.deepEqual((moved.data as ReadPosition[]).map((p) => [p.participant, p.room, p.up_to]), [['grok', 'calm', c.id]]);
+    abort.abort();
+    await r.finished();
+  });
+}
+
 // --- a database from before rooms ---------------------------------------------------------------
 
 const file = (path: string) => readFile(new URL(path, import.meta.url), 'utf8');
@@ -256,7 +334,8 @@ async function databaseBeforeRooms(): Promise<PGlite> {
       ('grok', 'claude', '@claude please review', '2026-11-25T10:02:00Z', NULL),
       ('claude', 'david', 'DECISION: we keep it simple', '2026-11-25T10:03:00Z', '2026-11-25T10:03:00Z');
     UPDATE messages SET reply_to = 3 WHERE id = 4;
-    UPDATE webhook_state SET last_notified_id = 4;`);
+    UPDATE webhook_state SET last_notified_id = 4;
+    INSERT INTO read_positions (participant, up_to, updated_at) VALUES ('grok', 3, '2026-11-25T10:05:00Z'), ('david', 4, '2026-11-25T10:06:00Z');`);
   return pg;
 }
 const columns = async (pg: PGlite, table: string) =>
@@ -271,6 +350,8 @@ test('the fixture really is a database from before rooms', async () => {
   assert.ok(!(await tables(pg)).includes('rooms'));
   assert.ok(!(await columns(pg, 'messages')).includes('room'));
   assert.ok((await tables(pg)).includes('decision_cards'), 'it has everything that came before');
+  assert.deepEqual(await columns(pg, 'read_positions'), ['participant', 'up_to', 'updated_at'], 'read positions have no room yet');
+  await assert.rejects(pg.query(`INSERT INTO read_positions (participant, up_to) VALUES ('grok', 4)`), /read_positions_pkey/, 'one position per participant');
   await pg.close();
 });
 
@@ -292,11 +373,18 @@ test('first request on an old database: it gains the table and the column, and e
   assert.deepEqual((await store.listRooms()).map((r) => [r.id, r.name, r.last_id]), [['main', 'Main', 4]]);
   assert.equal(await store.claimWakeup(), null, 'the old history wakes nobody');
 
+  // The read positions of that time are the positions in main, unchanged, and a second room starts unread.
+  assert.equal((await columns(pg, 'read_positions')).at(-1), 'room');
+  assert.deepEqual((await store.listReads()).map((r) => [r.participant, r.room, r.up_to, r.updated_at]), [['david', 'main', 4, '2026-11-25T10:06:00.000Z'], ['grok', 'main', 3, '2026-11-25T10:05:00.000Z']]);
+  assert.deepEqual((await store.listReads('main')).length, 2);
+  assert.equal((await store.setReadPosition('grok', 4)).up_to, 4, 'a position from before moves on as usual');
+
   // The next message continues the same ids, in main, and a new room can be used at once.
   const next = must(await store.add({ sender: 'david', recipient: null, text: 'after the update', reply_to: 4 }));
   assert.deepEqual([next.id, next.room], [5, 'main']);
   await store.createRoom({ id: 'calm', name: 'Calm talk', created_by: 'david' });
   assert.deepEqual([must(await store.add({ sender: 'david', recipient: null, text: 'in calm', room: 'calm' })).id], [6]);
+  assert.deepEqual([(await store.setReadPosition('grok', 6)).room, (await store.listReads('main')).find((r) => r.participant === 'grok')?.up_to], ['calm', 4]);
   await pg.close();
 });
 
@@ -310,6 +398,8 @@ test('the migration is idempotent: a second start, and the file run by hand twic
     (await pg.query(`SELECT m::text AS row FROM messages m ORDER BY id`)).rows,
     (await pg.query(`SELECT r::text AS row FROM rooms r ORDER BY id`)).rows,
     await columns(pg, 'messages'),
+    (await pg.query(`SELECT p::text AS row FROM read_positions p ORDER BY participant, room`)).rows,
+    (await pg.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'read_positions_pkey'`)).rows,
   ]);
   const before = await snapshot();
   await createSqlStore(pgliteDb(pg)).ensure(); // a second instance starts
@@ -324,6 +414,9 @@ test('the migration is idempotent: a second start, and the file run by hand twic
   await byHand.exec(migration);
   assert.equal(await history(byHand), old);
   assert.deepEqual(await columns(byHand, 'messages'), await columns(pg, 'messages'));
+  assert.deepEqual((await byHand.query(`SELECT participant, room, up_to::int AS up_to FROM read_positions ORDER BY participant`)).rows, [{ participant: 'david', room: 'main', up_to: 4 }, { participant: 'grok', room: 'main', up_to: 3 }]);
+  assert.deepEqual((await byHand.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'read_positions_pkey'`)).rows, [{ def: 'PRIMARY KEY (participant, room)' }]);
+  await assert.rejects(byHand.query(`INSERT INTO read_positions (participant, room, up_to) VALUES ('grok', 'nowhere', 3)`), /read_positions_room_exists/);
   assert.deepEqual((await byHand.query(`SELECT id, name, created_by FROM rooms`)).rows, [{ id: 'main', name: 'Main', created_by: 'hub' }]);
   // The database itself refuses a message in a room that does not exist, and a room id that is not one.
   await assert.rejects(byHand.query(`INSERT INTO messages (sender, text, room) VALUES ('david', 'x', 'nowhere')`), /messages_room_exists/);
@@ -483,6 +576,7 @@ let closeRoute: { POST: Handler };
 let decisionsRoute: { POST: Handler };
 let pinRoute: { POST: Handler };
 let streamRoute: { GET: Handler };
+let readRoute: { PUT: Handler };
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
@@ -499,6 +593,7 @@ beforeAll(async () => {
   decisionsRoute = (await import('../app/api/decisions/route')) as unknown as typeof decisionsRoute;
   pinRoute = (await import('../app/api/messages/[id]/pin/route')) as unknown as typeof pinRoute;
   streamRoute = (await import('../app/api/stream/route')) as unknown as typeof streamRoute;
+  readRoute = (await import('../app/api/read/route')) as unknown as typeof readRoute;
 });
 
 const URL_BASE = 'http://hub.test';
@@ -671,6 +766,41 @@ test('GET /api/stream takes the room, and refuses one that is not there', async 
   assert.ok(must((list4.data as Room[]).find((room) => room.id === 'main')).unread! > 0);
   abort.abort();
   await r.finished();
+});
+
+test('reading through the API: the position is in the room of the list or of the message', async () => {
+  const main = await posted({ text: 'to read in main' }, 'david');
+  const calm = await posted({ text: 'to read in calm', room: 'calm' }, 'david');
+  type WithReads = { messages: Message[]; reads: ReadPosition[] };
+  const get = async (query: string, who: string) => (await (await call(messages.GET, `/api/messages${query}`, who)).json()) as WithReads;
+
+  // Reading calm marks calm, and the list of positions that comes back is calm's.
+  const readCalm = await get(`?room=calm&since=${calm.id - 1}&markRead=1&reads=1`, 'grok');
+  assert.deepEqual(ids(readCalm.messages), [calm.id]);
+  assert.deepEqual(readCalm.reads.filter((p) => p.participant === 'grok').map((p) => [p.room, p.up_to]), [['calm', calm.id]]);
+  // A call without a room is about main, as before: grok has read nothing there yet.
+  const mainReads = await get('?reads=1', 'david');
+  assert.ok(mainReads.reads.every((p) => p.room === 'main'));
+  assert.ok(!mainReads.reads.some((p) => p.participant === 'grok'), 'reading calm did not move grok in main');
+  // Reading main marks main, to an id below the calm position.
+  const readMain = await get(`?since=${main.id - 1}&markRead=1&reads=1`, 'grok');
+  assert.deepEqual(readMain.reads.filter((p) => p.participant === 'grok').map((p) => [p.room, p.up_to]), [['main', main.id]]);
+
+  // Every room at once marks each room up to the highest id it has in the list.
+  const both = await get(`?room=all&since=${main.id - 1}&markRead=1&reads=1`, 'claude');
+  assert.deepEqual(both.reads.filter((p) => p.participant === 'claude').map((p) => [p.room, p.up_to]).sort(), [['calm', calm.id], ['main', main.id]]);
+
+  // PUT /api/read: the message says which room; a room that is named must be that one.
+  const put = (body: unknown, who: string) => readRoute.PUT(new Request(`${URL_BASE}/api/read`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...auth(who) }, body: JSON.stringify(body) }));
+  const plain = (await (await put({ upTo: calm.id }, 'david')).json()) as { read: ReadPosition };
+  assert.deepEqual([plain.read.participant, plain.read.room, plain.read.up_to], ['david', 'calm', calm.id]);
+  assert.equal((await put({ upTo: calm.id, room: 'calm' }, 'david')).status, 200);
+  const wrong = await put({ upTo: calm.id, room: 'main' }, 'david');
+  assert.equal(wrong.status, 409);
+  assert.match(await errorOf(wrong), new RegExp(`Message #${calm.id} is in the room "calm", not in "main"`));
+  assert.equal((await put({ upTo: calm.id, room: 'Not An Id' }, 'david')).status, 400);
+  assert.equal((await put({ upTo: 999_999 }, 'david')).status, 404);
+  assert.ok(!(await get('?reads=1', 'grok')).reads.some((p) => p.participant === 'david'), 'david has still read nothing in main');
 });
 
 test('a hub has at most twelve rooms', async () => {

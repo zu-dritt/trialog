@@ -219,9 +219,9 @@ async function main() {
     if (opts['up-to'] !== undefined) {
       if (opts.peek) usage('read --peek cannot be combined with --up-to');
       if (!/^[1-9]\d{0,14}$/.test(opts['up-to'] || '')) usage('read --up-to needs a message id');
-      const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo: Number(opts['up-to']) }) })).json();
+      const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opts.room ? { upTo: Number(opts['up-to']), room: opts.room } : { upTo: Number(opts['up-to']) }) })).json();
       if (opts.json) console.log(JSON.stringify(data.read));
-      else console.log(`read up to #${data.read.up_to}`);
+      else console.log(`read up to #${data.read.up_to}${data.read.room && data.read.room !== 'main' ? ` in ${data.read.room}` : ''}`);
       return;
     }
     const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, room: opts.room, markRead: opts.peek ? undefined : '1' })}`)).json();

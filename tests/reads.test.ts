@@ -47,8 +47,10 @@ const THREE: Participant[] = [
 ];
 
 test('parseReadInput accepts a positive message id and refuses anything else', () => {
-  assert.deepEqual(parseReadInput({ upTo: 45 }), { ok: true, upTo: 45 });
-  assert.deepEqual(parseReadInput({ upTo: '45' }), { ok: true, upTo: 45 });
+  assert.deepEqual(parseReadInput({ upTo: 45 }), { ok: true, upTo: 45, room: null });
+  assert.deepEqual(parseReadInput({ upTo: '45' }), { ok: true, upTo: 45, room: null });
+  assert.deepEqual(parseReadInput({ upTo: 45, room: 'calm' }), { ok: true, upTo: 45, room: 'calm' });
+  assert.equal(parseReadInput({ upTo: 45, room: 'Not An Id' }).ok, false);
   assert.equal(parseReadInput({ upTo: 0 }).ok, false);
   assert.equal(parseReadInput({ upTo: -1 }).ok, false);
   assert.equal(parseReadInput({ upTo: 1.5 }).ok, false);
@@ -77,20 +79,20 @@ test('addressedAgents and unseenByAgents follow the recipients and the two-minut
   assert.equal(unseenByAgents(tooNew, [], THREE, now), false);
   assert.equal(unseenByAgents(toHuman, [], THREE, now), false);
   assert.equal(unseenByAgents(fromHub, [], THREE, now), false);
-  assert.equal(unseenByAgents(toGrok, [{ participant: 'grok', up_to: 11, updated_at: old }], THREE, now), false);
-  assert.equal(unseenByAgents(toGrok, [{ participant: 'grok', up_to: 10, updated_at: old }], THREE, now), true);
-  assert.equal(unseenByAgents(toEveryone, [{ participant: 'grok', up_to: 20, updated_at: old }], THREE, now), false, 'the flag goes once any addressed agent has read past it');
+  assert.equal(unseenByAgents(toGrok, [{ participant: 'grok', room: 'main', up_to: 11, updated_at: old }], THREE, now), false);
+  assert.equal(unseenByAgents(toGrok, [{ participant: 'grok', room: 'main', up_to: 10, updated_at: old }], THREE, now), true);
+  assert.equal(unseenByAgents(toEveryone, [{ participant: 'grok', room: 'main', up_to: 20, updated_at: old }], THREE, now), false, 'the flag goes once any addressed agent has read past it');
   assert.equal(unseenByAgents(toEveryone, [
-    { participant: 'grok', up_to: 20, updated_at: old },
-    { participant: 'claude', up_to: 20, updated_at: old },
+    { participant: 'grok', room: 'main', up_to: 20, updated_at: old },
+    { participant: 'claude', room: 'main', up_to: 20, updated_at: old },
   ], THREE, now), false);
   assert.equal(UNSEEN_LABEL, '⏰ not seen yet');
 
   assert.deepEqual(unseenAgents(toEveryone, [], THREE, now), ['grok', 'claude']);
-  assert.deepEqual(unseenAgents(toEveryone, [{ participant: 'grok', up_to: 20, updated_at: old }], THREE, now), ['claude']);
+  assert.deepEqual(unseenAgents(toEveryone, [{ participant: 'grok', room: 'main', up_to: 20, updated_at: old }], THREE, now), ['claude']);
   assert.equal(unseenFlagText(toGrok, [], THREE, now), '⏰ not seen by Grok yet');
   assert.equal(unseenFlagText(toEveryone, [], THREE, now), '⏰ not seen by Grok and Claude yet');
-  assert.equal(unseenFlagText(toEveryone, [{ participant: 'grok', up_to: 20, updated_at: old }], THREE, now), null, 'the flag itself stays off once any addressed agent has read');
+  assert.equal(unseenFlagText(toEveryone, [{ participant: 'grok', room: 'main', up_to: 20, updated_at: old }], THREE, now), null, 'the flag itself stays off once any addressed agent has read');
   const four: Participant[] = [
     ...THREE,
     { name: 'quill-2', kind: 'agent', color: 3 },
@@ -99,10 +101,10 @@ test('addressedAgents and unseenByAgents follow the recipients and the two-minut
 });
 
 test('applyReads merges and never moves a position backwards', () => {
-  const a: ReadPosition = { participant: 'grok', up_to: 4, updated_at: '2026-11-26T09:00:00.000Z' };
-  const b: ReadPosition = { participant: 'claude', up_to: 7, updated_at: '2026-11-26T09:01:00.000Z' };
-  const later: ReadPosition = { participant: 'grok', up_to: 9, updated_at: '2026-11-26T09:02:00.000Z' };
-  const earlier: ReadPosition = { participant: 'grok', up_to: 3, updated_at: '2026-11-26T09:03:00.000Z' };
+  const a: ReadPosition = { participant: 'grok', room: 'main', up_to: 4, updated_at: '2026-11-26T09:00:00.000Z' };
+  const b: ReadPosition = { participant: 'claude', room: 'main', up_to: 7, updated_at: '2026-11-26T09:01:00.000Z' };
+  const later: ReadPosition = { participant: 'grok', room: 'main', up_to: 9, updated_at: '2026-11-26T09:02:00.000Z' };
+  const earlier: ReadPosition = { participant: 'grok', room: 'main', up_to: 3, updated_at: '2026-11-26T09:03:00.000Z' };
   const merged = applyReads([a], [b, later, earlier]);
   assert.deepEqual(merged.map((r) => [r.participant, r.up_to]), [['claude', 7], ['grok', 9]]);
 });
