@@ -77,6 +77,30 @@ test('a web address in a quote is a link as in any message, with the same rules,
       assert.ok(href.replace(/^(https?:\/\/|mailto:)/, '').replace(/&amp;/g, '&') === label.replace(/^https?:\/\//, '').replace(/&amp;/g, '&'), `${href} shows as ${label}`);
     }
   }
+  // An address with several query parameters reaches the link exactly as it was (found in review:
+  // the "&" used to be escaped, which put a backslash into the link and into the text).
+  const address = 'https://example.com/page?x=1&y=2&z=a_b';
+  const two = html(quoteSelection('Grok', 45, `see ${address} for it`));
+  assert.equal(/href="([^"]*)"/.exec(two)?.[1].replace(/&amp;/g, '&'), address, 'the link goes to the original address');
+  assert.equal(/<a [^>]*>([^<]*)<\/a>/.exec(two)?.[1].replace(/&amp;/g, '&'), address, 'and shows it, with no backslash');
+  assert.ok(!two.includes('\\') && !two.includes('%5C'), two);
+  assert.equal(squash(visible(two)), `Grok in #45:\n\nsee ${address} for it`);
+  // The same holds for the other characters an address may hold that mean something in Markdown.
+  for (const tricky of ['https://example.com/_next/static/a_b.js', 'https://example.com/~user/*.txt?q=[1]', 'http://localhost.example:3000/a?b=c&d=e#f', 'www.example.com/a_b?x=1&y=2']) {
+    const out = html(quoteSelection('Grok', 45, tricky));
+    assert.equal(squash(visible(out)), `Grok in #45:\n\n${tricky}`, tricky);
+    assert.ok(!out.includes('%5C'), `${tricky}: no backslash in the link: ${out}`);
+    assert.ok(!/<(em|strong|del|code)\b/.test(out.replace('<strong>Grok</strong>', '')), `${tricky}: no formatting from characters of the address`);
+  }
+  // Punctuation after an address is not part of it, and stays text.
+  const sentence = html(quoteSelection('Grok', 45, 'Is it https://example.com/a?b=1&c=2? Or *this*: https://example.com/x.'));
+  assert.equal(squash(visible(sentence)), 'Grok in #45:\n\nIs it https://example.com/a?b=1&c=2? Or *this*: https://example.com/x.');
+  assert.deepEqual([...sentence.matchAll(/href="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&')), ['https://example.com/a?b=1&c=2', 'https://example.com/x']);
+  assert.ok(!sentence.includes('<em>'));
+  // Something that only starts like an address is escaped like any text: no link with a label of the writer's choosing.
+  const dressed = html(quoteSelection('Grok', 45, 'https://[click here](https://other.example/x) and http://*bold*'));
+  assert.equal(squash(visible(dressed)), 'Grok in #45:\n\nhttps://[click here](https://other.example/x) and http://*bold*');
+  assert.ok(!dressed.includes('<em>') && !/>click here</.test(dressed), dressed);
   // An address that would run something is not a link at all.
   const js = html(quoteSelection('Grok', 45, 'javascript:alert(1) and data:text/html,<b>x</b>'));
   assert.ok(!js.includes('<a ') && !js.includes('<b>'), js);
@@ -90,6 +114,10 @@ test('escapeMarkdown leaves ordinary writing alone', () => {
   assert.equal(escapeMarkdown('_edge_'), '\\_edge\\_');
   assert.equal(escapeMarkdown('  indented'), 'indented', 'leading spaces would make a code block inside a quote');
   assert.equal(escapeMarkdown('@claude said so, at 12:30, see https://example.com'), '@claude said so, at 12:30, see https://example.com');
+  // An ampersand is escaped only where it would start a character reference.
+  assert.equal(escapeMarkdown('R&D, AT&T, a & b, x&y;z'), 'R&D, AT&T, a & b, x\\&y;z');
+  assert.equal(escapeMarkdown('&lt; &amp; &#60; &#x3C; &nbsp;'), '\\&lt; \\&amp; \\&#60; \\&#x3C; \\&nbsp;');
+  assert.equal(escapeMarkdown('&; &#; &#x; & amp;'), '&; &#; &#x; & amp;', 'not references: left alone');
 });
 
 test('quoting a whole message keeps its own Markdown, so it looks like the message', () => {

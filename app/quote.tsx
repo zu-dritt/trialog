@@ -17,20 +17,55 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export const MESSAGE_TEXT_ATTRIBUTE = 'data-message-text';
 
 // Characters that start something in Markdown wherever they stand.
-const INLINE = /[\\`*[\]<>|~&]/g;
+const INLINE = /[\\`*[\]<>|~]/g;
+// An ampersand only matters where it starts a character reference: &name; &#123; or &#x1f;.
+// Every other "&" is plain, and escaping it would put a backslash where none belongs.
+const ENTITY = /&(?=(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#[xX][0-9A-Fa-f]+);)/g;
 // An underscore only starts emphasis at the edge of a word; inside a word (snake_case) it is plain.
 const EDGE_UNDERSCORE = /(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/g;
 // What would make a line a heading, a list item or a rule: "#", "-", "+", "=" or "1." at its start.
 const LINE_START = /^(#|-|\+|=)/;
 const ORDERED = /^(\d+)([.)])/;
-// One thing is left to Markdown on purpose: a bare web or e-mail address in the selection becomes
-// a link, exactly as it does when someone types it into a message, with the same careful link
-// rules (app/markdown.tsx). Its text is unchanged. Escaping can't prevent that anyway: the
-// renderer links addresses after it has read the escapes.
+// One thing is left to Markdown on purpose: a bare web address in the selection becomes a link,
+// exactly as it does when someone types it into a message, with the same careful link rules
+// (app/markdown.tsx). So an address must reach the renderer untouched: a backslash put inside it
+// would end up in the link. What counts as an address here follows what the renderer links:
+// "http://" or "https://" not directly after a letter, or "www." at the start or after a space or
+// bracket; then a host name with a dot; then everything up to the next space or "<".
+// Something that merely starts like an address (no proper host name) is escaped like all other text.
+const ADDRESS = /(?:(?<![A-Za-z])https?:\/\/|(?<![^\s(])(?=www\.))(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+[^\s<]*/g;
+// What the renderer leaves out of a link at its end: closing punctuation, and something that
+// looks like a character reference. Those are text again, and are escaped as text.
+const ADDRESS_TAIL = /(?:&[A-Za-z0-9#]+;|[!"'*,.:;?_~])+$/;
+
+/** Cuts off what the renderer will not count as part of the link. */
+function linkedPart(address: string): string {
+  let linked = address;
+  for (;;) {
+    const before = linked;
+    linked = linked.replace(ADDRESS_TAIL, '');
+    // A closing bracket belongs to the address only when it has its opening one inside it.
+    for (const [open, close] of ['()', '[]']) {
+      if (linked.endsWith(close) && linked.split(close).length > linked.split(open).length) linked = linked.slice(0, -1);
+    }
+    if (linked === before) return linked;
+  }
+}
+
+/** Escapes text that is not a web address. */
+const escapeText = (text: string): string => text.replace(INLINE, '\\$&').replace(ENTITY, '\\&').replace(EDGE_UNDERSCORE, '\\_');
 
 /** Escapes one line so that Markdown shows it as the plain text it is. */
 function escapeLine(line: string): string {
-  const escaped = line.trim().replace(INLINE, '\\$&').replace(EDGE_UNDERSCORE, '\\_');
+  const trimmed = line.trim();
+  let escaped = '';
+  let done = 0;
+  for (const match of trimmed.matchAll(ADDRESS)) {
+    const address = linkedPart(match[0]);
+    escaped += escapeText(trimmed.slice(done, match.index)) + address;
+    done = match.index + address.length;
+  }
+  escaped += escapeText(trimmed.slice(done));
   return escaped.replace(LINE_START, '\\$1').replace(ORDERED, '$1\\$2');
 }
 
