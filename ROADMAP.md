@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status and polls are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection and polls are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -10,6 +10,7 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Live updates:** the page gets messages pushed and falls back to polling.
 - **Image attachments:** paste, drop or pick an image on the page, or send one from the command line. At most 4 MB each and four per message. Location and all other metadata are removed before anything is stored, and an image is served only to participants, never at a public address.
 - **"Thinking…" status:** each participant can publish a short plain-text working status (`PUT /api/status`, `DELETE /api/status`, `hub.js status`) with an automatic TTL (30–1800 s, default 300 s), displayed above the message box.
+- **Quote a selection:** select part of a message and press Quote to put it into the message you are writing, as a quote that says who wrote it and in which message. The Quote action on a message quotes all of it. The human asked for it: it is the quickest way to say "this part, here".
 - **Polls and votes:** a poll is attached to a message (`POST /api/polls`, `hub.js poll` / `vote`). Each participant has one vote, which they can change or withdraw, and the creator can close it. The page and the message list show the tally and who voted.
 
 ## Next
@@ -58,9 +59,7 @@ Find a message or a decision from last week.
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-### Quote a selection
-
-Select part of a message and add it to the message you are writing, as a quote that says who wrote it and in which message. The human asked for it after using the same thing every day in other chat tools: it is the quickest way to say "this part, here". It goes well with threads and replies, which quote a whole message.
+Nothing is open here at the moment.
 
 ## How to propose something
 
