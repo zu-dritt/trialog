@@ -17,6 +17,7 @@ import {
 } from './quote';
 import { ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
+import { SearchBox } from './search';
 import { StatusBar } from './status';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
@@ -28,6 +29,10 @@ const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
+// Going to a message that is older than what the page holds loads the messages in between, in
+// requests of this size, and at most this many of them.
+const OLDER_PAGE_SIZE = 500;
+const OLDER_PAGES = 20;
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
@@ -114,6 +119,7 @@ export default function Page() {
   const [expanded, setExpanded] = useState(false); // the tall writing area
   const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
   const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
+  const pendingJump = useRef<number | null>(null); // a message to go to as soon as it is on the page
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
   const [quotes, setQuotes] = useState<QuoteChip[]>([]); // quotes waiting above the message box
   const quotesRef = useRef<QuoteChip[]>([]);
@@ -485,6 +491,45 @@ export default function Page() {
     clearTimeout(markTimer.current);
     markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
+  // A message that had to be loaded first is on the page now: go to it.
+  useEffect(() => {
+    const id = pendingJump.current;
+    if (id === null || !document.getElementById(`m-${id}`)) return;
+    pendingJump.current = null;
+    jumpTo(id);
+  });
+
+  /**
+   * Goes to a message wherever it is. If it is older than what the page holds, the messages from
+   * it up to the oldest one on the page are loaded first, so the stream has no hole in it.
+   */
+  const goToMessage = async (id: number) => {
+    if (document.getElementById(`m-${id}`)) { jumpTo(id); return; }
+    const oldest = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
+    try {
+      const older: Message[] = [];
+      let since = id - 1;
+      for (let page = 0; page < OLDER_PAGES && since < oldest - 1; page++) {
+        const data = (await (await api(`/api/messages?since=${since}&limit=${OLDER_PAGE_SIZE}`)).json()) as MessagesResponse;
+        older.push(...data.messages.filter((m) => m.id < oldest));
+        if (data.messages.length < OLDER_PAGE_SIZE) break;
+        since = data.messages[data.messages.length - 1].id;
+      }
+      if (!older.some((m) => m.id === id)) { setNotice(`Message #${id} is no longer there.`); return; }
+      stick.current = false; // the reader is going somewhere: don't pull the stream to its end
+      pendingJump.current = id;
+      setMessages((list) => merge(list, older));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(`Could not load message #${id}: ${errorMessage(e)}`);
+    }
+  };
+
+  /** Asks the server for the messages that contain every word of `q`. */
+  const runSearch = useCallback(async (q: string, decisionsOnly: boolean) => {
+    const params = new URLSearchParams({ q });
+    if (decisionsOnly) params.set('decisions', '1');
+    return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
+  }, [api]);
 
   const togglePin = async (m: Message, isPinned: boolean) => {
     try {
@@ -594,12 +639,14 @@ export default function Page() {
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        {/* The free space of the header starts with the "New version available" pill, directly after
-            the status, so the state of the page reads in one spot and nothing else moves when it
-            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
-        <span role="status" className="flex flex-1">
+        {/* The "New version available" pill comes directly after the status, so the state of the
+            page reads in one spot. On a narrow screen it sits on a line of its own, under the
+            status. An empty holder takes no room in the row. */}
+        <span role="status" className={`max-md:contents md:flex ${newVersion ? '' : 'md:-mr-3'}`}>
           {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
+        {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
+        <SearchBox search={runSearch} onPick={(m) => void goToMessage(m.id)} participants={participants} />
         {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
