@@ -293,14 +293,17 @@ export function QuoteChips({ quotes, onRemove, onEdit }: { quotes: QuoteChip[]; 
       {quotes.map((q) => {
         const commented = tidyComment(q.comment) !== '';
         const from = `the quote from ${q.author}, #${q.messageId}`;
+        const words = <><span className="font-bold">{q.author}</span>, #{q.messageId} <span className="text-muted">“{quoteExcerpt(q.text, commented ? 40 : 60, q.kind)}”</span></>;
         return (
           <Chip
             key={q.key} visual="↳" title={chipTooltip(q)}
             onRemove={() => onRemove(q.key)} removeLabel={`Remove ${from}`}
             onOpen={onEdit ? () => onEdit(q.key) : undefined} openLabel={commented ? `Edit your comment on ${from}` : `Add a comment to ${from}`}
           >
-            <span className="font-bold">{q.author}</span>, #{q.messageId} <span className="text-muted">“{quoteExcerpt(q.text, commented ? 40 : 60, q.kind)}”</span>
-            {commented && <span className="text-muted"> · with reply</span>}
+            {/* The marker stands outside the part that is cut, so a long quote never hides it. */}
+            {commented
+              ? <span className="flex items-baseline"><span className="min-w-0 truncate">{words}</span><span className="flex-none pl-1 text-muted">· with reply</span></span>
+              : words}
           </Chip>
         );
       })}

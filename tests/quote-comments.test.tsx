@@ -219,7 +219,9 @@ test('a chip says when it carries a comment, and opens it', () => {
   assert.match(items[0], /<button type="button" aria-label="Remove the quote from Grok, #45"/);
   assert.match(items[1], /<button type="button" aria-label="Add a comment to the quote from Grok, #45"/);
   // Who, which message, the first words, and a quiet marker for the comment.
-  assert.match(items[0], /<span class="font-bold">Grok<\/span>, #45 <span class="text-muted">“Which storage do we use\?”<\/span><span class="text-muted"> · with reply<\/span>/);
+  assert.match(items[0], /<span class="font-bold">Grok<\/span>, #45 <span class="text-muted">“Which storage do we use\?”<\/span><\/span><span class="flex-none pl-1 text-muted">· with reply<\/span>/);
+  // The marker is not inside the part of the chip that is cut with an ellipsis.
+  assert.match(items[0], /<span class="min-w-0 truncate"><span class="font-bold">Grok<\/span>/);
   assert.ok(!items[1].includes('with reply'));
   // The tooltip: the quoted words, and the start of the comment.
   assert.equal(chipTooltip(chips[0]), 'Which storage do we use?\n\nYour comment: The database, **I think**.');
