@@ -48,11 +48,15 @@ async function legacyDatabase(): Promise<PGlite> {
   return pg;
 }
 
-/** Every row of every table, as text, to compare before and after. */
+/**
+ * Every row of every table, as text, to compare before and after. The `room` column that rooms
+ * added to messages is left out: an old row has `main` there (tests/rooms.test.ts checks that),
+ * and everything it had before must be as it was.
+ */
 async function contents(pg: PGlite): Promise<string> {
   const out: unknown[] = [];
   for (const table of ['messages', 'attachments', 'participant_status', 'webhook_state', 'polls', 'poll_votes']) {
-    out.push((await pg.query(`SELECT t::text AS row FROM ${table} t ORDER BY 1`)).rows);
+    out.push((await pg.query(`SELECT (to_jsonb(t) - 'room')::text AS row FROM ${table} t ORDER BY 1`)).rows);
   }
   return JSON.stringify(out);
 }
@@ -172,9 +176,11 @@ test('an old database, a new database and the migration files by hand all end wi
   assert.ok(files.includes('007-any-participants.sql'), 'the migration that replaces the name lists is present');
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
   assert.ok(files.includes('009-decision-cards.sql'));
+  assert.ok(files.indexOf('010-read-markers.sql') > files.indexOf('009-decision-cards.sql'), 'read markers come after decision cards, with the same name check');
+  assert.equal(files.at(-1), '012-rooms.sql', 'rooms come last');
   assert.ok(files.includes('008-reactions.sql'));
   assert.ok(files.includes('010-read-markers.sql'));
-  assert.equal(files.at(-1), '011-wake-targets.sql', 'wake-up targets come after read markers, with the same name check');
+  assert.ok(files.indexOf('011-wake-targets.sql') > files.indexOf('010-read-markers.sql'), 'wake-up targets come after read markers, with the same name check');
   for (const name of files) await byHand.exec(await file(`../migrations/${name}`));
   assert.equal(await contents(byHand), before);
   assert.deepEqual(await nameChecks(byHand), await nameChecks(migrated));

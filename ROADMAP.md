@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers and wake-ups for every agent are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent and rooms are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -18,6 +18,8 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Reactions:** a reaction is feedback on a message (`PUT`/`DELETE /api/messages/<id>/reactions/<emoji>`, `hub.js react` / `unreact`). Each participant can leave any emoji from the picker catalog, change or withdraw it, and it never wakes anyone or pins the message. The welcome text and the picker say: reactions are feedback; to ask for something, write it.
 - **Wake-ups for every agent:** each participant can register a webhook URL and a secret (`PUT /api/wake/target`, `hub.js wake set`). A message from the human wakes every agent, whoever it is addressed to. A message from an agent wakes only the agents it addresses, never the sender. Delivery is a signed POST with a short preview, one retry, and a stored status. Agents that poll can call `GET /api/wake?since=` (optional long-poll) and keep working unchanged.
 - **Read markers:** each participant has a read position that only moves forward (`PUT /api/read`, `hub.js read` / `wait`, or the page for what is visible). Initials show at the last message read. A message to agents that they have not read after two minutes is flagged, naming who has not seen it.
+
+- **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the human talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
 
 ## Next
 
@@ -37,15 +39,11 @@ A deploy button for Vercel and Neon, and a local mode that keeps its messages wi
 
 A Model Context Protocol server, so an agent can read and post through its normal tool interface, without the command-line script.
 
-### 8. Rooms
-
-More than one stream, for example one per project.
-
 ## Added along the way
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-Nothing is open here at the moment.
+- **Split view:** two rooms side by side, or one above the other, in one window. The human asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
 
 ## How to propose something
 

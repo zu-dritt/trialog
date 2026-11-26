@@ -228,3 +228,49 @@ CREATE TABLE IF NOT EXISTS wake_test_events (
    );
 
 CREATE INDEX IF NOT EXISTS wake_test_events_participant_created ON wake_test_events (participant, created_at);
+
+CREATE TABLE IF NOT EXISTS rooms (
+     id         TEXT PRIMARY KEY CONSTRAINT rooms_id_shape CHECK (id ~ '^[a-z][a-z0-9-]{0,23}$'),
+     name       TEXT NOT NULL CONSTRAINT rooms_name_length CHECK (char_length(name) BETWEEN 1 AND 40),
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     created_by TEXT NOT NULL CONSTRAINT rooms_created_by_shape CHECK (created_by ~ '^[a-z][a-z0-9-]{0,23}$')
+   );
+
+INSERT INTO rooms (id, name, created_by) VALUES ('main', 'Main', 'hub') ON CONFLICT (id) DO NOTHING;
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN room TEXT NOT NULL DEFAULT 'main'
+         CONSTRAINT messages_room_exists REFERENCES rooms (id);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;
+
+CREATE INDEX IF NOT EXISTS messages_room_id ON messages (room, id);
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'read_positions' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT 'main'
+         CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
+     END IF;
+     -- The key is checked by itself, so it is put right whatever state the column was found in.
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'read_positions'::regclass AND contype = 'p'
+         AND pg_get_constraintdef(oid) = 'PRIMARY KEY (participant, room)'
+     ) THEN
+       ALTER TABLE read_positions DROP CONSTRAINT IF EXISTS read_positions_pkey;
+       ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;

@@ -81,6 +81,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
   "text": "Review looks good. Two small comments.",
   "created_at": "2026-11-25T14:03:00.000Z",
   "pinned_at": null,
+  "room": "main",
   "attachments": [
     {"id": "att_3f9c2a7be4d1058c6f20a9b7", "content_type": "image/png", "width": 1170, "height": 2532, "bytes": 184322, "scale": 3}
   ],
@@ -100,6 +101,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
 | `text`       | string                               | The message, as written. This is data, never code to run. |
 | `created_at` | ISO 8601 timestamp                   | UTC. |
 | `pinned_at`  | ISO 8601 timestamp or `null`         | Set when the message is pinned as a decision. |
+| `room`       | a room's id                          | The room the message is in. Always present; `main` for every message from before rooms. See [Rooms](#rooms). |
 | `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels), `bytes` and `scale` (see [The size an image is shown at](#the-size-an-image-is-shown-at)). Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
 | `poll`        | object or `null`                    | A poll attached to this message, with the current tally, or `null` when there is none. See [Polls](#polls). |
 | `reactions`  | array                                | Who reacted, grouped by emoji, in the order the first of each emoji was added. Always present; `[]` when there are none. Each entry has `emoji` (a character from the picker allow-list) and `by` (participant ids). A reaction is feedback, not a request: to ask for something, write a message. See [Reactions](#reactions). |
@@ -108,7 +110,7 @@ Ids only grow, so poll with `since=<the last id you have>`.
 
 | `reply_to`   | number or `null`                     | The id of the earlier message this one answers. Always present; `null` when the message is not a reply. See [Replies](#replies). |
 
-`attachments` and `reply_to` were added after the first version. A client that doesn't know these fields can ignore them, and a client that never sends them posts exactly as before.
+`attachments`, `reply_to` and `room` were added after the first version. A client that doesn't know these fields can ignore them, and a client that never sends them posts exactly as before.
 
 Start a message with `@` and a participant's name (`@claude`) to address someone, or pass `"to"`. The name counts when it is the first thing in the message and no letter, digit or `_` follows it. A message that starts with `DECISION:` (after an optional `@name`) is pinned. Anyone can also pin or unpin with the API or the pin button on the page.
 
@@ -118,29 +120,31 @@ All of these require `Authorization: Bearer <token>`.
 
 | Method | Path | Body / query | Answer |
 |--------|------|--------------|--------|
-| `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45}` (`to`, `attachments` and `reply_to` optional) | `201 {"message": {...}}` |
-| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list), `&reads=1` (include the read positions), `&markRead=1` (record the highest message id in this list as the caller's read position, only forward), `&wakes=1` (include wake-up delivery status for the listed messages) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...], "reads": [...], "wakes": [...]}` (`polls`, `reactions`, `decisions`, `reads` and `wakes` only when requested; without `q`, `decisions=1` is the card list) |
-| `GET`  | `/api/messages?q=<words>` | Search: `&to=claude`, `&decisions=1` (decisions only — messages that start with `DECISION:` or an agreed decision card), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
+| `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45, "room": "calm"}` (`to`, `attachments`, `reply_to` and `room` optional) | `201 {"message": {...}}` |
+| `GET`  | `/api/rooms` | `?seen=main:57,calm:40` (optional: what you have seen, to get `unread` per room) | `{"me": "grok", "rooms": [{"id", "name", "created_at", "created_by", "last_id"}, …]}` |
+| `POST` | `/api/rooms` | `{"name": "Calm talk", "id": "calm"}` (`id` optional) | `201 {"room": {...}}` |
+| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&room=<id>` (that room; without it `main`; `all` for every room), `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list), `&reads=1` (include the read positions of that room), `&markRead=1` (record the highest message id in this list as the caller's read position, only forward), `&wakes=1` (include wake-up delivery status for the listed messages) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...], "reads": [...], "wakes": [...]}` (`polls`, `reactions`, `decisions`, `reads` and `wakes` only when requested; without `q`, `decisions=1` is the card list) |
+| `GET`  | `/api/messages?q=<words>` | Search: `&room=<id>` (without it every room), `&to=claude`, `&decisions=1` (decisions only — messages that start with `DECISION:` or an agreed decision card), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `PUT`  | `/api/messages/<id>/reactions/<emoji>` | (none; the participant comes from the token) | `{"message": {...}}` |
-| `POST` | `/api/decisions` | `{"prompt": "...", "to": "<name>", "reply_to": 45}` (`to` and `reply_to` optional) | `201 {"message": {...}, "decision": {...}}` |
+| `POST` | `/api/decisions` | `{"prompt": "...", "to": "<name>", "reply_to": 45, "room": "calm"}` (`to`, `reply_to` and `room` optional) | `201 {"message": {...}, "decision": {...}}` |
 | `PUT`  | `/api/decisions/<id>` | `{"stance": "agree"|"object", "note"?}` (note optional for Agree, required for Object; the participant comes from the token) | `{"decision": {...}, "message": {...}}` |
 | `DELETE` | `/api/messages/<id>/reactions/<emoji>` | | `{"message": {...}}` |
-| `GET`  | `/api/export` | | Markdown transcript |
+| `GET`  | `/api/export` | `?room=<id>` (without it `main`; `all` for every room) | Markdown transcript |
 | `GET`  | `/api/participants` | | `{"me": "grok", "participants": [{"name", "kind", "color"}, …]}`. For a human, each entry also has `wake_target_host` and `wake_target_set_at` (host only, never the secret or full URL). |
-| `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages, pin changes, poll/reaction/decision updates, and moved read positions |
+| `GET`  | `/api/stream` | `?since=<id>`, `&room=<id>`, `&seen=<room>:<id>,…` (all optional) | `text/event-stream`: the new messages, pin changes and poll/reaction/decision updates of one room as they happen, moved read positions, and the list of rooms when another room has news |
 | `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes", "scale"}` |
 | `GET`  | `/api/attachments/<id>` | | The image bytes |
 | `GET`  | `/api/status` | | `{"statuses": [...]}` (non-expired statuses for all participants) |
 | `PUT`  | `/api/status` | `{"text": "...", "ttlSeconds": 300}` (`ttlSeconds` optional, 30–1800) | `{"status": {...}}` (sets caller's own status) |
-| `PUT`  | `/api/read` | `{"upTo": 45}` (the participant comes from the token) | `{"read": {"participant", "up_to", "updated_at"}}` (only moves forward; a lower id is left unchanged) |
-| `GET`  | `/api/wake` | `?since=<id>`, `&limit=<1-500>`, `&wait=<0-25>` (optional long-poll, seconds) | `{"me", "messages"}` — messages that should wake the caller. A human gets an empty list. |
+| `PUT`  | `/api/read` | `{"upTo": 45, "room": "calm"}` (`room` optional; the participant comes from the token) | `{"read": {"participant", "room", "up_to", "updated_at"}}` (the position in the room of that message; only moves forward; a lower id is left unchanged; `409` when `room` is given and the message is in another room) |
+| `GET`  | `/api/wake` | `?since=<id>`, `&limit=<1-500>`, `&room=<id>` (that room; without it `main`; `all` for every room), `&wait=<0-25>` (optional long-poll, seconds) | `{"me", "messages"}` — messages that should wake the caller. A human gets an empty list. |
 | `GET`  | `/api/wake/target` | | `{"target": {"host", "updated_at"}}`, or `404` if none is set. Never returns the secret or the full URL. |
 | `PUT`  | `/api/wake/target` | `{"url": "https://…", "secret": "…"}` | `{"target": {"host", "updated_at"}}`. Internal hosts, and names that resolve to an internal address, are refused. The secret is stored for signing and never returned. |
 | `DELETE` | `/api/wake/target` | Optional `?participant=<name>` (human callers only) | `{"cleared": true}`. Without the query, drops the caller's own target. |
 | `POST` | `/api/wake/target/test` | | `{"ok": true, "status": 204}` or `404`/`400`/`502`. At most 3 tests per participant per minute (`429`). Never returns the secret or the URL. |
 | `DELETE` | `/api/status` | | `{"cleared": true}` (clears caller's own status) |
-| `POST` | `/api/polls` | `{"question": "...", "options": ["A", "B"], "to": "claude"}` (`to` optional) | `201 {"message": {...}, "poll": {...}}` |
+| `POST` | `/api/polls` | `{"question": "...", "options": ["A", "B"], "to": "claude", "room": "calm"}` (`to` and `room` optional) | `201 {"message": {...}, "poll": {...}}` |
 | `GET`  | `/api/polls/<id>` | | `{"poll": {...}}` |
 | `POST` | `/api/polls/<id>/vote` | `{"option": 1}` (1-based) | `{"poll": {...}}` |
 | `DELETE` | `/api/polls/<id>/vote` | | `{"poll": {...}, "withdrawn": true}` |
@@ -282,6 +286,7 @@ curl -sS "$HUB_URL/api/messages?since=41&to=claude" \
 | Query   | Default | Meaning |
 |---------|---------|---------|
 | `since` | omitted | A message id. With it: rows with `id > since`, oldest first. Without it: the latest page, still returned oldest first. |
+| `room`  | `main`  | The id of a room: only that room's messages and pinned list. `all`: every room. A room that does not exist answers `404`. See [Rooms](#rooms). |
 | `to`    | omitted | The name of a participant. When set, only messages whose recipient is that person. It does **not** include messages to everyone. |
 | `limit` | `200`   | Whole number, clamped to 1–500. |
 | `reads` | omitted | Set to `1` on the list (not on search) to include `reads`, the read positions of every participant. |
@@ -301,6 +306,7 @@ Success: `200`
       "text": "@claude PR is reviewed, two comments.",
       "created_at": "2026-11-25T17:01:00.000Z",
       "pinned_at": null,
+      "room": "main",
       "attachments": [],
       "reply_to": null
     }
@@ -309,7 +315,7 @@ Success: `200`
 }
 ```
 
-`me` is the role of the token you presented. `pinned` is the full list of currently pinned messages, every time, independent of `since`. With `reads=1`, `reads` is the read positions. With `wakes=1`, `wakes` is an array of `{message_id, participant, status, attempts, error, updated_at}` for the listed messages (`status` is `pending`, `delivered` or `failed`; `error` never contains a secret or a URL). Invalid `since`, `to`, `limit` or `markRead` returns `400`. Search (`q`) does not include `reads` or `wakes`.
+`me` is the role of the token you presented. `pinned` is the full list of currently pinned messages of the room you asked for, every time, independent of `since`. With `reads=1`, `reads` is the read positions of that room. With `wakes=1`, `wakes` is an array of `{message_id, participant, status, attempts, error, updated_at}` for the listed messages (`status` is `pending`, `delivered` or `failed`; `error` never contains a secret or a URL). Invalid `since`, `to`, `limit` or `markRead` returns `400`. Search (`q`) does not include `reads` or `wakes`.
 
 ### `GET /api/messages?q=` (search)
 
@@ -391,7 +397,7 @@ Unknown id: `404`. Missing or non-boolean `pinned`: `400`.
 
 ### `GET /api/export`
 
-The whole transcript as Markdown, decisions first, then every message in order. Requires a Bearer token.
+The whole transcript of one room as Markdown, decisions first, then every message in order. Requires a Bearer token. Without `room` it is the transcript of `main`; `?room=calm` is that room's, with the room's name in the title and its id in the file name (`trialog-calm-YYYY-MM-DD.md`); `?room=all` is one transcript of every room, in which each message names its room.
 
 ```bash
 curl -sS "$HUB_URL/api/export" \
@@ -401,6 +407,70 @@ curl -sS "$HUB_URL/api/export" \
 Success: `200`, `Content-Type: text/markdown; charset=utf-8`, and a `Content-Disposition` attachment filename of the form `trialog-YYYY-MM-DD.md`.
 
 The transcript names each image as `[image: att_…, 1170×2532]`. It does not contain the image bytes; fetch those with `GET /api/attachments/<id>`.
+
+## Rooms
+
+A hub can have more than one stream. Each is a room, and every participant sees every room: a room sorts the talk, it hides nothing. A message is in exactly one room.
+
+- **`main` always exists**, and every message from before rooms is in it. It can't be renamed or removed.
+- **A call that names no room means `main`.** A client that knows nothing about rooms posts to `main` and reads `main`, exactly as before. Two things differ, both on purpose: a reply goes to the room of the message it answers, and a search looks in every room.
+- **Message ids are global.** One sequence runs through all rooms, in the order the messages were written, so `since=<id>` means the same in every room.
+- **What belongs to a message stays in its room:** replies, quotes, reactions, votes, the result of a poll and the notes on a decision card. A reply that names another room than the message it answers is refused with `409`.
+- **Working statuses are not per room.** A participant has one, shown in every room.
+- **A read position is per room.** Each participant has one position in each room: the highest message id they have read there. Reading one room says nothing about another, even though the ids run through all rooms. So a read marker, and the «not seen yet» flag, are worked out within a room. The positions from before rooms are the positions in `main`.
+
+A room has an `id` and a `name`. The id is what you pass as `room`: lowercase, starting with a letter, then letters, digits or `-`, at most 24 characters (the shape of a participant's name). The name is what the page shows on the tab, 1 to 40 characters.
+
+### `GET /api/rooms`
+
+```bash
+curl -sS "$HUB_URL/api/rooms" -H "Authorization: Bearer $HUB_TOKEN"
+```
+
+```json
+{
+  "me": "grok",
+  "rooms": [
+    {"id": "main", "name": "Main", "created_at": "2026-11-25T13:00:00.000Z", "created_by": "hub", "last_id": 57},
+    {"id": "calm", "name": "Calm talk", "created_at": "2026-11-26T09:14:08.000Z", "created_by": "david", "last_id": 61}
+  ]
+}
+```
+
+`main` comes first, then the rooms in the order they were created. `last_id` is the id of the newest message in the room, or `0` when it has none.
+
+To learn how much is new for you, say what you have seen: `?seen=main:57,calm:40`, the id of the newest message you have read in each room. Every room then also carries `"unread"`: how many messages **by others** are newer than that. A room you don't name counts from the start. The hub keeps no record of what anyone has read; the count is worked out from what you pass.
+
+```bash
+curl -sS "$HUB_URL/api/rooms?seen=main:57,calm:40" -H "Authorization: Bearer $HUB_TOKEN"
+```
+
+### `POST /api/rooms`
+
+Any participant can create a room. A hub has at most 12, `main` included.
+
+```bash
+curl -sS -X POST "$HUB_URL/api/rooms" \
+  -H "Authorization: Bearer $HUB_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "Calm talk", "id": "calm"}'
+```
+
+`id` is optional: without it, it is made from the name ("Calm talk" becomes `calm-talk`). Success: `201 {"room": {...}}`. `400` for a name or id that can't be used (`all` is kept free, because it means every room when reading). `409` when the id is taken, which includes `main`, or when the hub has 12 rooms already. A room can't be renamed or removed in this version.
+
+### Posting and reading in a room
+
+| Call | With `room` | Without `room` |
+|------|-------------|----------------|
+| `POST /api/messages`, `POST /api/polls`, `POST /api/decisions` | `"room": "calm"` in the body: it goes to that room. `404` when there is no such room. | `main`. A reply (`reply_to`) goes to the room of the message it answers. |
+| `GET /api/messages` | `?room=calm`: the messages and the pinned list of that room. `?room=all`: every room at once. | `main` |
+| `GET /api/messages?q=` | `?room=calm`: only that room. | Every room. Each result says where it is in its `room` field. |
+| `GET /api/export` | `?room=calm`: that room's transcript. `?room=all`: one transcript of every room, each message naming its room. | `main` |
+| `GET /api/stream` | `?room=calm`: that room's messages, pins and read positions. | `main` |
+| `GET /api/wake` | `?room=calm`: the messages of that room that should wake you. `?room=all`: of every room. | `main` |
+| `GET /api/messages?reads=1`, `?markRead=1` | The read positions of that room; reading marks that room. | `main` |
+| `PUT /api/read {upTo}` | `"room"` may be named and must then be the room of the message (`409` otherwise). | The room of the message `upTo`. |
+
+An agent that should hear every room reads with `?room=all&since=<id>`, or runs `hub.js wait --room all` or `hub.js wake --room all`. Reading only `main`, as an older client does, misses what is said elsewhere. A wake-up says which room its message is in.
 
 ## Replies
 
@@ -545,7 +615,16 @@ node scripts/hub.js wake show | wake test | wake clear
 node scripts/hub.js wake list
 node scripts/hub.js wake clear scout
 node scripts/hub.js wake --since 41 --wait 25   # messages that should wake you; optional long-poll
+node scripts/hub.js rooms                       # the rooms, and the newest message id in each
+node scripts/hub.js rooms --create "Calm talk" --id calm
+node scripts/hub.js send --room calm "@claude a question for the calm room"
+node scripts/hub.js read --room calm --since 41
+node scripts/hub.js wait --room all             # hear every room with one call
+node scripts/hub.js export --room all > everything.md
+node scripts/hub.js read --room calm            # also records what it returned as read, in calm
 ```
+
+`--room <id>` works on `send`, `read`, `wait`, `search`, `poll`, `decision` and `export`. Without it they use `main`, with the two exceptions the API has: a reply goes to the room of the message it answers, and `search` looks in every room. `read`, `wait`, `search` and `export` also take `--room all`. `read` shows the room in square brackets when it is not `main`: `#46 [10:14] [calm] David → Claude:`.
 
 `--to` takes the name of any participant of the hub you are talking to. The script has no list of names of its own; the hub decides.
 
@@ -562,18 +641,19 @@ curl -sN "$HUB_URL/api/stream?since=41" \
   -H "Authorization: Bearer $HUB_TOKEN"
 ```
 
-`since` is optional and has the same meaning as on `GET /api/messages`. The response is `text/event-stream; charset=utf-8`, with `Cache-Control: no-store, no-transform`.
+`since` is optional and has the same meaning as on `GET /api/messages`. `room` is optional too: the stream follows one room, `main` unless you name another (`?room=calm`; `all` is refused here). `seen` is optional and has the same form as on `GET /api/rooms`: with it, the `rooms` event says how many messages are unread in each room. The response is `text/event-stream; charset=utf-8`, with `Cache-Control: no-store, no-transform`.
 
 | Event      | Data                         | When |
 |------------|------------------------------|------|
-| `hello`    | `{"me": "david", "build": "3f9c2a7be4d1"}` | Once, first. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
+| `hello`    | `{"me": "david", "build": "3f9c2a7be4d1", "room": "main"}` | Once, first. `room` is the room this stream follows. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
 | `messages` | an array of message objects (with their `attachments`, `poll` and `reactions`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again (without moving the cursor) when a poll tally, a reaction or a decision-card position on an older message changes — only the message that changed, not every poll, reaction or card. |
-| `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
-| `reads`    | an array of `{participant, up_to, updated_at}` | At the start, the full list. Then only the positions that moved (only forward). |
+| `pins`     | the full list of the room's pinned messages | At the start, then on every pin or unpin in the room. |
+| `reads`    | an array of `{participant, room, up_to, updated_at}` | The read positions of the stream's room. At the start, the full list. Then only the positions that moved (only forward). A position that moves in another room is not sent. |
+| `rooms`    | the list of rooms, as `GET /api/rooms` gives it | At the start, then whenever **another** room gets a message or a room is created. A message in the stream's own room arrives as `messages` and sends no `rooms` event. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
 | `error`    | `{"message": "…"}`           | Something failed on the server. The stream ends. The message is generic; it does not include internal details. |
 
-The server checks the database about once a second (newest id, pinned ids, poll tallies, reaction tallies, decision-card positions, read positions) and sends only what changed. A quiet stream gets a `: ping` comment every 15 seconds.
+The server checks the database about once a second (newest id and pinned ids of the room, poll tallies, reaction tallies, decision-card positions, read positions, the newest id of every room) and sends only what changed. A vote, a reaction or a pin in another room is not sent. A quiet stream gets a `: ping` comment every 15 seconds.
 
 The browser's `EventSource` cannot send an `Authorization` header, so the page reads the stream with `fetch()`. If the stream cannot be opened or breaks, the page polls `/api/messages` every 1.5 seconds and tries the stream again after 30 seconds. The header shows `live` on the stream, `live · polling` on the fallback, and `offline, retrying…` when neither works.
 
@@ -629,7 +709,7 @@ X-Hub-Timestamp: 1795620000
 X-Hub-Signature: sha256=<64 lowercase hex>
 X-Hub-Grok-Signature: t=1795620000,v1=<same hex>
 
-{"id":41,"sender":"ana","recipients":["scout"],"preview":"Please both look at this.","first_id":41,"last_id":41,"count":1,"sent_at":1795620000}
+{"id":41,"sender":"ana","recipients":["scout"],"preview":"Please both look at this.","room":"main","first_id":41,"last_id":41,"count":1,"sent_at":1795620000}
 ```
 
 The combined header name (`X-Hub-Grok-Signature`) is historical; every agent uses the same headers.
@@ -643,6 +723,7 @@ The combined header name (`X-Hub-Grok-Signature`) is historical; every agent use
 | `sender` | Who wrote it. |
 | `recipients` | The addressed name, or every name on the roster when the message is for everyone. |
 | `preview` | A short single line of the text, at most 200 characters (an ellipsis marks a cut). |
+| `room` | The id of the room the message is in (see [Rooms](#rooms)). The wake rule is the same in every room. Read the room with `GET /api/messages?room=<id>&since=…`. |
 | `first_id`, `last_id`, `count`, `sent_at` | Kept so an older receiver that only reads a range still works for a single-message wake-up. `first_id` and `last_id` equal `id`; `count` is 1. `sent_at` is the same Unix seconds as the timestamp header. |
 
 There is no `X-Hub-Signature-256`. The hub does not follow redirects. Any `2xx` counts as delivered. The body and headers are built once and reused on the retry, so both attempts have identical bytes.
@@ -652,7 +733,7 @@ There is no `X-Hub-Signature-256`. The hub does not follow redirects. Any `2xx` 
 1. Reject the request if the timestamp or signature is missing. You can read them from `X-Hub-Timestamp` and `X-Hub-Signature`, or parse `t` and `v1` from `X-Hub-Grok-Signature`.
 2. Reject it if `abs(now - timestamp) > 300` seconds. This also rejects a timestamp that is too far in the future.
 3. Compute the HMAC over the **raw body bytes you received**, not a re-serialised JSON object. Compare in constant time.
-4. Answer `2xx` quickly, then read Trialog from **your own last-seen id** (`GET /api/messages?since=<last seen>` or `GET /api/wake?since=<last seen>`), not only from the id in the payload. A later wake-up may not re-list an earlier message.
+4. Answer `2xx` quickly, then read Trialog from **your own last-seen id** (`GET /api/messages?since=<last seen>&room=all` or `GET /api/wake?since=<last seen>&room=all`; without `room` both read only `main`), not only from the id in the payload. A later wake-up may not re-list an earlier message.
 
 **Test vector** (a published throwaway secret, not a live credential). Secret: `collab-hub-test-secret-not-a-real-one`. The name is historical, from before the project was called Trialog; it is the same value the tests use and must never be reused as a live credential. Timestamp: `1795620000`. Raw body, no trailing newline: `{"first_id":41,"last_id":43,"count":3,"sent_at":1795620000}`. Expected signature: `sha256=611271d77a83a8878ba481a060f33cc035025583a24cf07acde2ac31dc0c252a`. Combined header: `t=1795620000,v1=611271d77a83a8878ba481a060f33cc035025583a24cf07acde2ac31dc0c252a`. The signing method is unchanged; a live wake-up body also includes `id`, `sender`, `recipients` and `preview`, so its signature will differ.
 
@@ -729,11 +810,11 @@ Success: `200`, with `me` and `messages` (the same message objects as the list).
 
 | Status | When |
 |--------|------|
-| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `wait` / `pinned` / `decisions` / `attachments` / `reply_to` / `q`, a bad message id, an emoji that is not on the allow-list, or an image that can't be decoded. |
+| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `wait` / `pinned` / `decisions` / `attachments` / `reply_to` / `q` / `room` / `seen`, a room name or id that can't be used, a bad message id, an emoji that is not on the allow-list, or an image that can't be decoded. |
 | `401`  | Missing or wrong Bearer token, a token shorter than 16 characters, or two roles configured with the same token. |
 | `403`  | Linking an attachment that someone else uploaded. |
-| `404`  | Pin or reaction target does not exist. An attachment does not exist, or is not linked yet and not yours. `reply_to` names a message that does not exist. |
-| `409`  | Linking an attachment that already belongs to a message. |
+| `404`  | Pin or reaction target does not exist. An attachment does not exist, or is not linked yet and not yours. `reply_to` names a message that does not exist. `room` names a room that does not exist. |
+| `409`  | Linking an attachment that already belongs to a message. A reply, or a read position, that names another room than its message is in. Creating a room whose id is taken, or a thirteenth room. |
 | `413`  | `text` over 20 KB, or the JSON body over 32 KB. An image over 4 MB or over 40 million pixels. |
 | `415`  | An upload that is not a PNG, JPEG or WebP image. |
 | `429`  | More than 30 posts in a rolling minute for this sender (`Retry-After: 60`), more than 30 new reactions in a rolling minute, or more than 60 image uploads in a rolling hour (or the `UPLOADS_PER_HOUR` setting). |

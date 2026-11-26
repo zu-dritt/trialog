@@ -2,7 +2,7 @@
 import { beforeAll, test } from 'vitest';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
-import type { Message } from '../lib/core';
+import type { Message, Room } from '../lib/core';
 import { SSE_PING, createSseParser, sseEvent, type SseEvent } from '../lib/sse';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 import { createEventStream, decisionMessageIdsChanged, pollMessageIdsChanged, reactionMessageIdsChanged } from '../lib/stream';
@@ -61,14 +61,14 @@ for (const [name, make] of STORES) {
   test(`${name}: version changes with new messages and with pins`, async () => {
     const store = await make();
     await store.ensure();
-    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||', decisions: '0|', reads: '0|' }, 'only the welcome message');
+    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: 'main:1' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||', decisions: '0|', reads: '0|', rooms: `main:${b.id}` });
   });
 }
 
@@ -128,12 +128,14 @@ for (const [name, make] of STORES) {
     const abort = new AbortController();
     const r = reader(createEventStream({ store, me: 'claude', since: null, signal: abort.signal, ...FAST }));
 
-    const [hello, initial, pins, reads] = await r.next(4);
-    assert.deepEqual(hello, { event: 'hello', data: { me: 'claude' } });
+    const [hello, initial, pins, reads, rooms] = await r.next(5);
+    assert.deepEqual(hello, { event: 'hello', data: { me: 'claude', room: 'main' } });
     assert.equal(initial.event, 'messages');
     assert.deepEqual(ids(initial.data), [1, first.id], 'welcome plus the existing message, oldest first');
     assert.deepEqual(pins, { event: 'pins', data: [] });
     assert.deepEqual(reads, { event: 'reads', data: [] });
+    assert.equal(rooms.event, 'rooms');
+    assert.deepEqual((rooms.data as Room[]).map((room) => [room.id, room.name, room.last_id]), [['main', 'Main', first.id]]);
     assert.ok(await r.quiet(), 'nothing is sent while nothing changes');
 
     // A new message is pushed, with its full content.
@@ -167,15 +169,15 @@ for (const [name, make] of STORES) {
     const b = must(await store.add({ sender: 'david', recipient: null, text: 'new' }));
     const abort = new AbortController();
     const r = reader(createEventStream({ store, me: 'david', since: a.id, signal: abort.signal, ...FAST }));
-    const [, initial] = await r.next(4);
+    const [, initial] = await r.next(5);
     assert.deepEqual(ids(initial.data), [b.id]);
     abort.abort();
     await r.finished();
 
-    // Fully caught up: no messages event at all, only hello and pins.
+    // Fully caught up: no messages event at all, only hello, the pins and the rooms.
     const abort2 = new AbortController();
     const r2 = reader(createEventStream({ store, me: 'david', since: b.id, signal: abort2.signal, ...FAST }));
-    assert.deepEqual((await r2.next(3)).map((e) => e.event), ['hello', 'pins', 'reads']);
+    assert.deepEqual((await r2.next(4)).map((e) => e.event), ['hello', 'pins', 'reads', 'rooms']);
     assert.ok(await r2.quiet());
     abort2.abort();
     await r2.finished();
@@ -184,7 +186,7 @@ for (const [name, make] of STORES) {
 
 test('the stream says bye and ends at its time limit', async () => {
   const r = reader(createEventStream({ store: createMemoryStore(), me: 'david', since: null, intervalMs: 10, heartbeatMs: 10_000, maxMs: 50 }));
-  await r.next(4);
+  await r.next(5);
   assert.deepEqual(await r.next(), [{ event: 'bye', data: { reason: 'time limit' } }]);
   await r.finished();
   assert.equal(r.done, true);
@@ -193,7 +195,7 @@ test('the stream says bye and ends at its time limit', async () => {
 test('a quiet stream sends a ping comment, which the parser ignores', async () => {
   const abort = new AbortController();
   const r = reader(createEventStream({ store: createMemoryStore(), me: 'david', since: null, signal: abort.signal, intervalMs: 10, heartbeatMs: 30, maxMs: 60_000 }));
-  await r.next(4);
+  await r.next(5);
   assert.ok(await r.quiet(120), 'pings are not events');
   assert.ok(r.raw.includes(SSE_PING));
   abort.abort();
@@ -206,7 +208,7 @@ test('the stream stops asking the store once the client is gone', async () => {
   const version = store.version.bind(store);
   store.version = async () => { calls++; return version(); };
   const r = reader(createEventStream({ store, me: 'david', since: null, ...FAST }));
-  await r.next(4);
+  await r.next(5);
   await r.cancel();
   const after = calls;
   await new Promise((resolve) => setTimeout(resolve, 80));
@@ -219,7 +221,7 @@ test('a store failure ends the stream with an error event, without leaking detai
   console.error = () => {};
   try {
     const r = reader(createEventStream({ store, me: 'david', since: null, ...FAST }));
-    await r.next(4);
+    await r.next(5);
     store.version = async () => { throw new Error('connection to 10.0.0.5 refused'); };
     assert.deepEqual(await r.next(), [{ event: 'error', data: { message: 'Server error. Reconnect in a moment.' } }]);
     await r.finished();
@@ -252,9 +254,9 @@ test('route: needs a token, validates since, and answers as an event stream', as
   assert.equal(res.headers.get('content-type'), 'text/event-stream; charset=utf-8');
   assert.equal(res.headers.get('cache-control'), 'no-store, no-transform');
   const r = reader(must(res.body));
-  const [hello, initial, pins, reads] = await r.next(4);
+  const [hello, initial, pins, reads] = await r.next(5);
   // The route adds the id of the build the server runs ('dev' here, where no build set one).
-  assert.deepEqual(hello, { event: 'hello', data: { me: 'claude', build: 'dev' } });
+  assert.deepEqual(hello, { event: 'hello', data: { me: 'claude', build: 'dev', room: 'main' } });
   assert.deepEqual(ids(initial.data), [1]);
   assert.equal(pins.event, 'pins');
   assert.equal(reads.event, 'reads');
@@ -296,7 +298,7 @@ for (const [name, make] of STORES) {
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'new' }));
     const abort = new AbortController();
     const r = reader(createEventStream({ store, me: 'claude', since: b.id, signal: abort.signal, ...FAST }));
-    assert.deepEqual((await r.next(3)).map((e) => e.event), ['hello', 'pins', 'reads']);
+    assert.deepEqual((await r.next(4)).map((e) => e.event), ['hello', 'pins', 'reads', 'rooms']);
     assert.ok(await r.quiet());
 
     const added = await store.addReaction(a.id, 'claude', '👍');
@@ -335,7 +337,7 @@ test('a reaction re-sends only the message whose entry changed', async () => {
   assert.equal((await store.addReaction(b.id, 'grok', '🎉')).status, 'ok');
   const abort = new AbortController();
   const r = reader(createEventStream({ store, me: 'claude', since: b.id, signal: abort.signal, ...FAST }));
-  assert.deepEqual((await r.next(3)).map((e) => e.event), ['hello', 'pins', 'reads']);
+  assert.deepEqual((await r.next(4)).map((e) => e.event), ['hello', 'pins', 'reads', 'rooms']);
   assert.ok(await r.quiet());
 
   assert.equal((await store.addReaction(a.id, 'david', '❤️')).status, 'ok');

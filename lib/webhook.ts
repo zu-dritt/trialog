@@ -14,7 +14,7 @@ import { promises as dns } from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import type { Message, Sender } from './core';
 import { loadRoster } from './participants';
-import type { Participant } from './shared';
+import { MAIN_ROOM, type Participant } from './shared';
 import type { PendingWake, Store, WakeDelivery } from './store';
 
 export const SIGNATURE_HEADER = 'X-Hub-Signature';
@@ -41,6 +41,8 @@ export interface WakeupPayload {
   recipients: string[];
   /** A short, single-line excerpt of the text, at most PREVIEW_CHARS characters. */
   preview: string;
+  /** The id of the room the message is in. Read it with ?room=<id>. */
+  room: string;
   /** Inclusive range this notice covers (always this one message). Kept so older receivers can keep using first_id / last_id / count. */
   first_id: number;
   last_id: number;
@@ -277,12 +279,13 @@ export function payloadRecipients(message: Pick<Message, 'recipient'>, names: re
   return message.recipient === null ? [...names] : [message.recipient];
 }
 
-export function wakeupPayload(message: Pick<Message, 'id' | 'sender' | 'recipient' | 'text'>, names: readonly string[], sentAt: number): WakeupPayload {
+export function wakeupPayload(message: Pick<Message, 'id' | 'sender' | 'recipient' | 'text' | 'room'>, names: readonly string[], sentAt: number): WakeupPayload {
   return {
     id: message.id,
     sender: message.sender,
     recipients: payloadRecipients(message, names),
     preview: messagePreview(message.text),
+    room: message.room,
     first_id: message.id,
     last_id: message.id,
     count: 1,
@@ -360,7 +363,7 @@ export function createWakeup(options: WakeupOptions) {
 
   async function deliverOne(row: PendingWake, target: WebhookConfig, names: readonly string[]): Promise<WakeDelivery> {
     const sentAt = Math.floor(now() / 1000);
-    const payload = wakeupPayload({ id: row.message_id, sender: row.sender, recipient: row.recipient, text: row.text }, names, sentAt);
+    const payload = wakeupPayload({ id: row.message_id, sender: row.sender, recipient: row.recipient, text: row.text, room: row.room }, names, sentAt);
     const body = JSON.stringify(payload);
     const timestamp = String(sentAt);
     const headers = {
@@ -466,7 +469,7 @@ export function createWakeup(options: WakeupOptions) {
       const names = roster.map((p) => p.name);
       const sentAt = Math.floor(now() / 1000);
       const payload = wakeupPayload(
-        { id: 0, sender: 'hub', recipient: participant, text: 'Wake-up test. This is not a hub message.' },
+        { id: 0, sender: 'hub', recipient: participant, text: 'Wake-up test. This is not a hub message.', room: MAIN_ROOM },
         names,
         sentAt,
       );

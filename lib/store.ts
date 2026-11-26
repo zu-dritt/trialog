@@ -8,9 +8,10 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import { MAX_SCALE, validScale } from './shared';
 import {
+  MAIN_ROOM, MAX_ROOMS, ROOM_NAME_MAX_LENGTH,
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WAKE_TEST_PER_MIN, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
 import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
@@ -34,6 +35,11 @@ export interface NewMessage {
   attachments?: string[];
   /** The id of an existing message that this one answers. */
   reply_to?: number | null;
+  /**
+   * The room the message goes to. Left out or null: the room of the message it answers, and `main`
+   * when it answers none. A reply can't go to another room than the message it answers.
+   */
+  room?: string | null;
 }
 /** An image that has already been checked and re-encoded (lib/images.ts). */
 export interface NewAttachment {
@@ -56,6 +62,23 @@ export class ReplyTargetError extends Error {
   constructor(readonly messageId: number) {
     super(`Message #${messageId} does not exist, so it can't be replied to.`);
     this.name = 'ReplyTargetError';
+  }
+}
+/**
+ * Thrown when a room can't be used or created: it does not exist, its id is taken, the hub has
+ * all the rooms it can have, or a reply would go to another room than the message it answers.
+ * Nothing is stored in that case.
+ */
+export class RoomError extends Error {
+  constructor(readonly reason: 'not found' | 'exists' | 'full' | 'other room' | 'read elsewhere', readonly room: string, answered?: { id: number; room: string }) {
+    super({
+      'not found': `Room "${room}" does not exist. GET /api/rooms lists the rooms.`,
+      exists: `A room with the id "${room}" already exists.`,
+      full: `A hub has at most ${MAX_ROOMS} rooms.`,
+      'other room': `Message #${answered?.id} is in the room "${answered?.room}", so a reply to it can't go to the room "${room}". Leave "room" out and the reply goes where that message is.`,
+      'read elsewhere': `Message #${answered?.id} is in the room "${answered?.room}", not in "${room}". Leave "room" out and the position is recorded where that message is.`,
+    }[reason]);
+    this.name = 'RoomError';
   }
 }
 export class AttachmentLinkError extends Error {
@@ -102,17 +125,34 @@ export interface NewPoll {
   question: string;
   options: string[];
   recipient?: Sender | null;
+  /** The room the poll goes to. Left out or null: `main`. */
+  room?: string | null;
 }
 export interface NewDecision {
   creator: Sender;
   prompt: string;
   recipient?: Sender | null;
   reply_to?: number | null;
+  /** The room the card goes to, by the same rule as NewMessage.room. */
+  room?: string | null;
+}
+export interface NewRoom {
+  id: string;
+  name: string;
+  created_by: Sender;
 }
 export interface ListOptions {
   since?: number | null;
   to?: Sender | null;
   limit?: number;
+  /** Only this room. Left out or null: every room. (The API routes pass `main` when a caller names none.) */
+  room?: string | null;
+}
+export interface RoomListOptions {
+  /** The id of the newest message the caller has seen, per room. With it, every room gets `unread`. */
+  seen?: Readonly<Record<string, number>> | null;
+  /** The caller. Their own messages are not counted as unread. */
+  me?: Sender | null;
 }
 export interface SearchOptions {
   /** A message matches when it contains every one of these, in upper or lower case. */
@@ -127,6 +167,8 @@ export interface SearchOptions {
   /** Only pinned messages, decision or not. */
   pinned?: boolean;
   limit?: number;
+  /** Only this room. Left out or null: every room. */
+  room?: string | null;
 }
 /** A range of messages one wake-up webhook covers. `previous_id` is what the watermark was before the claim. */
 export interface WakeupClaim {
@@ -159,6 +201,8 @@ export interface PendingWake {
   sender: Sender;
   recipient: Sender | null;
   text: string;
+  /** The room the message is in. */
+  room: string;
 }
 /** What the live stream compares once a second to decide whether anything changed. */
 export interface SetStatusInput {
@@ -177,6 +221,8 @@ export interface StreamVersion {
   decisions: string;
   /** Fingerprint of read positions, so the live stream can push only the positions that moved. */
   reads: string;
+  /** Every room with its newest message id, so the live stream can say when another room has news. */
+  rooms: string;
 }
 
 /** Reactions on one message, as returned at the top level of GET /api/messages. */
@@ -194,7 +240,8 @@ export interface Store {
   /**
    * Returns the stored message, or null when the sender is over the rate limit.
    * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked,
-   * and ReplyTargetError when `reply_to` names a message that does not exist.
+   * ReplyTargetError when `reply_to` names a message that does not exist, and RoomError when the
+   * room does not exist or is another one than the room of the message that is answered.
    */
   add(input: NewMessage, limitPerMin?: number): Promise<Message | null>;
   /**
@@ -217,11 +264,22 @@ export interface Store {
    * question and options count as text of the message that carries the poll.
    */
   search(options: SearchOptions): Promise<Message[]>;
-  pinned(): Promise<Message[]>;
+  /** The pinned messages of one room, or of every room when none is named. */
+  pinned(room?: string | null): Promise<Message[]>;
   setPinned(id: number, pinned: boolean): Promise<Message | null>;
-  all(): Promise<Message[]>;
-  /** A cheap fingerprint of the stream: the newest message id, the pinned ids, polls, reactions, decisions and reads. */
-  version(): Promise<StreamVersion>;
+  /** Every message of one room, or of every room when none is named. */
+  all(room?: string | null): Promise<Message[]>;
+  /**
+   * A cheap fingerprint of the stream: the newest message id and the pinned ids (of one room, or
+   * of every room when none is named), polls, reactions, decision cards, read positions and the rooms.
+   */
+  version(room?: string | null): Promise<StreamVersion>;
+  /** Every room, `main` first, then in the order they were created. */
+  listRooms(options?: RoomListOptions): Promise<Room[]>;
+  /** One room, or null when there is none with that id. */
+  getRoom(id: string): Promise<Room | null>;
+  /** Creates a room. Throws RoomError when the id is taken or the hub has all the rooms it can have. */
+  createRoom(input: NewRoom): Promise<Room>;
   /**
    * Claims every message Grok has not been woken for yet (addressed to Grok or to everyone, not
    * written by Grok or the hub) and moves the watermark past them. Returns null when there is
@@ -262,9 +320,10 @@ export interface Store {
   listWakes(messageIds: readonly number[]): Promise<WakeDelivery[]>;
   /**
    * Messages with id > `since` that should wake `participant`, oldest first.
+   * Those of one room, or of every room when none is named: the wake rule is the same in every room.
    * `humans` and `agents` are names from the roster. The participant must be one of the agents.
    */
-  listWakingMessages(options: { participant: Sender; since: number | null; limit: number; humans: readonly string[]; agents: readonly string[] }): Promise<Message[]>;
+  listWakingMessages(options: { participant: Sender; since: number | null; limit: number; humans: readonly string[]; agents: readonly string[]; room?: string | null }): Promise<Message[]>;
   /** Sets or replaces the caller's active working status with a TTL in seconds. */
   setStatus(input: SetStatusInput): Promise<ParticipantStatus>;
   /** Clears the caller's working status; returns true if a row existed. */
@@ -277,8 +336,8 @@ export interface Store {
    */
   createPoll(input: NewPoll, limitPerMin?: number): Promise<{ message: Message; poll: Poll } | null>;
   getPoll(id: string): Promise<Poll | null>;
-  /** Open polls, plus polls closed within the last 24 hours. */
-  listPolls(): Promise<Poll[]>;
+  /** Open polls, plus polls closed within the last 24 hours: those of one room, or of every room when none is named. */
+  listPolls(room?: string | null): Promise<Poll[]>;
   /** Every message that has a poll, with the current tally, oldest first. */
   listPollMessages(): Promise<Message[]>;
   /** Messages with the given ids, in id order. Missing ids are skipped. */
@@ -302,8 +361,8 @@ export interface Store {
   addReaction(messageId: number, participant: Sender, emoji: string, limitPerMin?: number): Promise<AddReactionResult>;
   /** Removes the caller's reaction. Returns null when the message does not exist. */
   removeReaction(messageId: number, participant: Sender, emoji: string): Promise<Message | null>;
-  /** Every message that currently has reactions, for since-poll and the stream. */
-  listReactions(): Promise<MessageReactions[]>;
+  /** Every message that currently has reactions, in one room or in every room when none is named. For since-poll. */
+  listReactions(room?: string | null): Promise<MessageReactions[]>;
   /**
    * Creates a message and an attached decision card. The creator is the owner of the token.
    * Returns null when the sender is over the message rate limit.
@@ -315,15 +374,17 @@ export interface Store {
    * Returns rate_limited when this sender has recorded 30 positions in the last minute (a no-op change is not counted).
    */
   recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
-  /** Every decision card, for since-poll and the stream. */
-  listDecisions(): Promise<DecisionCard[]>;
+  /** Every decision card of one room, or of every room when none is named. For since-poll. */
+  listDecisions(room?: string | null): Promise<DecisionCard[]>;
   /**
-   * Moves this participant's read position to `upTo` if that is a higher message id than they
-   * already have. A lower id is ignored. Throws ReadError when the message does not exist.
+   * Moves this participant's read position in the room of message `upTo` to that message, if it
+   * is a higher id than they already have there. A lower id is ignored. A participant has one
+   * position per room: reading one room says nothing about another. Throws ReadError when the
+   * message does not exist, and RoomError when `room` is given and the message is in another room.
    */
-  setReadPosition(participant: Sender, upTo: number): Promise<ReadPosition>;
-  /** Every stored read position, for the opt-in list and the stream. */
-  listReads(): Promise<ReadPosition[]>;
+  setReadPosition(participant: Sender, upTo: number, room?: string | null): Promise<ReadPosition>;
+  /** The read positions of one room, or of every room when none is named. For the opt-in list and the stream. */
+  listReads(room?: string | null): Promise<ReadPosition[]>;
 }
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
@@ -567,10 +628,57 @@ const SCHEMA = [
      CONSTRAINT wake_test_events_participant_shape CHECK (participant ~ ${NAME_SHAPE})
    )`,
   `CREATE INDEX IF NOT EXISTS wake_test_events_participant_created ON wake_test_events (participant, created_at)`,
+  // Rooms (migrations/012-rooms.sql): more than one stream in one hub. The room `main` always
+  // exists, and every message from before rooms is in it. Message ids stay global across rooms.
+  `CREATE TABLE IF NOT EXISTS rooms (
+     id         TEXT PRIMARY KEY CONSTRAINT rooms_id_shape CHECK (id ~ ${NAME_SHAPE}),
+     name       TEXT NOT NULL CONSTRAINT rooms_name_length CHECK (char_length(name) BETWEEN 1 AND ${ROOM_NAME_MAX_LENGTH}),
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     created_by TEXT NOT NULL CONSTRAINT rooms_created_by_shape CHECK (created_by ~ ${NAME_SHAPE})
+   )`,
+  `INSERT INTO rooms (id, name, created_by) VALUES ('${MAIN_ROOM}', 'Main', 'hub') ON CONFLICT (id) DO NOTHING`,
+  // The column is only added when it is missing, like the ones above. Its default puts every
+  // existing message into main without rewriting a row.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN room TEXT NOT NULL DEFAULT '${MAIN_ROOM}'
+         CONSTRAINT messages_room_exists REFERENCES rooms (id);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
+  `CREATE INDEX IF NOT EXISTS messages_room_id ON messages (room, id)`,
+  // A read position is per participant and room: reading one room says nothing about another.
+  // The positions from before rooms belong to main, where every message of that time is.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'read_positions' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE read_positions ADD COLUMN room TEXT NOT NULL DEFAULT '${MAIN_ROOM}'
+         CONSTRAINT read_positions_room_exists REFERENCES rooms (id);
+     END IF;
+     -- The key is checked by itself, so it is put right whatever state the column was found in.
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'read_positions'::regclass AND contype = 'p'
+         AND pg_get_constraintdef(oid) = 'PRIMARY KEY (participant, room)'
+     ) THEN
+       ALTER TABLE read_positions DROP CONSTRAINT IF EXISTS read_positions_pkey;
+       ALTER TABLE read_positions ADD CONSTRAINT read_positions_pkey PRIMARY KEY (participant, room);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
-const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to';
+const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to, room';
 const ATTACHMENT_COLS = 'id, content_type, width, height, bytes, scale';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
 const POLL_JSON = `json_build_object(
@@ -632,6 +740,21 @@ const LOCK_ID = 7230418;
 const UPLOAD_LOCK_ID = 7230419;
 const REACTION_LOCK_ID = 7230420;
 const WAKE_TEST_LOCK_ID = 7230422;
+// Creating a room takes its own lock, so two requests at once can't both take the last free place.
+const ROOM_LOCK_ID = 7230423;
+// One row per room: its newest message id, and for a caller who says what they have seen ($1, a
+// JSON object of room id → message id) how many messages by others ($2 is the caller) are newer.
+const ROOMS_SQL = `SELECT r.id, r.name, r.created_at, r.created_by,
+         coalesce((SELECT max(m.id) FROM messages m WHERE m.room = r.id), 0) AS last_id,
+         CASE WHEN $1::jsonb IS NULL THEN NULL ELSE (
+           SELECT count(*)::int FROM messages m
+           WHERE m.room = r.id AND m.id > coalesce(($1::jsonb ->> r.id)::bigint, 0)
+             AND ($2::text IS NULL OR m.sender <> $2::text)
+         ) END AS unread
+    FROM rooms r
+   WHERE ($3::text IS NULL OR r.id = $3::text)
+   ORDER BY (r.id <> '${MAIN_ROOM}'), r.created_at, r.id`;
+const ROOMS_FINGERPRINT_SQL = `(SELECT coalesce(string_agg(r.id || ':' || coalesce((SELECT max(m.id) FROM messages m WHERE m.room = r.id), 0)::text, ',' ORDER BY r.id), '') FROM rooms r)`;
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
@@ -678,8 +801,20 @@ const DECISIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM decision_cards) |
     ) t
   ), '')`;
 
-const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions) || '|' ||
-  coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant) FROM read_positions), '')`;
+// The read positions of one room ($1), or of every room when $1 is null.
+const READS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM read_positions WHERE ($1::text IS NULL OR room = $1::text)) || '|' ||
+  coalesce((SELECT string_agg(participant || ':' || up_to::text, ',' ORDER BY participant, room) FROM read_positions
+             WHERE ($1::text IS NULL OR room = $1::text)), '')`;
+// What hangs on a message (a poll, reactions, a decision card) is in that message's room. This
+// keeps a list of such things to one room ($1), or to every room when $1 is null.
+const inRoomSql = (messageId: string): string =>
+  `($1::text IS NULL OR EXISTS (SELECT 1 FROM messages m WHERE m.id = ${messageId} AND m.room = $1::text))`;
+const toRead = (r: Row): ReadPosition => ({
+  participant: String(r.participant) as Sender,
+  room: String(r.room ?? MAIN_ROOM),
+  up_to: Number(r.up_to),
+  updated_at: new Date(r.updated_at as string | Date).toISOString(),
+});
 
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
@@ -787,6 +922,15 @@ const toDecision = (v: unknown): DecisionCard | null => {
   };
 };
 
+const toRoom = (r: Row): Room => ({
+  id: r.id as string,
+  name: r.name as string,
+  created_at: iso(r.created_at) as string,
+  created_by: r.created_by as Author,
+  last_id: Number(r.last_id ?? 0),
+  ...(r.unread == null ? {} : { unread: Number(r.unread) }),
+});
+
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -794,6 +938,7 @@ const toMessage = (r: Row): Message => ({
   text: r.text as string,
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
+  room: (r.room as string | null | undefined) ?? MAIN_ROOM,
   attachments: toAttachments(r.attachments),
   reply_to: r.reply_to == null ? null : Number(r.reply_to),
   poll: toPoll(r.poll),
@@ -826,10 +971,29 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     }
     return ready;
   }
+  /**
+   * The room a new message goes to: the one asked for; without one, the room of the message it
+   * answers, and `main` when it answers none. Throws when the answered message or the room does
+   * not exist, or when the two are different rooms.
+   */
+  async function roomFor(tx: Queryable, room: string | null, replyTo: number | null): Promise<string> {
+    let answered: string | null = null;
+    if (replyTo !== null) {
+      // A reply must answer a message that exists. The foreign key would refuse it too; asking
+      // first gives the sender a clear answer instead of a database error.
+      const [parent] = await tx.query(`SELECT room FROM messages WHERE id = $1::bigint`, [replyTo]);
+      if (!parent) throw new ReplyTargetError(replyTo);
+      answered = parent.room as string;
+    }
+    if (room === null) return answered ?? MAIN_ROOM;
+    if (answered !== null && answered !== room) throw new RoomError('other room', room, { id: replyTo as number, room: answered });
+    if (room !== MAIN_ROOM && !(await tx.query(`SELECT 1 FROM rooms WHERE id = $1::text`, [room])).length) throw new RoomError('not found', room);
+    return room;
+  }
 
   return {
     ensure,
-    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null, room = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
       recipient = notToSelf(sender, recipient);
       return db.transaction(async (tx) => {
@@ -840,12 +1004,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           [sender],
         );
         if ((n as number) >= limitPerMin) return null;
-        // A reply must answer a message that exists. The foreign key would refuse it too; asking
-        // first gives the sender a clear answer instead of a database error.
-        if (reply_to !== null) {
-          const found = await tx.query(`SELECT 1 FROM messages WHERE id = $1::bigint`, [reply_to]);
-          if (!found.length) throw new ReplyTargetError(reply_to);
-        }
+        const inRoom = await roomFor(tx, room, reply_to);
         // Checked before the insert, and locked, so two posts can't link the same upload. A failure
         // here throws, which rolls the transaction back: no message, no link.
         const linked: Attachment[] = [];
@@ -863,10 +1022,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           }
         }
         const rows = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, pinned_at, reply_to)
-           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END, $5::bigint)
+          `INSERT INTO messages (sender, recipient, text, pinned_at, reply_to, room)
+           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END, $5::bigint, $6::text)
            RETURNING ${BASE_COLS}`,
-          [sender, recipient, text, Boolean(pinned), reply_to],
+          [sender, recipient, text, Boolean(pinned), reply_to, inRoom],
         );
         // The link commits together with the message, so a reader never sees one without the other.
         for (const [position, a] of linked.entries()) {
@@ -924,24 +1083,24 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id) };
       return { attachment, data };
     },
-    async list({ since = null, to = null, limit = 200 } = {}) {
+    async list({ since = null, to = null, limit = 200, room = null } = {}) {
       await ensure();
       const rows = since === null
         ? await db.query(
           `SELECT * FROM (SELECT ${COLS} FROM messages
-             WHERE ($1::text IS NULL OR recipient = $1::text)
+             WHERE ($1::text IS NULL OR recipient = $1::text) AND ($3::text IS NULL OR room = $3::text)
              ORDER BY id DESC LIMIT $2::int) t ORDER BY id`,
-          [to, limit],
+          [to, limit, room],
         )
         : await db.query(
           `SELECT ${COLS} FROM messages
-           WHERE id > $1::bigint AND ($2::text IS NULL OR recipient = $2::text)
+           WHERE id > $1::bigint AND ($2::text IS NULL OR recipient = $2::text) AND ($4::text IS NULL OR room = $4::text)
            ORDER BY id LIMIT $3::int`,
-          [since, to, limit],
+          [since, to, limit, room],
         );
       return rows.map(toMessage);
     },
-    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT, room = null }) {
       await ensure();
       if (!words.length) return [];
       // Plain ILIKE over the text, and over the poll's question and options when there is one.
@@ -957,14 +1116,18 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
            AND (NOT $3::boolean OR pinned_at IS NOT NULL)
            AND ($4::text IS NULL OR messages.text ~ $4::text
                 OR EXISTS (SELECT 1 FROM decision_cards c WHERE c.message_id = messages.id AND c.agreed_at IS NOT NULL))
+           AND ($6::text IS NULL OR room = $6::text)
          ORDER BY id DESC LIMIT $5::int`,
-        [words.map(likePattern), to, pinned, decisionsAmong ? decisionSqlPattern(decisionsAmong) : null, limit],
+        [words.map(likePattern), to, pinned, decisionsAmong ? decisionSqlPattern(decisionsAmong) : null, limit, room],
       );
       return rows.map(toMessage);
     },
-    async pinned() {
+    async pinned(room = null) {
       await ensure();
-      const rows = await db.query(`SELECT ${COLS} FROM messages WHERE pinned_at IS NOT NULL ORDER BY id`, []);
+      const rows = await db.query(
+        `SELECT ${COLS} FROM messages WHERE pinned_at IS NOT NULL AND ($1::text IS NULL OR room = $1::text) ORDER BY id`,
+        [room],
+      );
       return rows.map(toMessage);
     },
     async setPinned(id, pinned) {
@@ -976,22 +1139,48 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows[0] ? toMessage(rows[0]) : null;
     },
-    async all() {
+    async all(room = null) {
       await ensure();
-      return (await db.query(`SELECT ${COLS} FROM messages ORDER BY id`, [])).map(toMessage);
+      return (await db.query(`SELECT ${COLS} FROM messages WHERE ($1::text IS NULL OR room = $1::text) ORDER BY id`, [room])).map(toMessage);
     },
-    async version() {
+    async version(room = null) {
       await ensure();
       const [row] = await db.query(
-        `SELECT (SELECT coalesce(max(id), 0) FROM messages) AS last_id,
-                (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages WHERE pinned_at IS NOT NULL) AS pins,
+        `SELECT (SELECT coalesce(max(id), 0) FROM messages WHERE ($1::text IS NULL OR room = $1::text)) AS last_id,
+                (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages
+                  WHERE pinned_at IS NOT NULL AND ($1::text IS NULL OR room = $1::text)) AS pins,
                 ${POLLS_FINGERPRINT_SQL} AS polls,
                 ${REACTIONS_FINGERPRINT_SQL} AS reactions,
                 ${DECISIONS_FINGERPRINT_SQL} AS decisions,
-                ${READS_FINGERPRINT_SQL} AS reads`,
-        [],
+                ${READS_FINGERPRINT_SQL} AS reads,
+                ${ROOMS_FINGERPRINT_SQL} AS rooms`,
+        [room],
       );
-      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls), reactions: String(row.reactions), decisions: String(row.decisions), reads: String(row.reads) };
+      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls), reactions: String(row.reactions), decisions: String(row.decisions), reads: String(row.reads), rooms: String(row.rooms) };
+    },
+    async listRooms({ seen = null, me = null } = {}) {
+      await ensure();
+      return (await db.query(ROOMS_SQL, [seen ? JSON.stringify(seen) : null, me, null])).map(toRoom);
+    },
+    async getRoom(id) {
+      await ensure();
+      const [row] = await db.query(ROOMS_SQL, [null, null, id]);
+      return row ? toRoom(row) : null;
+    },
+    async createRoom({ id, name, created_by }) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${ROOM_LOCK_ID})`, []);
+        const existing = await tx.query(`SELECT id FROM rooms`, []);
+        if (existing.some((r) => r.id === id)) throw new RoomError('exists', id);
+        if (existing.length >= MAX_ROOMS) throw new RoomError('full', id);
+        const [row] = await tx.query(
+          `INSERT INTO rooms (id, name, created_by) VALUES ($1::text, $2::text, $3::text)
+           RETURNING id, name, created_at, created_by`,
+          [id, name, created_by],
+        );
+        return toRoom(row);
+      });
     },
     async claimWakeup() {
       await ensure();
@@ -1059,7 +1248,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     async listPendingWakes() {
       await ensure();
       const rows = await db.query(
-        `SELECT d.message_id, d.participant, m.sender, m.recipient, m.text
+        `SELECT d.message_id, d.participant, m.sender, m.recipient, m.text, m.room
          FROM wake_deliveries d JOIN messages m ON m.id = d.message_id
          WHERE d.status = 'pending'
          ORDER BY d.message_id, d.participant`,
@@ -1071,6 +1260,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         sender: r.sender as Sender,
         recipient: (r.recipient as Sender | null) ?? null,
         text: String(r.text),
+        room: String(r.room ?? MAIN_ROOM),
       }));
     },
     async claimPendingWakes() {
@@ -1089,7 +1279,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
            ) due
            JOIN messages m ON m.id = due.message_id
            WHERE d.message_id = due.message_id AND d.participant = due.participant
-           RETURNING d.message_id, d.participant, m.sender, m.recipient, m.text`,
+           RETURNING d.message_id, d.participant, m.sender, m.recipient, m.text, m.room`,
           [],
         );
         return rows
@@ -1099,6 +1289,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
             sender: r.sender as Sender,
             recipient: (r.recipient as Sender | null) ?? null,
             text: String(r.text),
+            room: String(r.room ?? MAIN_ROOM),
           }))
           .sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant));
       });
@@ -1146,7 +1337,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toWakeDelivery);
     },
-    async listWakingMessages({ participant, since, limit, humans, agents }) {
+    async listWakingMessages({ participant, since, limit, humans, agents, room = null }) {
       await ensure();
       if (!agents.includes(participant)) return [];
       const rows = since === null
@@ -1158,8 +1349,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
                  sender = ANY($2::text[])
                  OR (sender = ANY($3::text[]) AND (recipient IS NULL OR recipient = $1::text))
                )
+               AND ($5::text IS NULL OR room = $5::text)
              ORDER BY id DESC LIMIT $4::int) t ORDER BY id`,
-          [participant, humans, agents, limit],
+          [participant, humans, agents, limit, room],
         )
         : await db.query(
           `SELECT ${COLS} FROM messages
@@ -1170,9 +1362,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
                sender = ANY($3::text[])
                OR (sender = ANY($4::text[]) AND (recipient IS NULL OR recipient = $2::text))
              )
+             AND ($6::text IS NULL OR room = $6::text)
            ORDER BY id ASC
            LIMIT $5::int`,
-          [since, participant, humans, agents, limit],
+          [since, participant, humans, agents, limit, room],
         );
       return rows.map(toMessage);
     },
@@ -1210,7 +1403,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toStatus);
     },
-    async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async createPoll({ creator, question, options, recipient = null, room = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
       recipient = notToSelf(creator, recipient);
       const id = newPollId();
@@ -1222,10 +1415,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         );
         if ((n as number) >= limitPerMin) return null;
         const rows = await tx.query(
-          `INSERT INTO messages (sender, recipient, text)
-           VALUES ($1::text, $2::text, $3::text)
+          `INSERT INTO messages (sender, recipient, text, room)
+           VALUES ($1::text, $2::text, $3::text, $4::text)
            RETURNING ${BASE_COLS}`,
-          [creator, recipient, question],
+          [creator, recipient, question, await roomFor(tx, room, null)],
         );
         await tx.query(
           `INSERT INTO polls (id, message_id, creator, question, options)
@@ -1243,13 +1436,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const [row] = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [id]);
       return row ? toPoll(row.poll) : null;
     },
-    async listPolls() {
+    async listPolls(room = null) {
       await ensure();
       const rows = await db.query(
         `SELECT ${POLL_JSON} AS poll FROM polls p
-         WHERE p.closed_at IS NULL OR p.closed_at > now() - interval '24 hours'
+         WHERE (p.closed_at IS NULL OR p.closed_at > now() - interval '24 hours')
+           AND ${inRoomSql('p.message_id')}
          ORDER BY p.created_at, p.id`,
-        [],
+        [room],
       );
       return rows.map((r) => toPoll(r.poll)).filter((p): p is Poll => p !== null);
     },
@@ -1334,9 +1528,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const [row] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
         const poll = toPoll(row.poll);
         if (!poll) throw new PollError('not found');
+        // The result is a reply to the poll, so it is in the poll's room.
         const inserted = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, reply_to)
-           VALUES ($1::text, NULL, $2::text, $3::bigint)
+          `INSERT INTO messages (sender, recipient, text, reply_to, room)
+           VALUES ($1::text, NULL, $2::text, $3::bigint, (SELECT room FROM messages WHERE id = $3::bigint))
            RETURNING ${BASE_COLS}`,
           [participant, pollResultText(poll), existing.message_id],
         );
@@ -1381,7 +1576,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const [row] = await db.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [messageId]);
       return toMessage(row);
     },
-    async listReactions() {
+    async listReactions(room = null) {
       await ensure();
       const rows = await db.query(
         `SELECT message_id,
@@ -1395,32 +1590,30 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
                       GROUP BY emoji
                    ) g) AS reactions
            FROM (SELECT DISTINCT message_id FROM reactions) r
+          WHERE ${inRoomSql('r.message_id')}
           ORDER BY message_id`,
-        [],
+        [room],
       );
       return rows.map(toMessageReactions);
     },
 
-    async createDecision({ creator, prompt, recipient = null, reply_to = null }, roster = [], limitPerMin = RATE_LIMIT_PER_MIN) {
+    async createDecision({ creator, prompt, recipient = null, reply_to = null, room = null }, roster = [], limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
       recipient = notToSelf(creator, recipient);
       const id = newDecisionId();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
-        if (reply_to !== null) {
-          const [exists] = await tx.query(`SELECT id FROM messages WHERE id = $1::bigint`, [reply_to]);
-          if (!exists) throw new ReplyTargetError(reply_to);
-        }
+        const inRoom = await roomFor(tx, room, reply_to);
         const [{ n }] = await tx.query(
           `SELECT count(*)::int AS n FROM messages WHERE sender = $1::text AND created_at > now() - interval '60 seconds'`,
           [creator],
         );
         if ((n as number) >= limitPerMin) return null;
         const rows = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, reply_to)
-           VALUES ($1::text, $2::text, $3::text, $4::bigint)
+          `INSERT INTO messages (sender, recipient, text, reply_to, room)
+           VALUES ($1::text, $2::text, $3::text, $4::bigint, $5::text)
            RETURNING ${BASE_COLS}`,
-          [creator, recipient, prompt, reply_to],
+          [creator, recipient, prompt, reply_to, inRoom],
         );
         await tx.query(
           `INSERT INTO decision_cards (id, message_id, creator, prompt)
@@ -1510,9 +1703,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           await tx.query(`UPDATE decision_cards SET agreed_at = NULL WHERE id = $1::text`, [cardId]);
         }
         const consensus = !wasAgreed && agreed ? 'agreed' as const : wasAgreed && !agreed ? 'broken' as const : null;
+        // The note about the position is a reply to the card, so it is in the card's room.
         const inserted = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, reply_to)
-           VALUES ($1::text, NULL, $2::text, $3::bigint)
+          `INSERT INTO messages (sender, recipient, text, reply_to, room)
+           VALUES ($1::text, NULL, $2::text, $3::bigint, (SELECT room FROM messages WHERE id = $3::bigint))
            RETURNING ${BASE_COLS}`,
           [participant, decisionPositionText(stance, note, consensus), card.message_id],
         );
@@ -1523,38 +1717,44 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { status: 'ok' as const, decision: fresh, message: toMessage(row), reply: { ...toMessage(inserted[0]), attachments: [], poll: null, decision: null, reactions: [] } };
       });
     },
-    async listDecisions() {
+    async listDecisions(room = null) {
       await ensure();
-      const rows = await db.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c ORDER BY c.created_at, c.id`, []);
+      const rows = await db.query(
+        `SELECT ${DECISION_JSON} AS decision FROM decision_cards c WHERE ${inRoomSql('c.message_id')} ORDER BY c.created_at, c.id`,
+        [room],
+      );
       return rows.map((r) => toDecision(r.decision)).filter((d): d is DecisionCard => d !== null);
     },
-    async setReadPosition(participant, upTo) {
+    async setReadPosition(participant, upTo, room = null) {
       await ensure();
-      const [exists] = await db.query(`SELECT id FROM messages WHERE id = $1::bigint`, [upTo]);
-      if (!exists) throw new ReadError('not found');
+      // The position is recorded in the room the message is in. The message says which room that is.
+      const [message] = await db.query(`SELECT room FROM messages WHERE id = $1::bigint`, [upTo]);
+      if (!message) throw new ReadError('not found');
+      const inRoom = message.room as string;
+      if (room !== null && room !== inRoom) throw new RoomError('read elsewhere', room, { id: upTo, room: inRoom });
       const rows = await db.query(
-        `INSERT INTO read_positions (participant, up_to)
-         VALUES ($1::text, $2::bigint)
-         ON CONFLICT (participant) DO UPDATE
+        `INSERT INTO read_positions (participant, room, up_to)
+         VALUES ($1::text, $3::text, $2::bigint)
+         ON CONFLICT (participant, room) DO UPDATE
            SET up_to = EXCLUDED.up_to, updated_at = now()
            WHERE read_positions.up_to < EXCLUDED.up_to
-         RETURNING participant, up_to, updated_at`,
-        [participant, upTo],
+         RETURNING participant, room, up_to, updated_at`,
+        [participant, upTo, inRoom],
       );
       const row = rows[0] ?? (await db.query(
-        `SELECT participant, up_to, updated_at FROM read_positions WHERE participant = $1::text`,
-        [participant],
+        `SELECT participant, room, up_to, updated_at FROM read_positions WHERE participant = $1::text AND room = $2::text`,
+        [participant, inRoom],
       ))[0];
-      return { participant: String(row.participant), up_to: Number(row.up_to), updated_at: new Date(row.updated_at as string | Date).toISOString() };
+      return toRead(row);
     },
-    async listReads() {
+    async listReads(room = null) {
       await ensure();
-      const rows = await db.query(`SELECT participant, up_to, updated_at FROM read_positions ORDER BY participant`, []);
-      return rows.map((r) => ({
-        participant: String(r.participant) as Sender,
-        up_to: Number(r.up_to),
-        updated_at: new Date(r.updated_at as string | Date).toISOString(),
-      }));
+      const rows = await db.query(
+        `SELECT participant, room, up_to, updated_at FROM read_positions
+         WHERE ($1::text IS NULL OR room = $1::text) ORDER BY participant, room`,
+        [room],
+      );
+      return rows.map(toRead);
     },
   };
 }
@@ -1571,9 +1771,28 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], reply_to: null, poll: null, decision: null, reactions: [], ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), room: MAIN_ROOM, attachments: [], reply_to: null, poll: null, decision: null, reactions: [], ...r };
     rows.push(m);
     return m;
+  };
+  const roomRows: Omit<Room, 'last_id' | 'unread'>[] = [{ id: MAIN_ROOM, name: 'Main', created_at: timestamp(), created_by: 'hub' }];
+  const inRoom = (room: string | null) => (m: Message): boolean => room === null || m.room === room;
+  /** Whether what hangs on this message (a poll, reactions, a decision card) is in `room`. Null: every room. */
+  const messageInRoom = (id: number, room: string | null): boolean => room === null || rows.find((m) => m.id === id)?.room === room;
+  const assembleRoom = (r: Omit<Room, 'last_id' | 'unread'>, seen: Readonly<Record<string, number>> | null, me: Sender | null): Room => {
+    const own = rows.filter((m) => m.room === r.id);
+    const room: Room = { ...r, last_id: own.length ? own[own.length - 1].id : 0 };
+    if (seen) room.unread = own.filter((m) => m.id > (seen[r.id] ?? 0) && m.sender !== me).length;
+    return room;
+  };
+  /** The same rule as the SQL store's roomFor. */
+  const roomFor = (room: string | null, replyTo: number | null): string => {
+    const parent = replyTo === null ? undefined : rows.find((m) => m.id === replyTo);
+    if (replyTo !== null && !parent) throw new ReplyTargetError(replyTo);
+    if (room === null) return parent?.room ?? MAIN_ROOM;
+    if (parent && parent.room !== room) throw new RoomError('other room', room, { id: parent.id, room: parent.room });
+    if (!roomRows.some((r) => r.id === room)) throw new RoomError('not found', room);
+    return room;
   };
   push({ sender: 'hub', text: welcome });
   // The same check the database makes, so a name that Postgres would refuse is refused here too.
@@ -1659,8 +1878,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type PositionRow = { card_id: string; participant: Sender; stance: DecisionStance; note: string | null; updated_at: string };
   const decisionRows = new Map<string, DecisionRow>();
   const positionRows = new Map<string, PositionRow>();
-  type ReadRow = { participant: Sender; up_to: number; updated_at: string };
-  const readRows = new Map<string, ReadRow>();
+  type ReadRow = { participant: Sender; room: string; up_to: number; updated_at: string };
+  const readRows = new Map<string, ReadRow>(); // one per participant and room
+  const readKey = (participant: Sender, room: string) => `${participant}\0${room}`;
   const positionKey = (cardId: string, participant: Sender) => `${cardId}\0${participant}`;
   const assembleDecision = (row: DecisionRow): DecisionCard => ({
     id: row.id,
@@ -1691,11 +1911,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       });
     return `${decisionRows.size}|${entries.join(',')}`;
   };
-  const readsFingerprint = (): string => {
-    const entries = [...readRows.values()]
-      .sort((a, b) => a.participant.localeCompare(b.participant))
+  const readsFingerprint = (room: string | null): string => {
+    const own = [...readRows.values()].filter((r) => room === null || r.room === room);
+    const entries = own
+      .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
       .map((r) => `${r.participant}:${r.up_to}`);
-    return `${readRows.size}|${entries.join(',')}`;
+    return `${own.length}|${entries.join(',')}`;
   };
   const copy = (m: Message): Message => ({
     ...m,
@@ -1714,12 +1935,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
     async ensure() {},
-    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null, room = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
       recipient = notToSelf(sender, recipient);
       const recent = rows.filter((m) => m.sender === sender && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
-      if (reply_to !== null && !rows.some((m) => m.id === reply_to)) throw new ReplyTargetError(reply_to);
+      const target = roomFor(room, reply_to);
       const linked = attachments.map((id) => {
         const upload = uploads.get(id);
         if (!upload) throw new AttachmentLinkError(id, 'unknown');
@@ -1727,7 +1948,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
-      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to });
+      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to, room: target });
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },
@@ -1753,26 +1974,49 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (!upload || !data) return null;
       return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id }, data };
     },
-    async list({ since = null, to = null, limit = 200 } = {}) {
-      const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
+    async list({ since = null, to = null, limit = 200, room = null } = {}) {
+      const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since) && (room === null || m.room === room));
       return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
     },
-    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT, room = null }) {
       if (!words.length) return [];
-      return rows.map(copy)
+      return rows.filter(inRoom(room)).map(copy)
         .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && (!decisionsAmong || isDecision(m.text, decisionsAmong, m.decision)) && matchesAll(m, words))
         .reverse().slice(0, limit);
     },
-    async pinned() { return rows.filter((m) => m.pinned_at).map(copy); },
+    async pinned(room = null) { return rows.filter((m) => m.pinned_at).filter(inRoom(room)).map(copy); },
     async setPinned(id, pinned) {
       const m = rows.find((r) => r.id === id);
       if (!m) return null;
       m.pinned_at = pinned ? (m.pinned_at ?? timestamp()) : null;
       return copy(m);
     },
-    async all() { return rows.map(copy); },
-    async version() {
-      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint() };
+    async all(room = null) { return rows.filter(inRoom(room)).map(copy); },
+    async version(room = null) {
+      const own = rows.filter(inRoom(room));
+      return {
+        last_id: own.length ? own[own.length - 1].id : 0,
+        pins: own.filter((m) => m.pinned_at).map((m) => m.id).join(','),
+        polls: pollsFingerprint(), reactions: reactionsFingerprint(), decisions: decisionsFingerprint(), reads: readsFingerprint(room),
+        rooms: roomRows.map((r) => `${r.id}:${assembleRoom(r, null, null).last_id}`).sort().join(','),
+      };
+    },
+    async listRooms({ seen = null, me = null } = {}) {
+      return roomRows.map((r) => assembleRoom(r, seen, me));
+    },
+    async getRoom(id) {
+      const row = roomRows.find((r) => r.id === id);
+      return row ? assembleRoom(row, null, null) : null;
+    },
+    async createRoom({ id, name, created_by }) {
+      // The same checks the database makes.
+      if (!NAME_PATTERN.test(id)) throw new Error('A room id must have the shape of a participant name.');
+      if (!name || [...name].length > ROOM_NAME_MAX_LENGTH) throw new Error(`A room name has 1 to ${ROOM_NAME_MAX_LENGTH} characters.`);
+      if (roomRows.some((r) => r.id === id)) throw new RoomError('exists', id);
+      if (roomRows.length >= MAX_ROOMS) throw new RoomError('full', id);
+      const row = { id, name, created_at: timestamp(), created_by: shaped(created_by) };
+      roomRows.push(row);
+      return assembleRoom(row, null, null);
     },
     async claimWakeup() {
       const fresh = rows.filter((m) => m.id > lastNotifiedId && wakesGrok(m));
@@ -1817,7 +2061,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         if (d.status !== 'pending') continue;
         const m = rows.find((r) => r.id === d.message_id);
         if (!m) continue;
-        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text });
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room });
       }
       return out;
     },
@@ -1831,7 +2075,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         if (!m) continue;
         d.status = 'sending';
         d.updated_at = timestamp();
-        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text });
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text, room: m.room });
       }
       return out;
     },
@@ -1860,12 +2104,13 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant))
         .map((d) => ({ ...d }));
     },
-    async listWakingMessages({ participant, since, limit, humans, agents }) {
+    async listWakingMessages({ participant, since, limit, humans, agents, room = null }) {
       if (!agents.includes(participant)) return [];
       const humanSet = new Set(humans);
       const agentSet = new Set(agents);
       const match = rows.filter((m) => {
         if (m.sender === 'hub' || m.sender === participant) return false;
+        if (room !== null && m.room !== room) return false;
         if (since !== null && m.id <= since) return false;
         if (humanSet.has(m.sender)) return true;
         return agentSet.has(m.sender) && (m.recipient === null || m.recipient === participant);
@@ -1895,12 +2140,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || a.participant.localeCompare(b.participant))
         .map((s) => ({ ...s }));
     },
-    async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async createPoll({ creator, question, options, recipient = null, room = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
       recipient = notToSelf(creator, recipient);
       const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
-      const m = push({ sender: shaped(creator), recipient: recipient ? shaped(recipient) : null, text: question });
+      const m = push({ sender: shaped(creator), recipient: recipient ? shaped(recipient) : null, text: question, room: roomFor(room, null) });
       const row: PollRow = {
         id: newPollId(),
         message_id: m.id,
@@ -1918,10 +2163,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const row = pollRows.get(id);
       return row ? assemblePoll(row) : null;
     },
-    async listPolls() {
+    async listPolls(room = null) {
       const cutoff = now() - RECENTLY_CLOSED_MS;
       return [...pollRows.values()]
-        .filter((p) => !p.closed_at || Date.parse(p.closed_at) > cutoff)
+        .filter((p) => (!p.closed_at || Date.parse(p.closed_at) > cutoff) && messageInRoom(p.message_id, room))
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assemblePoll);
     },
@@ -1970,6 +2215,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         recipient: null,
         text: pollResultText(poll),
         reply_to: row.message_id,
+        room: roomFor(null, row.message_id),
       });
       return { poll, message: copy(message) };
     },
@@ -1991,17 +2237,17 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (i >= 0) reactionRows.splice(i, 1);
       return copy(m);
     },
-    async listReactions() {
-      const ids = [...new Set(reactionRows.map((r) => r.message_id))].sort((a, b) => a - b);
+    async listReactions(room = null) {
+      const ids = [...new Set(reactionRows.map((r) => r.message_id))].filter((id) => messageInRoom(id, room)).sort((a, b) => a - b);
       return ids.map((message_id) => ({ message_id, reactions: reactionsOn(message_id) }));
     },
-    async createDecision({ creator, prompt, recipient = null, reply_to = null }, roster = [], limitPerMin = RATE_LIMIT_PER_MIN) {
+    async createDecision({ creator, prompt, recipient = null, reply_to = null, room = null }, roster = [], limitPerMin = RATE_LIMIT_PER_MIN) {
       shaped(creator);
-      if (reply_to !== null && !rows.some((m) => m.id === reply_to)) throw new ReplyTargetError(reply_to);
+      const target = roomFor(room, reply_to);
       const cutoff = now() - 60_000;
       const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
-      const message = push({ sender: creator, recipient: notToSelf(creator, recipient), text: prompt, reply_to: reply_to ?? null });
+      const message = push({ sender: creator, recipient: notToSelf(creator, recipient), text: prompt, reply_to: reply_to ?? null, room: target });
       const row: DecisionRow = { id: newDecisionId(), message_id: message.id, creator, prompt, created_at: message.created_at, agreed_at: null };
       decisionRows.set(row.id, row);
       positionRows.set(positionKey(row.id, creator), { card_id: row.id, participant: creator, stance: 'agree', note: null, updated_at: message.created_at });
@@ -2043,26 +2289,31 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         recipient: null,
         text: decisionPositionText(stance, note, consensus),
         reply_to: row.message_id,
+        room: message.room,
       });
       return { status: 'ok' as const, decision: assembleDecision(row), message: copy(message), reply: copy(reply) };
     },
-    async listDecisions() {
+    async listDecisions(room = null) {
       return [...decisionRows.values()]
+        .filter((c) => messageInRoom(c.message_id, room))
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
         .map(assembleDecision);
     },
-    async setReadPosition(participant, upTo) {
+    async setReadPosition(participant, upTo, room = null) {
       shaped(participant);
-      if (!rows.some((m) => m.id === upTo)) throw new ReadError('not found');
-      const existing = readRows.get(participant);
+      const message = rows.find((m) => m.id === upTo);
+      if (!message) throw new ReadError('not found');
+      if (room !== null && room !== message.room) throw new RoomError('read elsewhere', room, { id: upTo, room: message.room });
+      const existing = readRows.get(readKey(participant, message.room));
       if (existing && existing.up_to >= upTo) return { ...existing };
-      const row: ReadRow = { participant, up_to: upTo, updated_at: timestamp() };
-      readRows.set(participant, row);
+      const row: ReadRow = { participant, room: message.room, up_to: upTo, updated_at: timestamp() };
+      readRows.set(readKey(participant, message.room), row);
       return { ...row };
     },
-    async listReads() {
+    async listReads(room = null) {
       return [...readRows.values()]
-        .sort((a, b) => a.participant.localeCompare(b.participant))
+        .filter((r) => room === null || r.room === room)
+        .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
         .map((r) => ({ ...r }));
     },
   };

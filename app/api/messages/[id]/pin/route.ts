@@ -18,5 +18,6 @@ export const POST = safe(async (request: Request, { params }: { params: Promise<
   const store = await getStore();
   const message = await store.setPinned(id, pinned);
   if (!message) return error(404, `No message #${id}.`);
-  return json({ message, pinned: await store.pinned() });
+  // The pinned list of the room the message is in, which is the list the caller is looking at.
+  return json({ message, pinned: await store.pinned(message.room) });
 });

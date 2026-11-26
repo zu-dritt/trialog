@@ -46,8 +46,8 @@ const must = <T>(v: T | null | undefined): T => { assert.ok(v); return v; };
 
 test('parseDecisionInput trims the prompt, accepts to and reply_to, and ignores spoofed identity', () => {
   const body = { prompt: '  Ship it?  ', participant: 'david', sender: 'claude', creator: 'david' };
-  assert.deepEqual(parseDecisionInput(body, THREE), { ok: true, prompt: 'Ship it?', recipient: null, replyTo: null });
-  assert.deepEqual(parseDecisionInput({ prompt: 'Q', to: '@claude', reply_to: 4 }, THREE), { ok: true, prompt: 'Q', recipient: 'claude', replyTo: 4 });
+  assert.deepEqual(parseDecisionInput(body, THREE), { ok: true, prompt: 'Ship it?', recipient: null, replyTo: null, room: null });
+  assert.deepEqual(parseDecisionInput({ prompt: 'Q', to: '@claude', reply_to: 4 }, THREE), { ok: true, prompt: 'Q', recipient: 'claude', replyTo: 4, room: null });
   assert.equal(parseDecisionInput(null, THREE).ok, false);
   assert.equal(parseDecisionInput({ prompt: '   ' }, THREE).ok, false);
   assert.equal(parseDecisionInput({ prompt: 'Q', to: 'mallory' }, THREE).ok, false);

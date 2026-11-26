@@ -23,8 +23,15 @@
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js wake set <https-url> [secret]     (register your wake-up target; secret from WAKE_SECRET if omitted, never printed)
 //   node scripts/hub.js wake show | wake test | wake clear [name] | wake list
-//   node scripts/hub.js wake [--since id] [--wait s] [--limit n] [--json]  (messages that should wake you)
+//   node scripts/hub.js wake [--since id] [--room id|all] [--wait s] [--limit n] [--json]  (messages that should wake you)
+//   node scripts/hub.js rooms [--json]                    (the rooms of this hub, and the newest message id in each)
+//   node scripts/hub.js rooms --create "Calm talk" [--id calm]
 //   node scripts/hub.js export > transcript.md
+//
+// Rooms: send, read, wait, search, poll, decision and export take --room <id>. Without it they
+// use the room "main", except that a reply goes to the room of the message it answers and search
+// looks in every room. read, wait, search and export also take --room all: every room at once.
+// `read` shows the room in square brackets when it is not main.
 //
 // `wait` blocks until a new message from someone else arrives (addressed to --to, default:
 // you or everyone), prints it and exits 0; exits 2 on timeout. Each `read`/`wait` records
@@ -46,7 +53,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--wait s] [--limit n] [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -98,6 +105,8 @@ function fmt(m) {
   const time = new Date(m.created_at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' });
   const to = m.recipient ? ` → ${label(m.recipient)}` : '';
   const pin = m.pinned_at ? ' 📌' : '';
+  // The room is shown when it is not main, so a hub with one room reads as it always did.
+  const room = m.room && m.room !== 'main' ? ` [${m.room}]` : '';
   const reply = m.reply_to ? ` ↳ #${m.reply_to}` : '';
   const images = (m.attachments || []).map((a) => `[image: ${a.id}, ${a.width}×${a.height}]\n`).join('');
   const poll = m.poll
@@ -117,7 +126,7 @@ function fmt(m) {
       }).join('')
     : '';
   const extra = images + poll + decision + (reactions ? `[reactions: ${reactions}]\n` : '');
-  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && extra ? '\n' : ''}${extra || '\n'}`;
+  return `#${m.id} [${time}]${room} ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && extra ? '\n' : ''}${extra || '\n'}`;
 }
 
 function fail(msg) {
@@ -171,6 +180,7 @@ async function main() {
     if (text === '-' || (!text && !images.length && !process.stdin.isTTY)) text = await readStdin();
     if (!text.trim() && !images.length) usage('send needs text or --attach');
     const body = opts.to ? { text, to: opts.to } : { text };
+    if (opts.room) body.room = opts.room;
     const replyTo = opts['reply-to'];
     if (replyTo !== undefined) {
       // Checked here, before any image is uploaded for a message that would be refused.
@@ -190,7 +200,8 @@ async function main() {
     const count = message.attachments?.length || 0;
     const withImages = count ? ` with ${count} image${count === 1 ? '' : 's'}` : '';
     const asReply = message.reply_to ? ` in reply to #${message.reply_to}` : '';
-    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${asReply}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
+    const inRoom = message.room && message.room !== 'main' ? ` in ${message.room}` : '';
+    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${inRoom}${asReply}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
     return;
   }
 
@@ -211,12 +222,12 @@ async function main() {
     if (opts['up-to'] !== undefined) {
       if (opts.peek) usage('read --peek cannot be combined with --up-to');
       if (!/^[1-9]\d{0,14}$/.test(opts['up-to'] || '')) usage('read --up-to needs a message id');
-      const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upTo: Number(opts['up-to']) }) })).json();
+      const data = await (await call('/api/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opts.room ? { upTo: Number(opts['up-to']), room: opts.room } : { upTo: Number(opts['up-to']) }) })).json();
       if (opts.json) console.log(JSON.stringify(data.read));
-      else console.log(`read up to #${data.read.up_to}`);
+      else console.log(`read up to #${data.read.up_to}${data.read.room && data.read.room !== 'main' ? ` in ${data.read.room}` : ''}`);
       return;
     }
-    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, markRead: opts.peek ? undefined : '1' })}`)).json();
+    const data = await (await call(`/api/messages${query({ since: opts.since, to: opts.to, limit: opts.limit, room: opts.room, markRead: opts.peek ? undefined : '1' })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
     else for (const m of data.messages) console.log(fmt(m));
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
@@ -227,7 +238,7 @@ async function main() {
   if (cmd === 'search') {
     const q = args.join(' ').trim();
     if (!q) usage('search needs at least one word, for example: search "storage images"');
-    const data = await (await call(`/api/messages${query({ q, to: opts.to, limit: opts.limit, decisions: opts.decisions ? '1' : undefined, pinned: opts.pinned ? '1' : undefined })}`)).json();
+    const data = await (await call(`/api/messages${query({ q, to: opts.to, limit: opts.limit, room: opts.room, decisions: opts.decisions ? '1' : undefined, pinned: opts.pinned ? '1' : undefined })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
     else for (const m of data.messages) console.log(fmt(m));
     // Newest first. The count goes to stderr, so stdout holds nothing but the messages.
@@ -243,12 +254,12 @@ async function main() {
     const markRead = opts.peek ? undefined : '1';
     if (since === undefined) {
       // Only find the watermark; this request is not a delivery, so it does not mark as read.
-      const data = await (await call('/api/messages?limit=1')).json();
+      const data = await (await call(`/api/messages${query({ limit: 1, room: opts.room })}`)).json();
       since = data.messages.at(-1)?.id ?? 0;
       me = data.me;
     }
     while (Date.now() < deadline) {
-      const data = await (await call(`/api/messages${query({ since, markRead })}`)).json();
+      const data = await (await call(`/api/messages${query({ since, room: opts.room, markRead })}`)).json();
       me = data.me;
       const target = opts.to ? opts.to.replace(/^@/, '').toLowerCase() : me;
       const hits = data.messages.filter((m) => m.sender !== me && (m.recipient === target || (!opts.to && m.recipient === null)));
@@ -318,6 +329,7 @@ async function main() {
     if (new Set(options).size !== options.length) fail('each poll option must be different');
     const body = { question, options };
     if (opts.to) body.to = opts.to;
+    if (opts.room) body.room = opts.room;
     const { message, poll } = await (await call('/api/polls', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).json();
@@ -377,7 +389,7 @@ async function main() {
     const { message } = await (await call('/api/decisions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify(opts.room ? { prompt, room: opts.room } : { prompt }),
     })).json();
     if (opts.json) console.log(JSON.stringify(message));
     else console.log(`decision ${message.decision?.id} as #${message.id}`);
@@ -404,6 +416,22 @@ async function main() {
     const data = await (await call('/api/participants')).json();
     if (opts.json) console.log(JSON.stringify(data));
     else for (const p of data.participants) console.log(`${p.name} (${p.kind})${p.name === data.me ? '  ← you' : ''}`);
+    return;
+  }
+
+  if (cmd === 'rooms') {
+    if (opts.create !== undefined) {
+      if (args.length) usage('rooms --create takes the name as its value: rooms --create "Calm talk" [--id calm]');
+      const body = opts.id ? { name: opts.create, id: opts.id } : { name: opts.create };
+      const { room } = await (await call('/api/rooms', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })).json();
+      console.log(opts.json ? JSON.stringify(room) : `room ${room.id} created: ${room.name}`);
+      return;
+    }
+    const data = await (await call('/api/rooms')).json();
+    if (opts.json) console.log(JSON.stringify(data.rooms));
+    else for (const r of data.rooms) console.log(`${r.id}  ${r.name}  (newest #${r.last_id})`);
     return;
   }
 
@@ -462,8 +490,8 @@ async function main() {
       else console.log(data.cleared ? 'wake-up target cleared' : 'no wake-up target was set');
       return;
     }
-    // wake [--since id] [--wait s] [--limit n] [--json]: messages that should wake you.
-    const data = await (await call(`/api/wake${query({ since: opts.since, wait: opts.wait, limit: opts.limit })}`)).json();
+    // wake [--since id] [--room id|all] [--wait s] [--limit n] [--json]: messages that should wake you.
+    const data = await (await call(`/api/wake${query({ since: opts.since, wait: opts.wait, limit: opts.limit, room: opts.room })}`)).json();
     if (opts.json) console.log(JSON.stringify(data.messages));
     else {
       if (!data.messages.length) console.error('nothing to wake you');
@@ -475,7 +503,7 @@ async function main() {
   }
 
   if (cmd === 'export') {
-    process.stdout.write(await (await call('/api/export')).text());
+    process.stdout.write(await (await call(`/api/export${query({ room: opts.room })}`)).text());
     return;
   }
 

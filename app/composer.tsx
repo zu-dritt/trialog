@@ -89,6 +89,12 @@ export const MAX_DRAFT_CHARS = 20_000;
 const MAX_STORED_CHARS = 3 * MAX_DRAFT_CHARS;
 /** One entry per participant, so a second person at the same browser gets their own draft. */
 export const draftKey = (participant: string): string => `trialogDraft:${participant}`;
+/**
+ * Whose draft it is, and for which room: each room has its own unsent message. For `main` this is
+ * the participant alone, so a draft from before rooms is still found. A name can't contain ":",
+ * so no participant's entry can be mistaken for another one's room.
+ */
+export const draftScope = (participant: string, room: string): string => (room === 'main' ? participant : `${participant}:${room}`);
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 

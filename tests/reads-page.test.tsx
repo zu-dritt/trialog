@@ -13,9 +13,9 @@ const PARTICIPANTS: Participant[] = [
 
 test('initials appear on the last message someone else has read, not on the viewer\'s own', () => {
   const reads: ReadPosition[] = [
-    { participant: 'grok', up_to: 9, updated_at: '2026-11-26T09:00:00.000Z' },
-    { participant: 'david', up_to: 9, updated_at: '2026-11-26T09:00:00.000Z' },
-    { participant: 'claude', up_to: 8, updated_at: '2026-11-26T09:00:00.000Z' },
+    { participant: 'grok', room: 'main', up_to: 9, updated_at: '2026-11-26T09:00:00.000Z' },
+    { participant: 'david', room: 'main', up_to: 9, updated_at: '2026-11-26T09:00:00.000Z' },
+    { participant: 'claude', room: 'main', up_to: 8, updated_at: '2026-11-26T09:00:00.000Z' },
   ];
   const html = renderToStaticMarkup(<ReadReceipts messageId={9} reads={reads} participants={PARTICIPANTS} me="david" />);
   assert.match(html, /Grok has read up to here/);
@@ -38,6 +38,6 @@ test('the unseen flag appears after two minutes when no addressed agent has read
   const shown = renderToStaticMarkup(<UnseenFlag message={message} reads={[]} participants={PARTICIPANTS} now={now} />);
   assert.ok(shown.includes('⏰ not seen by Grok yet'), shown);
   assert.ok(shown.includes('title="⏰ not seen by Grok yet"'), shown);
-  const seen = renderToStaticMarkup(<UnseenFlag message={message} reads={[{ participant: 'grok', up_to: 11, updated_at: message.created_at }]} participants={PARTICIPANTS} now={now} />);
+  const seen = renderToStaticMarkup(<UnseenFlag message={message} reads={[{ participant: 'grok', room: 'main', up_to: 11, updated_at: message.created_at }]} participants={PARTICIPANTS} now={now} />);
   assert.equal(seen, '');
 });

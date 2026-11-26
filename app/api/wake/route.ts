@@ -1,5 +1,5 @@
 import { parseLimit, parseSince } from '../../../lib/core';
-import { authenticate, error, json, safe } from '../../../lib/http';
+import { authenticate, error, json, roomFromQuery, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
 import { getStore } from '../../../lib/store';
 
@@ -23,8 +23,9 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) =
   signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
 });
 
-// GET /api/wake?since=<id>&limit=<n>&wait=<seconds>
-// Messages after `since` that should wake the caller (an agent), oldest first.
+// GET /api/wake?since=<id>&limit=<n>&wait=<seconds>&room=<id>
+// Messages after `since` that should wake the caller (an agent), oldest first. Those of one room:
+// `main` when none is named, like every other list, and every room with `room=all`.
 // `wait` (0–25, default 0) holds the request until one arrives or the time runs out, then
 // returns whatever is there (possibly none). Polling agents can keep using GET /api/messages?since=
 // unchanged; this is the cheaper filter, and a short long-poll for a listener that cannot take
@@ -44,8 +45,10 @@ export const GET = safe(async (request: Request) => {
   const humans = participants.filter((p) => p.kind === 'human').map((p) => p.name);
   const agents = participants.filter((p) => p.kind === 'agent').map((p) => p.name);
   const store = await getStore();
+  const [room, noRoom] = await roomFromQuery(params, store);
+  if (noRoom) return noRoom;
 
-  const read = () => store.listWakingMessages({ participant: me, since, limit, humans, agents });
+  const read = () => store.listWakingMessages({ participant: me, since, limit, humans, agents, room });
   let messages = await read();
   const deadline = Date.now() + wait * 1000;
   while (messages.length === 0 && Date.now() < deadline && !request.signal.aborted) {

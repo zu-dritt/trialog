@@ -38,18 +38,19 @@ test('the preview is a short single line, cut with an ellipsis when it is long',
 });
 
 test('the payload names the message, a short preview, and keeps first_id/last_id/count for older receivers', () => {
-  const payload = wakeupPayload({ id: 41, sender: 'ana', recipient: 'scout', text: 'Line one.\nLine two.' }, ['ana', 'scout', 'quill'], 1795620000);
+  const payload = wakeupPayload({ id: 41, sender: 'ana', recipient: 'scout', text: 'Line one.\nLine two.', room: 'calm' }, ['ana', 'scout', 'quill'], 1795620000);
   assert.deepEqual(payload, {
     id: 41,
     sender: 'ana',
     recipients: ['scout'],
     preview: 'Line one. Line two.',
+    room: 'calm',
     first_id: 41,
     last_id: 41,
     count: 1,
     sent_at: 1795620000,
   });
-  const all = wakeupPayload({ id: 7, sender: 'scout', recipient: null, text: 'hi' }, ['ana', 'scout', 'quill'], 10);
+  const all = wakeupPayload({ id: 7, sender: 'scout', recipient: null, text: 'hi', room: 'main' }, ['ana', 'scout', 'quill'], 10);
   assert.deepEqual(all.recipients, ['ana', 'scout', 'quill']);
 });
 

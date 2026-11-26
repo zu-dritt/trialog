@@ -1,7 +1,8 @@
 // Small helpers for the route handlers. Plain Web APIs only (Request/Response),
 // so the handlers can be called directly from the tests.
-import { senderFromAuth, type Sender } from './core';
+import { ALL_ROOMS, MAIN_ROOM, ROOM_ID_HINT, parseRoomId, senderFromAuth, type Room, type Sender } from './core';
 import { ConfigError, holdsListedToken } from './participants';
+import { RoomError, type Store } from './store';
 
 const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
 
@@ -46,6 +47,29 @@ export function authenticate(request: Request): [Sender, null] | [null, Response
   if (sender) return [sender, null];
   return [null, error(401, 'Missing or wrong token. Send "Authorization: Bearer <your token>".', { 'WWW-Authenticate': 'Bearer' })];
 }
+
+/**
+ * The room a query names with `?room=<id>`, as [room, null]; null stands for every room, which a
+ * reader asks for with `?room=all`. Without `room` it is `fallback`: `main` for most calls, so a
+ * client from before rooms keeps working. [null, error Response] when the value can't be a room
+ * id (400) or no such room exists (404).
+ */
+export async function roomFromQuery(params: URLSearchParams, store: Store, fallback: string | null = MAIN_ROOM): Promise<[string | null, null] | [null, Response]> {
+  const id = parseRoomId(params.get('room'));
+  if (id === undefined) return [null, error(400, ROOM_ID_HINT)];
+  if (id === null) return [fallback, null];
+  if (id === ALL_ROOMS) return [null, null];
+  if (id !== MAIN_ROOM && !(await store.getRoom(id))) return [null, roomError(new RoomError('not found', id))];
+  return [id, null];
+}
+
+/** A room that can't be used or created, as an answer: 404 when it does not exist, 409 otherwise. */
+export function roomError(e: RoomError): Response {
+  return error(e.reason === 'not found' ? 404 : 409, e.message);
+}
+
+/** What `main` is when the store is not asked: its id and name, for the title of an export. */
+export const MAIN: Pick<Room, 'id' | 'name'> = { id: MAIN_ROOM, name: 'Main' };
 
 /** Reads a JSON body of at most maxBytes. Returns [body, null] or [null, error Response]. */
 export async function readJson(request: Request, maxBytes: number): Promise<[unknown, null] | [null, Response]> {
