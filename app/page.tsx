@@ -14,8 +14,8 @@ import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { DecisionCardView, DecisionComposer, withDecisions } from './decisions';
 import {
-  MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage, quoteNotice,
-  pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
+  MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteCommentBox, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
+  composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -409,21 +409,57 @@ export default function Page() {
 
   // Quote a selection: text selected inside one message becomes a quote chip above the message box.
   const [quotable, clearQuotable] = useQuotableSelection();
-  /** Quotes `selected` from message `m`, or the whole message when `selected` is null. */
-  const addQuote = useCallback((m: Message, selected: string | null) => {
+  // A quote that is waiting for its comment. `key` null: a new quote, not a chip yet. `at`: the
+  // box floats at that spot (the selection, or a Quote button); without it the box stands above
+  // the message box, where the comment of a chip is changed.
+  const [commenting, setCommenting] = useState<{ quote: Quote; key: number | null; at: { top: number; left: number } | null } | null>(null);
+  /**
+   * Starts a quote of `selected` from message `m`, or of the whole message when `selected` is
+   * null: the small box opens at `at`, where the writer can add a comment, and Enter there makes
+   * the chip.
+   */
+  const startQuote = useCallback((m: Message, selected: string | null, at: { top: number; left: number }) => {
     const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
     const text = selected ?? source;
     if (text.trim() === '') return;
-    const chip: QuoteChip = { key: nextQuoteKey.current++, author: displayName(m.sender), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
-    const result = withQuote(quotesRef.current, chip);
-    setNotice(quoteNotice(result.refused));
-    quotesRef.current = result.quotes; // so a second quote right away counts this one
-    setQuotes(result.quotes);
+    const quote: Quote = { author: displayName(m.sender), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
     clearQuotable();
-    boxRef.current?.focus(); // the box stays free for what the writer wants to say
+    // The same words are a chip already: its comment opens, instead of a second chip.
+    const chip = quotesRef.current.find((q) => sameQuote(q, quote));
+    if (!chip && quotesRef.current.length >= MAX_QUOTES) { setNotice(quoteNotice('full')); return; }
+    setNotice('');
+    setCommenting(chip ? { quote: chip, key: chip.key, at } : { quote, key: null, at });
   }, [clearQuotable]);
+  /** The comment box was confirmed: a new quote becomes a chip, a chip gets its comment changed. */
+  const finishQuote = (comment: string) => {
+    const open = commenting;
+    if (!open) return;
+    setCommenting(null);
+    if (open.key === null) {
+      const result = withQuote(quotesRef.current, withComment<QuoteChip>({ ...open.quote, key: nextQuoteKey.current++ }, comment));
+      setNotice(quoteNotice(result.refused));
+      quotesRef.current = result.quotes; // so a second quote right away counts this one
+      setQuotes(result.quotes);
+    } else {
+      const next = quotesRef.current.map((q) => (q.key === open.key ? withComment(q, comment) : q));
+      quotesRef.current = next;
+      setQuotes(next);
+    }
+    boxRef.current?.focus(); // the box stays free for what the writer wants to say
+  };
+  const cancelQuote = (how: 'escape' | 'outside') => {
+    setCommenting(null);
+    // After Escape the cursor goes back to the message box. A press elsewhere keeps what it pressed.
+    if (how === 'escape') boxRef.current?.focus();
+  };
+  /** Opens the comment of a chip, above the message box. */
+  const editQuote = (key: number) => {
+    const chip = quotesRef.current.find((q) => q.key === key);
+    if (chip) setCommenting({ quote: chip, key, at: null });
+  };
   const removeQuote = (key: number) => {
     setQuotes((list) => list.filter((q) => q.key !== key));
+    setCommenting((open) => (open?.key === key ? null : open));
     boxRef.current?.focus();
   };
   const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
@@ -434,7 +470,8 @@ export default function Page() {
   // the server's and counts all of it, so the writer is told before sending, not after.
   const composed = composeMessage(quotes, draft);
   const overLimit = tooLong(composed, quotes.length);
-  const canSend = !sending && !uploading && !overLimit && (draft.trim() !== '' || ready.length > 0 || quotes.length > 0);
+  // While a comment is being written it is not part of the message yet, so sending waits for it.
+  const canSend = !sending && !uploading && !overLimit && !commenting && (draft.trim() !== '' || ready.length > 0 || quotes.length > 0);
 
   const send = async () => {
     if (!canSend) return;
@@ -444,10 +481,11 @@ export default function Page() {
     try {
       const sentQuotes = quotes; // the quotes that go out with this message, as they are right now
       const body: { text: string; to?: string; attachments?: string[]; reply_to?: number } = { text: composed };
-      // "@name" and "DECISION:" at the start of what was typed mean what they always mean. The
-      // server looks for them at the start of the message, where the quotes now stand, so the
-      // page asks for the recipient here, and for the pin below.
-      const typed = sentQuotes.length ? typedIntent(draft, names) : { to: null, decision: false };
+      // The server looks for "@name" and "DECISION:" at the start of the message, where a quote
+      // now stands. So the page reads what the writer meant (composedIntent: "@name" only from
+      // the message box, never from a quote or a comment) and asks for the recipient here, and
+      // for the pin below.
+      const typed = sentQuotes.length ? composedIntent(sentQuotes, draft, names) : { to: null, decision: false };
       if (to) body.to = to;
       else if (typed.to) body.to = typed.to;
       if (replyTo) body.reply_to = replyTo.id;
@@ -719,7 +757,16 @@ export default function Page() {
         </section>
       )}
 
-      {quotable && quotedMessage && <QuoteSelectionButton at={quotable} onQuote={() => addQuote(quotedMessage, quotable.text)} />}
+      {quotable && quotedMessage && !commenting && (
+        <QuoteSelectionButton at={quotable} onQuote={() => startQuote(quotedMessage, quotable.text, { top: quotable.top, left: quotable.left })} />
+      )}
+      {/* A new quote gets its comment right where it was picked. */}
+      {commenting?.at && (
+        <QuoteCommentBox
+          key={`${commenting.quote.messageId}:${commenting.quote.kind}:${commenting.quote.text}`}
+          quote={commenting.quote} at={commenting.at} editing={commenting.key !== null} onSubmit={finishQuote} onCancel={cancelQuote}
+        />
+      )}
 
       <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.map((m) => {
@@ -759,7 +806,7 @@ export default function Page() {
                     <QuoteMessageButton
                       messageId={m.id}
                       // With text selected in this message, the button quotes that text; otherwise the whole message.
-                      onQuote={() => { const pick = pickSelection(window.getSelection()); addQuote(m, pick?.messageId === m.id ? pick.text : null); }}
+                      onQuote={(at) => { const pick = pickSelection(window.getSelection()); startQuote(m, pick?.messageId === m.id ? pick.text : null, at); }}
                       className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
                     />
                     <button
@@ -824,9 +871,13 @@ export default function Page() {
         {(replyTo || quotes.length > 0 || drafts.length > 0) && (
           <ChipRow>
             {replyTo && <ReplyingTo parent={replyTo} author={displayName(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
-            <QuoteChips quotes={quotes} onRemove={removeQuote} />
+            <QuoteChips quotes={quotes} onRemove={removeQuote} onEdit={editQuote} />
             <DraftChips drafts={drafts} onRemove={removeDraft} />
           </ChipRow>
+        )}
+        {/* The comment of a chip is changed in place, above the message box. */}
+        {commenting && !commenting.at && (
+          <QuoteCommentBox key={commenting.key} quote={commenting.quote} editing onSubmit={finishQuote} onCancel={cancelQuote} />
         )}
         {pollOpen && (
           <PollComposer
