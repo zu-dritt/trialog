@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Author, Message, Sender } from '../lib/core';
+import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
+import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, type Draft } from './attachments';
 import { MessageBody } from './markdown';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -71,9 +73,16 @@ export default function Page() {
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
+  const [drafts, setDrafts] = useState<Draft[]>([]); // images waiting in the composer
+  const [dragging, setDragging] = useState(false);
   const lastId = useRef(0);
   const listRef = useRef<HTMLElement>(null);
   const stick = useRef(true);
+  const nextDraftKey = useRef(1);
+  const draftsRef = useRef<Draft[]>([]);
+  const dragDepth = useRef(0);
+  const fileInput = useRef<HTMLInputElement>(null);
+  draftsRef.current = drafts;
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); }, []);
 
@@ -90,6 +99,65 @@ export default function Page() {
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
     return res;
   }, [token, forgetToken]);
+
+  const loadImage = useImageLoader(token);
+
+  // Release the local previews when the page goes away.
+  useEffect(() => () => { for (const d of draftsRef.current) URL.revokeObjectURL(d.preview); }, []);
+
+  /**
+   * Adds images to the composer: from the clipboard, a drop or the file picker. Each one gets a
+   * preview chip at once and is uploaded in the background (shrunk first when it is over 4 MB).
+   */
+  const addImages = useCallback((files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (!images.length) return;
+    const accepted = images.filter((f) => ACCEPT.split(',').includes(f.type));
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - draftsRef.current.length;
+    const taken = accepted.slice(0, Math.max(0, room));
+    if (accepted.length < images.length) setNotice('Only PNG, JPEG and WebP images can be attached.');
+    else if (taken.length < accepted.length) setNotice(`A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} images.`);
+    else setNotice('');
+
+    const added: Draft[] = taken.map((file) => ({ key: nextDraftKey.current++, name: file.name || 'image', preview: URL.createObjectURL(file), state: 'uploading' }));
+    if (!added.length) return;
+    draftsRef.current = [...draftsRef.current, ...added]; // so a second paste right away counts these
+    setDrafts((list) => [...list, ...added]);
+    const update = (key: number, change: Partial<Draft>) => setDrafts((list) => list.map((d) => (d.key === key ? { ...d, ...change } : d)));
+    added.forEach((d, i) => {
+      void (async () => {
+        try {
+          const blob = await prepareForUpload(taken[i]);
+          const res = await api('/api/attachments', { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+          update(d.key, { state: 'ready', attachment: (await res.json()) as Attachment });
+        } catch (e) {
+          update(d.key, { state: 'failed', error: errorMessage(e) === 'unauthorized' ? 'not signed in' : errorMessage(e) });
+        }
+      })();
+    });
+  }, [api]);
+
+  const removeDraft = (key: number) => {
+    // An upload that is removed here is never linked; the server deletes it within the hour.
+    setDrafts((list) => list.filter((d) => {
+      if (d.key === key) URL.revokeObjectURL(d.preview);
+      return d.key !== key;
+    }));
+  };
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => { if (hasFiles(e)) { e.preventDefault(); dragDepth.current += 1; setDragging(true); } },
+    onDragOver: (e: React.DragEvent) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } },
+    onDragLeave: (e: React.DragEvent) => { if (hasFiles(e)) { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); } },
+    onDrop: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); // otherwise the browser leaves the page to show the dropped file
+      dragDepth.current = 0;
+      setDragging(false);
+      addImages(Array.from(e.dataTransfer.files));
+    },
+  };
 
   // Live updates. The page reads /api/stream (new messages and pin changes pushed by the server).
   // If the stream can't be opened or breaks, it polls /api/messages instead and tries the stream
@@ -184,21 +252,30 @@ export default function Page() {
     if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
+  const uploading = drafts.some((d) => d.state === 'uploading');
+  const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
+  const canSend = !sending && !uploading && (draft.trim() !== '' || ready.length > 0);
+
   const send = async () => {
-    if (!draft.trim() || sending) return;
+    if (!canSend) return;
     setSending(true);
     setNotice('');
     try {
+      const body: { text: string; to?: string; attachments?: string[] } = { text: draft };
+      if (to) body.to = to;
+      if (ready.length) body.attachments = ready.map((d) => d.attachment!.id);
       const res = await api('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(to ? { text: draft, to } : { text: draft }),
+        body: JSON.stringify(body),
       });
       const { message } = (await res.json()) as { message: Message };
       // Don't move lastId forward here: the next poll picks up anything sent in between.
       setMessages((list) => merge(list, [message]));
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
       setDraft('');
+      for (const d of drafts) URL.revokeObjectURL(d.preview);
+      setDrafts([]);
       stick.current = true;
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
@@ -243,7 +320,7 @@ export default function Page() {
   let lastDay = '';
 
   return (
-    <div className="mx-auto flex h-screen max-w-[1000px] flex-col">
+    <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
       <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
@@ -260,7 +337,7 @@ export default function Page() {
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
                 <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
-                <span>{m.text.trim().split('\n')[0].slice(0, 160)}</span>
+                <span>{firstLine(m, 160)}</span>
               </li>
             ))}
           </ul>
@@ -299,9 +376,12 @@ export default function Page() {
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
-                  <div className="md wrap-anywhere">
-                    <MessageBody text={m.text} />
-                  </div>
+                  {m.text.trim() !== '' && (
+                    <div className="md wrap-anywhere">
+                      <MessageBody text={m.text} />
+                    </div>
+                  )}
+                  <MessageImages attachments={m.attachments ?? []} load={loadImage} />
                 </div>
               </article>
             </div>
@@ -309,10 +389,13 @@ export default function Page() {
         })}
       </main>
 
-      <footer className="border-t border-line px-4 py-2.5">
+      <footer className={`border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
+        {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
-        <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
+        <DraftChips drafts={drafts} onRemove={removeDraft} />
+        {/* On a narrow screen the message box takes the first row and the controls sit below it. */}
+        <form className="flex flex-wrap items-end gap-2 sm:flex-nowrap" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={`${FIELD} mr-auto sm:mr-0`}>
             <option value="">to everyone</option>
             <option value="grok">to Grok</option>
             <option value="claude">to Claude</option>
@@ -321,12 +404,27 @@ export default function Page() {
           <textarea
             rows={2}
             value={draft}
-            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin."
+            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
+              if (!files.length) return; // plain text: paste as usual
+              e.preventDefault();
+              addImages(files);
+            }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            className={`${FIELD} max-h-[40vh] min-h-[42px] flex-1 resize-y`}
+            className={`${FIELD} order-first max-h-[40vh] min-h-[42px] flex-1 basis-full resize-y sm:order-none sm:basis-auto`}
           />
-          <button type="submit" className={BUTTON} disabled={sending || !draft.trim()}>Send</button>
+          <input
+            ref={fileInput} type="file" accept={ACCEPT} multiple hidden
+            onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+          <button
+            type="button" className={BUTTON} onClick={() => fileInput.current?.click()}
+            disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+            title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
+          >Image</button>
+          <button type="submit" className={BUTTON} disabled={!canSend}>{uploading ? 'Uploading…' : 'Send'}</button>
         </form>
       </footer>
     </div>

@@ -1,24 +1,18 @@
 // Pure logic shared by the API routes, the store and the tests.
 // No Next.js imports here, so Vitest can load it directly.
 import { timingSafeEqual } from 'node:crypto';
+import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachment } from './shared';
+
+// The image limits and types live in lib/shared.ts, which the page can load too.
+export {
+  IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine,
+  type Attachment, type ImageType,
+} from './shared';
 
 /** The three people who can post. `hub` is only used for the seeded welcome message. */
 export const SENDERS = ['grok', 'claude', 'david'] as const;
 export type Sender = (typeof SENDERS)[number];
 export type Author = Sender | 'hub';
-
-/** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
-export type ImageType = (typeof IMAGE_TYPES)[number];
-
-/** An image attached to a message. The bytes are fetched from GET /api/attachments/<id>. */
-export interface Attachment {
-  id: string;
-  content_type: ImageType;
-  width: number;
-  height: number;
-  bytes: number;
-}
 
 export interface Message {
   id: number;
@@ -39,8 +33,6 @@ export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
 export const MIN_TOKEN_LENGTH = 16;
 
-export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4 MB per image, on every path (upload and storage)
-export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 export const UPLOADS_PER_HOUR = 20; // image uploads per sender per rolling hour
 export const ORPHAN_MAX_AGE_MS = 60 * 60 * 1000; // an upload that no message links within this time is deleted
 /** Ids look like att_3f9c… (24 hex digits). The pattern is a little wider so the format can grow. */
@@ -163,15 +155,6 @@ export function formatTime(iso: string): string {
 function heading(m: Message): string {
   const to = m.recipient ? ` → ${NAMES[m.recipient] ?? m.recipient}` : '';
   return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}`;
-}
-
-/** How an image appears in the export and in the CLI: "[image: att_…, 1170×2532]". */
-export const attachmentLabel = (a: Pick<Attachment, 'id' | 'width' | 'height'>): string => `[image: ${a.id}, ${a.width}×${a.height}]`;
-
-/** The first line of a message, for the list of decisions. An image-only message shows its images instead. */
-export function firstLine(m: Pick<Message, 'text' | 'attachments'>, max: number): string {
-  const line = m.text.trim().split('\n')[0].slice(0, max);
-  return line || (m.attachments ?? []).map(attachmentLabel).join(' ');
 }
 
 /** Builds the Markdown transcript: pinned decisions first, then every message in order. */
