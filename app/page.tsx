@@ -10,7 +10,7 @@ import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
-import { BUILD_ID, isOtherBuild } from '../lib/build';
+import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../lib/build';
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
 import { PaneRoomBar, SplitToggle, useSplitFits } from './split-ui';
 import { TourButton, TourPanel, useTour } from './tour';
@@ -334,6 +334,10 @@ export default function Page() {
           onHeard={onLeadHeard}
           statusBar={statusBar}
         />
+      )}
+      {/* Which version this is, in words people remember: «Trialog v0.3 · build 51». */}
+      {buildLabel(VERSION, BUILD_NUMBER) && (
+        <div className="shrink-0 px-4 pb-1 text-right text-[11px] text-muted">{buildLabel(VERSION, BUILD_NUMBER)}</div>
       )}
     </div>
   );
