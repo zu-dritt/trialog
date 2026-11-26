@@ -4,7 +4,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { DraftChips, MessageImages, type Draft } from '../app/attachments';
+import { DraftChips, MessageImages, fetchImage, withoutSent, type Draft } from '../app/attachments';
 import { DOWNSIZE_LONG_EDGE, fitWithin, firstLine, type Attachment } from '../lib/shared';
 
 const shot: Attachment = { id: 'att_0123456789abcdef01234567', content_type: 'image/png', width: 1170, height: 2532, bytes: 184322 };
@@ -55,4 +55,40 @@ test('firstLine names the images of a message that has no text', () => {
   assert.equal(firstLine({ text: '  DECISION: go\nmore', attachments: [shot] }, 160), 'DECISION: go');
   assert.equal(firstLine({ text: '', attachments: [shot] }, 160), '[image: att_0123456789abcdef01234567, 1170×2532]');
   assert.equal(firstLine({ text: '' }, 160), '', 'a message from a server that does not send the field yet');
+});
+
+test('an image request that answers 401 sends the reader back to the token prompt', async () => {
+  const calls: { url: string; authorization: string | null }[] = [];
+  const answering = (status: number, body = 'x') => (async (url: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), authorization: new Headers(init?.headers).get('authorization') });
+    return new Response(body, { status });
+  }) as typeof fetch;
+  let forgotten = 0;
+  const forget = () => { forgotten += 1; };
+
+  await assert.rejects(fetchImage(shot.id, 'a-token-that-stopped-working', forget, answering(401)), /unauthorized/);
+  assert.equal(forgotten, 1, 'the page is told, as it is when a message request gets 401');
+
+  // Any other failure is just a thumbnail that did not load: the token is kept.
+  for (const status of [404, 429, 500]) await assert.rejects(fetchImage(shot.id, 'good-token', forget, answering(status)), new RegExp(`HTTP ${status}`));
+  assert.equal(forgotten, 1);
+
+  const blob = await fetchImage(shot.id, 'good-token', forget, answering(200, 'image bytes'));
+  assert.equal(await blob.text(), 'image bytes');
+  assert.equal(forgotten, 1);
+  assert.deepEqual(calls.at(-1), { url: `/api/attachments/${shot.id}`, authorization: 'Bearer good-token' }, 'the token travels in the header, never in the address');
+});
+
+test('after a send, only the images that went out leave the composer', () => {
+  const draft = (key: number, state: Draft['state'] = 'ready'): Draft => ({ key, name: `${key}.png`, preview: `blob:local-${key}`, state, attachment: state === 'ready' ? shot : undefined });
+  const sent = [draft(1), draft(2)];
+  // While the message was on its way, a third image was dropped and a fourth is still uploading.
+  const now = [...sent, draft(3), draft(4, 'uploading')];
+  assert.deepEqual(withoutSent(now, sent).map((d) => d.key), [3, 4]);
+  assert.deepEqual(withoutSent(sent, sent), [], 'nothing was added: the composer is empty, as before');
+  assert.deepEqual(withoutSent([draft(2), draft(5)], sent).map((d) => d.key), [5], 'a sent image that was already removed by hand is no problem');
+  // An upload that failed before the send did not go out, so it stays where the reader can see it.
+  const failed = draft(6, 'failed');
+  assert.deepEqual(withoutSent([...sent, failed], sent), [failed]);
+  assert.deepEqual(withoutSent(now, []).map((d) => d.key), [1, 2, 3, 4], 'a text-only message takes no image with it');
 });
