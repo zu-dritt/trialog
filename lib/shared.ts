@@ -20,6 +20,26 @@ export interface Participant {
   name: Sender;
   kind: ParticipantKind;
   color: number;
+  /**
+   * How the participant is shown: the third part of their PARTICIPANTS entry, or else their name
+   * with a capital ("grok" → "Grok"). Only for showing: the name stays the id everywhere (tokens,
+   * the sender of a message, "@name", the API, the database).
+   */
+  label?: string;
+}
+
+/** A label has 1 to 24 characters: letters, digits, spaces and "-", and starts and ends with a letter or digit. */
+export const LABEL_MAX_LENGTH = 24;
+const LABEL_PATTERN = /^[\p{L}\p{N}](?:[\p{L}\p{N} -]*[\p{L}\p{N}])?$/u;
+/** Whether a label can be used. */
+export const validLabel = (label: string): boolean => LABEL_PATTERN.test(label) && [...label].length <= LABEL_MAX_LENGTH;
+
+/**
+ * How a name is shown on the page and in hub.js: the participant's label when the hub gives one,
+ * otherwise the name with a capital. Also right for the hub and for former participants, who have no label.
+ */
+export function labelOf(name: string, participants: readonly Pick<Participant, 'name' | 'label'>[]): string {
+  return participants.find((p) => p.name === name)?.label || displayName(name);
 }
 
 /**
@@ -289,8 +309,8 @@ export function unseenAgents(
 }
 
 /** "Grok", "Grok and Claude", "Grok, Claude and Quill-2". */
-export function joinNames(names: readonly string[]): string {
-  const shown = names.map(displayName);
+export function joinNames(names: readonly string[], participants: readonly Pick<Participant, 'name' | 'label'>[] = []): string {
+  const shown = names.map((name) => labelOf(name, participants));
   if (shown.length <= 1) return shown[0] ?? '';
   if (shown.length === 2) return `${shown[0]} and ${shown[1]}`;
   return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
@@ -323,7 +343,7 @@ export function unseenFlagText(
 ): string | null {
   if (!unseenByAgents(message, reads, participants, now)) return null;
   const names = unseenAgents(message, reads, participants, now);
-  return names.length ? `⏰ not seen by ${joinNames(names)} yet` : UNSEEN_LABEL;
+  return names.length ? `⏰ not seen by ${joinNames(names, participants)} yet` : UNSEEN_LABEL;
 }
 
 /** Merge incoming read positions into a list, never moving a participant backwards. */

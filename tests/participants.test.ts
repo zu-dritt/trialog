@@ -33,10 +33,10 @@ function configError(fn: () => unknown): ConfigError {
 
 test('a well-formed setting gives the participants in order, with a colour each', () => {
   assert.deepEqual(parseParticipants(FOUR), [
-    { name: 'ana-maria', kind: 'human', color: 0 },
-    { name: 'ben', kind: 'human', color: 1 },
-    { name: 'scout', kind: 'agent', color: 2 },
-    { name: 'quill-2', kind: 'agent', color: 3 },
+    { name: 'ana-maria', kind: 'human', color: 0, label: 'Ana-Maria' },
+    { name: 'ben', kind: 'human', color: 1, label: 'Ben' },
+    { name: 'scout', kind: 'agent', color: 2, label: 'Scout' },
+    { name: 'quill-2', kind: 'agent', color: 3, label: 'Quill-2' },
   ]);
   // Spaces around an entry or around the colon are fine.
   assert.deepEqual(parseParticipants(' ana : human ,  scout:agent ').map((p) => p.name), ['ana', 'scout']);
@@ -47,12 +47,45 @@ test('a well-formed setting gives the participants in order, with a colour each'
   assert.equal(parseParticipants(`${'n'.repeat(24)}:human,b:agent`)[0].name.length, 24);
 });
 
+test('an entry may add a label to show instead of the name; the name stays the id', () => {
+  const roster = parseParticipants('grok:agent,claude:agent,david:human:Orchestrator');
+  assert.deepEqual(roster.map((p) => [p.name, p.label]), [['grok', 'Grok'], ['claude', 'Claude'], ['david', 'Orchestrator']], 'without a label: the name with a capital, as today');
+  // Letters (also with accents), digits, spaces and "-"; spaces around the label are dropped.
+  assert.equal(parseParticipants('ana:human: Büro 2 - Leitung ,ben:agent')[0].label, 'Büro 2 - Leitung');
+  assert.equal(parseParticipants(`ana:human:${'x'.repeat(24)},ben:agent`)[0].label?.length, 24);
+  assert.equal(parseParticipants('ana:human:7,ben:agent')[0].label, '7');
+  // Too long, characters that are not allowed, or empty.
+  const bad: [string, RegExp][] = [
+    [`ana:human:${'x'.repeat(25)},ben:agent`, /entry 1 \("ana"\) has a label that can't be used.*1 to 24 characters/],
+    ['ana:human:Or<b>chestrator,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:Orchestrator!,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:Ana_Maria,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:-Ana,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:   ,ben:agent', /entry 1 \("ana"\) has a label that can't be used/],
+    ['ana:human:Lead,ben:agent:lead', /gives "ana" a label that "ben" is shown with too/],
+    ['ana:human:Ben,ben:agent', /"ana" a label that "ben" is shown with too/],
+  ];
+  for (const [value, expected] of bad) assert.match(configError(() => parseParticipants(value)).message, expected, value);
+  // The error names the entry, never the label itself: it may hold anything.
+  assert.ok(!configError(() => parseParticipants('ana:human:s3cr3t<x>,ben:agent')).message.includes('s3cr3t'));
+  // The token is still the name's, and "@name" still addresses by name.
+  assert.equal(tokenEnvName('david'), 'DAVID_TOKEN');
+  const env = { PARTICIPANTS: 'grok:agent,david:human:Orchestrator', GROK_TOKEN: 'g'.repeat(20), DAVID_TOKEN: 'd'.repeat(20) };
+  assert.equal(senderFromAuth(`Bearer ${'d'.repeat(20)}`, env), 'david');
+  const addressed = parseMessageInput({ text: '@david look' }, ['grok', 'david']);
+  assert.equal(addressed.ok && addressed.recipient, 'david');
+  assert.equal(parseRecipient('orchestrator', ['grok', 'david']), undefined, 'the label is not a name to address');
+  // The welcome text of a new hub names the label.
+  assert.match(welcomeText(roster), /^\*\*Welcome to Trialog\.\*\* Grok, Claude and Orchestrator share this stream\./);
+});
+
 test('a malformed setting is refused with a message that says what is wrong', () => {
   const cases: [string, RegExp][] = [
     ['ana:human', /at least 2 participants.*found 1/],
     [Array.from({ length: 13 }, (_, i) => `p${i}:agent`).join(','), /at most 12 participants.*found 13/],
     ['ana:human,ben', /entry 2 must be name:kind/],
-    ['ana:human,ben:human:extra', /entry 2 must be name:kind/],
+    ['ana:human,ben:human:Extra:more', /entry 2 must be name:kind or name:kind:Label/],
     ['ana:human,,ben:human', /entry 2 must be name:kind/],
     ['ana:human,ben:human,', /entry 3 must be name:kind/],
     ['ana:human;ben:human', /at least 2 participants/],
@@ -87,9 +120,9 @@ test('without the setting, the first three participants apply, as leniently as b
     const roster = loadRoster(env);
     assert.equal(roster.explicit, false);
     assert.deepEqual(roster.participants, [
-      { name: 'grok', kind: 'agent', color: 0 },
-      { name: 'claude', kind: 'agent', color: 1 },
-      { name: 'david', kind: 'human', color: 2 },
+      { name: 'grok', kind: 'agent', color: 0, label: 'Grok' },
+      { name: 'claude', kind: 'agent', color: 1, label: 'Claude' },
+      { name: 'david', kind: 'human', color: 2, label: 'David' },
     ]);
     assert.deepEqual(roster.names, ['grok', 'claude', 'david']);
   }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { colorOf, displayName, type Participant, type ParticipantStatus } from '../lib/shared';
+import { colorOf, labelOf, type Participant, type ParticipantStatus } from '../lib/shared';
 
 export const STATUS_POLL_MS = 5_000;
 export const STATUS_EXPIRY_TICK_MS = 1_000;
@@ -54,7 +54,7 @@ export function StatusList({ statuses, now, participants = [] }: { statuses: Par
     >
       {active.map((s) => (
         <span key={s.participant} className="inline-flex min-w-0 items-baseline gap-1" style={{ color: colorOf(s.participant, participants) }}>
-          <span className="font-semibold">{displayName(s.participant)}:</span>
+          <span className="font-semibold">{labelOf(s.participant, participants)}:</span>
           <span className="max-w-[48ch] truncate opacity-90">{s.text}</span>
           <span aria-hidden="true" className="select-none">
             <span className="status-dot">.</span>

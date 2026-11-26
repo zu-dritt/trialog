@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import type { Message } from '../lib/core';
 import type { DecisionCard, DecisionStance, Participant, Sender } from '../lib/shared';
-import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, displayName } from '../lib/shared';
+import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, labelOf } from '../lib/shared';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 const ANSWER = 'cursor-pointer rounded-md border px-2.5 py-1 text-[13px] font-semibold disabled:opacity-50';
@@ -106,7 +106,7 @@ export function DecisionCardView({
           const noteText = pos?.note ? ` ${pos.note}` : '';
           return (
             <li key={name} className="text-[15px] leading-[1.5]">
-              <span className="font-semibold" style={{ color: colorOf(name, participants) }}>{displayName(name)}</span>
+              <span className="font-semibold" style={{ color: colorOf(name, participants) }}>{labelOf(name, participants)}</span>
               {' '}{mark}{noteText}
             </li>
           );

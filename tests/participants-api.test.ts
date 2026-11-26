@@ -107,10 +107,10 @@ test('GET /api/participants says who takes part and who is asking, and never sho
   assert.deepEqual(JSON.parse(text), {
     me: 'quill-2',
     participants: [
-      { name: 'ana-maria', kind: 'human', color: 0 },
-      { name: 'ben', kind: 'human', color: 1 },
-      { name: 'scout', kind: 'agent', color: 2 },
-      { name: 'quill-2', kind: 'agent', color: 3 },
+      { name: 'ana-maria', kind: 'human', color: 0, label: 'Ana-Maria' },
+      { name: 'ben', kind: 'human', color: 1, label: 'Ben' },
+      { name: 'scout', kind: 'agent', color: 2, label: 'Scout' },
+      { name: 'quill-2', kind: 'agent', color: 3, label: 'Quill-2' },
     ],
   });
   for (const token of [...Object.values(TOKENS), LEFTOVER_GROK_TOKEN]) assert.ok(!text.includes(token), 'no token in the answer');

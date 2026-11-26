@@ -290,9 +290,9 @@ test('old settings: the page is told the three participants, with the colours th
   assert.deepEqual(await res.json(), {
     me: 'david',
     participants: [
-      { name: 'grok', kind: 'agent', color: 0, wake_target_host: null, wake_target_set_at: null },
-      { name: 'claude', kind: 'agent', color: 1, wake_target_host: null, wake_target_set_at: null },
-      { name: 'david', kind: 'human', color: 2, wake_target_host: null, wake_target_set_at: null },
+      { name: 'grok', kind: 'agent', color: 0, label: 'Grok', wake_target_host: null, wake_target_set_at: null },
+      { name: 'claude', kind: 'agent', color: 1, label: 'Claude', wake_target_host: null, wake_target_set_at: null },
+      { name: 'david', kind: 'human', color: 2, label: 'David', wake_target_host: null, wake_target_set_at: null },
     ],
   });
 });

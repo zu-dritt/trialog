@@ -293,7 +293,7 @@ test('send --reply-to posts reply_to, and read shows the arrow on a reply', asyn
   }
 });
 
-test('the CLI follows the names of the hub it talks to: --to, participants, and how names are shown', async () => {
+test('the CLI follows the names of the hub it talks to: --to, participants, and how names and labels are shown', async () => {
   // A hub with made-up participants. The CLI has no list of names of its own.
   const message = { id: 7, sender: 'ana-maria', recipient: 'quill-2', text: 'hello', created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [] };
   const seen: { method: string; url: string; body: string }[] = [];
@@ -304,7 +304,8 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
       seen.push({ method: req.method || '', url: req.url || '', body: Buffer.concat(chunks).toString() });
       res.setHeader('Content-Type', 'application/json');
       if (req.url === '/api/participants') {
-        res.end(JSON.stringify({ me: 'quill-2', participants: [{ name: 'ana-maria', kind: 'human', color: 0 }, { name: 'quill-2', kind: 'agent', color: 1 }] }));
+        // ana-maria has a label (PARTICIPANTS=ana-maria:human:Orchestrator,…); quill-2 has the usual one.
+        res.end(JSON.stringify({ me: 'quill-2', participants: [{ name: 'ana-maria', kind: 'human', color: 0, label: 'Orchestrator' }, { name: 'quill-2', kind: 'agent', color: 1, label: 'Quill-2' }] }));
       } else if (req.method === 'POST') {
         res.statusCode = 201;
         res.end(JSON.stringify({ message }));
@@ -330,17 +331,24 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
     assert.deepEqual(JSON.parse(seen[0].body), { text: 'hello', to: 'quill-2' }, 'the name goes to the hub as given; the hub decides whether it is one');
     assert.match(sent.stdout, /^sent #7 to Quill-2/);
 
+    // The labels are read once, after the command's own request, only for text output.
+    assert.deepEqual(seen.map((r) => r.url), ['/api/messages', '/api/participants']);
+
     const read = await run('read', '--to', 'quill-2');
-    assert.equal(seen[1].url, '/api/messages?to=quill-2&markRead=1');
-    assert.match(read.stdout, /^#7 \[\d\d:\d\d\] Ana-Maria → Quill-2:\nhello/);
+    assert.equal(seen[2].url, '/api/messages?to=quill-2&markRead=1');
+    assert.match(read.stdout, /^#7 \[\d\d:\d\d\] Orchestrator → Quill-2:\nhello/, 'the label is shown instead of the name');
 
     const who = await run('participants');
     assert.equal(who.code, 0, who.stderr);
-    assert.equal(seen[2].url, '/api/participants');
-    assert.equal(who.stdout, 'ana-maria (human)\nquill-2 (agent)  ← you\n');
+    assert.equal(who.stdout, 'ana-maria (human, shown as Orchestrator)\nquill-2 (agent)  ← you\n');
     assert.deepEqual(JSON.parse((await run('participants', '--json')).stdout).participants.map((p: { name: string }) => p.name), ['ana-maria', 'quill-2']);
 
-    assert.match((await run('status')).stdout, /^Ana-Maria: reading/);
+    assert.match((await run('status')).stdout, /^Orchestrator: reading/);
+    // With --json, names only, and no request for the labels.
+    const before = seen.length;
+    const asJson = await run('read', '--to', 'quill-2', '--json');
+    assert.equal(JSON.parse(asJson.stdout)[0].sender, 'ana-maria');
+    assert.equal(seen.length, before + 1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -482,6 +490,7 @@ test('search sends the words as q with the token, and prints the results like re
     { id: 9, sender: 'grok', recipient: null, text: 'Which storage for the images?', created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: null, poll: null },
   ];
   const server = createServer((req, res) => {
+    if (req.url === '/api/participants') { res.end('{"participants":[]}'); return; } // the labels: not part of what is checked here
     seen.push({ url: req.url ?? '', auth: req.headers.authorization });
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ me: 'claude', messages: (req.url ?? '').includes('zebra') ? [] : found }));
@@ -540,6 +549,7 @@ test('wait records the messages it returns as read, and --peek leaves them unmar
   };
   const watermark = { ...incoming, id: 8, sender: 'claude', text: 'earlier' };
   const server = createServer((req, res) => {
+    if (req.url === '/api/participants') { res.end('{"participants":[]}'); return; } // the labels: not part of what is checked here
     seen.push(req.url ?? '');
     res.setHeader('Content-Type', 'application/json');
     const url = new URL(req.url ?? '', 'http://hub.test');
@@ -666,6 +676,7 @@ test('--room goes out with send, read, wait, search, poll, decision and export; 
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
+      if (req.url === '/api/participants') { res.end('{"participants":[]}'); return; } // the labels: not part of what is checked here
       seen.push({ method: req.method || '', url: req.url || '', body: Buffer.concat(chunks).toString() });
       const path = (req.url || '').split('?')[0];
       res.setHeader('Content-Type', 'application/json');

@@ -84,10 +84,10 @@ const listed = (items: string[], last = 'and'): string =>
   (items.length > 1 ? `${items.slice(0, -1).join(', ')} ${last} ${items[items.length - 1]}` : items.join(''));
 
 /** The message a new, empty hub starts with. It names the participants, so it is built from the setting. */
-export function welcomeText(participants: readonly Pick<Participant, 'name'>[]): string {
+export function welcomeText(participants: readonly Pick<Participant, 'name' | 'label'>[]): string {
   const names = participants.map((p) => p.name);
   return [
-    `**Welcome to Trialog.** ${listed(names.map(displayName))} share this stream.`,
+    `**Welcome to Trialog.** ${listed(participants.map((p) => p.label || displayName(p.name)))} share this stream.`,
     '',
     `- Start a message with ${listed(names.map((n) => `\`@${n}\``), 'or')} to address someone. Without a prefix it goes to everyone.`,
     '- Start a message with `DECISION:` (after an optional `@name`) to pin it as a decision. Anyone can also pin or unpin with the pin button.',

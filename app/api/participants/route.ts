@@ -1,4 +1,5 @@
 import { authenticate, json, safe } from '../../../lib/http';
+import { displayName } from '../../../lib/shared';
 import { loadRoster } from '../../../lib/participants';
 import { getStore } from '../../../lib/store';
 import { ENV_WAKE_PARTICIPANT, wakeTargetHost, webhookConfig } from '../../../lib/webhook';
@@ -7,8 +8,10 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 // GET /api/participants → who takes part here, in the order of the PARTICIPANTS setting, and who you are.
-// {"me": "ana", "participants": [{"name": "ana", "kind": "human", "color": 0}, …]}
-// `color` is an index into the page's palette of twelve colours. Tokens are never part of the answer.
+// {"me": "ana", "participants": [{"name": "ana", "kind": "human", "color": 0, "label": "Ana"}, …]}
+// `color` is an index into the page's palette of twelve colours. `label` is how the participant is
+// shown (the third part of their PARTICIPANTS entry, or the name with a capital); the name stays the
+// id. Tokens are never part of the answer.
 // A human also sees, for each participant, whether a wake-up target is set: the host only
 // (`wake_target_host`) and when it was set (`wake_target_set_at`). Never the secret or the full URL.
 export const GET = safe(async (request: Request) => {
@@ -16,7 +19,7 @@ export const GET = safe(async (request: Request) => {
   if (denied) return denied;
   const roster = loadRoster();
   const caller = roster.participants.find((p) => p.name === me);
-  const base = roster.participants.map(({ name, kind, color }) => ({ name, kind, color }));
+  const base = roster.participants.map(({ name, kind, color, label }) => ({ name, kind, color, label: label ?? displayName(name) }));
   if (caller?.kind !== 'human') return json({ me, participants: base });
 
   const store = await getStore();
