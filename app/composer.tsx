@@ -1,12 +1,14 @@
 'use client';
 
-// The message box: how tall it is, and keeping an unsent draft across a reload.
+// The message box: how tall it is, keeping an unsent draft across a reload, and the row of
+// actions under it (ComposerTools, at the end).
 //
 // The box grows with its text, line by line, up to a share of the window, and scrolls after
 // that. A button switches it to a tall writing area and back. The text of an unsent message is
 // kept in this browser per participant, so a reload doesn't lose it. Only the text: no images,
 // and nothing leaves the browser.
 import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
+import { EmojiPicker } from './emoji';
 import { parseQuotes, type Quote } from './quote';
 
 /** The box grows with its text up to this share of the visible window, then scrolls. */
@@ -163,5 +165,54 @@ export function ExpandButton({ expanded, onToggle, className }: { expanded: bool
           : <path d="M6.5 6.5L3 3M3 6.3V3h3.3M9.5 9.5L13 13M13 9.7V13H9.7" />}
       </svg>
     </button>
+  );
+}
+
+export interface ComposerToolsProps {
+  /** Who the message is for: '' is everyone. `recipients` are the other choices, in the roster's order. */
+  to: string;
+  onTo: (to: string) => void;
+  recipients: readonly { name: string; label: string }[];
+  emoji: { open: boolean; onOpenChange: (open: boolean) => void; onInsert: (char: string, focusBox: boolean) => void; boxRef: RefObject<HTMLTextAreaElement | null> };
+  image: { disabled: boolean; onPick: () => void };
+  decision: { open: boolean; onToggle: () => void };
+  poll: { open: boolean; onToggle: () => void };
+  expand: { expanded: boolean; onToggle: () => void };
+  send: { disabled: boolean; label: string };
+  /** The look of the recipient picker, and of every button in the row. */
+  fieldClassName: string;
+  toolClassName: string;
+}
+
+/**
+ * The row under the message box. The recipient picker stays first, at the left. The actions
+ * follow in the order they are used, the most frequent first: emoji, image, decision, poll.
+ * Then the size of the box, the keyboard hint and, at the right, Send. The keyboard goes through
+ * them in the same order, because nothing here sets a tab index: the order in the markup is both.
+ */
+export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, fieldClassName, toolClassName }: ComposerToolsProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={fieldClassName}>
+        <option value="">to everyone</option>
+        {recipients.map((r) => <option key={r.name} value={r.name}>to {r.label}</option>)}
+      </select>
+      <EmojiPicker open={emoji.open} onOpenChange={emoji.onOpenChange} onInsert={emoji.onInsert} boxRef={emoji.boxRef} buttonClassName={toolClassName} />
+      <button
+        type="button" className={toolClassName} onClick={image.onPick} disabled={image.disabled}
+        title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
+      >Image</button>
+      <button
+        type="button" className={toolClassName} onClick={decision.onToggle}
+        aria-pressed={decision.open} aria-expanded={decision.open} aria-controls={decision.open ? 'decision-composer' : undefined}
+      >Decision</button>
+      <button
+        type="button" className={toolClassName} onClick={poll.onToggle}
+        aria-pressed={poll.open} aria-expanded={poll.open} aria-controls={poll.open ? 'poll-composer' : undefined}
+      >Poll</button>
+      <ExpandButton expanded={expand.expanded} onToggle={expand.onToggle} className={toolClassName} />
+      <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
+      <button type="submit" className={`${toolClassName} ml-auto md:ml-0`} disabled={send.disabled}>{send.label}</button>
+    </div>
   );
 }

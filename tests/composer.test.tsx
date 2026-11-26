@@ -4,7 +4,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EMPTY_DRAFT, EXPANDED_SHARE, ExpandButton, GROW_SHARE, MAX_DRAFT_CHARS, MIN_BOX_HEIGHT, boxSize, draftFor, draftKey, readDraft, writeDraft } from '../app/composer';
+import { ComposerTools, EMPTY_DRAFT, EXPANDED_SHARE, ExpandButton, GROW_SHARE, MAX_DRAFT_CHARS, MIN_BOX_HEIGHT, boxSize, draftFor, draftKey, readDraft, writeDraft } from '../app/composer';
 
 const LINE = 22.5; // one line of text in the box
 const lines = (n: number) => Math.ceil(n * LINE + 14); // text plus padding and border
@@ -157,4 +157,47 @@ test('the expand button says what it does and which state it is in', () => {
     assert.ok(!/<img|href=|url\(|https?:/.test(out.replace('http://www.w3.org/2000/svg', '')), 'drawn in place, nothing loaded');
   }
   assert.notEqual(off.match(/ d="([^"]+)"/)?.[1], on.match(/ d="([^"]+)"/)?.[1], 'the two states look different');
+});
+
+/** The controls of a piece of markup, in the order they stand in it: each by its label or its text. */
+const controls = (markup: string): string[] =>
+  [...markup.matchAll(/<(select|button)\b([^>]*)>(.*?)<\/\1>/g)].map(([, , attributes, inside]) =>
+    attributes.match(/aria-label="([^"]+)"/)?.[1] ?? inside.replace(/<[^>]+>/g, ''));
+
+test('the row under the message box: recipient, then emoji, image, decision, poll, then enlarge and Send', () => {
+  const tools = (over: { decisionOpen?: boolean; pollOpen?: boolean; emojiOpen?: boolean } = {}) => renderToStaticMarkup(
+    <ComposerTools
+      to="" onTo={() => {}} recipients={[{ name: 'ana', label: 'Ana' }, { name: 'quill-2', label: 'Quill-2' }]}
+      emoji={{ open: over.emojiOpen ?? false, onOpenChange: () => {}, onInsert: () => {}, boxRef: { current: null } }}
+      image={{ disabled: false, onPick: () => {} }}
+      decision={{ open: over.decisionOpen ?? false, onToggle: () => {} }}
+      poll={{ open: over.pollOpen ?? false, onToggle: () => {} }}
+      expand={{ expanded: false, onToggle: () => {} }}
+      send={{ disabled: true, label: 'Send' }}
+      fieldClassName="f" toolClassName="t"
+    />,
+  );
+  const row = tools();
+  // The order on the screen, and the order of the Tab key: the most used action comes first.
+  assert.deepEqual(controls(row), ['Recipient', 'Emoji', 'Image', 'Decision', 'Poll', 'Enlarge the message box', 'Send']);
+  // Nothing moves a control out of that order for the keyboard, and nothing reorders them on the screen.
+  assert.ok(!/tabindex/i.test(row), row);
+  assert.ok(!/\border-(first|last|\d+|\[)/.test(row), row);
+  assert.ok(!row.includes('flex-row-reverse'), row);
+  // The picker offers everyone and each participant; Send is the only button that sends.
+  assert.match(row, /<select aria-label="Recipient" class="f"><option value="" selected="">to everyone<\/option><option value="ana">to Ana<\/option><option value="quill-2">to Quill-2<\/option><\/select>/);
+  assert.deepEqual([...row.matchAll(/<button type="(\w+)"/g)].map((m) => m[1]), ['button', 'button', 'button', 'button', 'button', 'submit']);
+  assert.match(row, /<button type="submit" class="t ml-auto md:ml-0" disabled="">Send<\/button>/);
+  // The keyboard hint stands between the actions and Send.
+  assert.ok(row.indexOf('Enter sends') > row.indexOf('Enlarge the message box') && row.indexOf('Enter sends') < row.indexOf('>Send<'));
+  // Decision and Poll say whether their form is open, and which form that is.
+  assert.match(row, /aria-pressed="false" aria-expanded="false">Decision</);
+  assert.match(row, /aria-pressed="false" aria-expanded="false">Poll</);
+  assert.match(tools({ decisionOpen: true }), /aria-pressed="true" aria-expanded="true" aria-controls="decision-composer">Decision</);
+  assert.match(tools({ pollOpen: true }), /aria-pressed="true" aria-expanded="true" aria-controls="poll-composer">Poll</);
+  // With the emoji panel open the order of the row's own controls is unchanged; the panel's
+  // controls come right after the emoji button.
+  const open = controls(tools({ emojiOpen: true }));
+  assert.deepEqual(open.slice(0, 2), ['Recipient', 'Emoji']);
+  assert.deepEqual(open.slice(-5), ['Image', 'Decision', 'Poll', 'Enlarge the message box', 'Send']);
 });
