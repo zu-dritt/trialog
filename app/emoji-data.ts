@@ -280,3 +280,23 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
 ];
 
 export const ALL_EMOJIS: Emoji[] = EMOJI_GROUPS.flatMap((g) => g.emojis);
+
+export const EMOJI_CHARS: ReadonlySet<string> = new Set(ALL_EMOJIS.map((e) => e.char));
+
+const VS16 = '\uFE0F';
+
+/**
+ * The catalog form of an emoji, or null if it is not on the allow-list.
+ * A trailing variation selector is added or dropped when that is what the catalog uses,
+ * so a red heart sent as U+2764 still matches ❤️.
+ */
+export function canonicalEmoji(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (EMOJI_CHARS.has(trimmed)) return trimmed;
+  if (EMOJI_CHARS.has(trimmed + VS16)) return trimmed + VS16;
+  if (trimmed.endsWith(VS16) && EMOJI_CHARS.has(trimmed.slice(0, -VS16.length))) {
+    return trimmed.slice(0, -VS16.length);
+  }
+  return null;
+}
