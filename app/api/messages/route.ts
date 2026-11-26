@@ -47,15 +47,24 @@ export const GET = safe(async (request: Request) => {
     if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
     return json({ me, messages: await store.search({ words: query.words, to, decisionsAmong: decisions ? names : null, pinned, limit }) });
   }
-  // The top-level polls list is opt-in (`?polls=1`). The page asks for it so a since-poll
-  // still sees votes on older polls; the CLI, which polls every few seconds, leaves it off.
+  // The top-level polls and reactions lists are opt-in (`?polls=1`, `?reactions=1`). The page asks
+  // for them so a since-poll still sees votes and reactions on older messages; the CLI, which polls
+  // every few seconds, leaves them off.
   const includePolls = params.get('polls') === '1';
-  const [messages, pinned, polls] = await Promise.all([
+  const includeReactions = params.get('reactions') === '1';
+  const [messages, pinned, polls, reactions] = await Promise.all([
     store.list({ since, to, limit }),
     store.pinned(),
     includePolls ? store.listPolls() : Promise.resolve(null),
+    includeReactions ? store.listReactions() : Promise.resolve(null),
   ]);
-  return json(includePolls ? { me, messages, pinned, polls } : { me, messages, pinned });
+  return json({
+    me,
+    messages,
+    pinned,
+    ...(includePolls ? { polls } : {}),
+    ...(includeReactions ? { reactions } : {}),
+  });
 });
 
 // POST /api/messages {"text": "...", "to": "<name>", "attachments": ["att_…"], "reply_to": 45}

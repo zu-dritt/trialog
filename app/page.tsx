@@ -15,6 +15,7 @@ import {
   MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
   pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
 } from './quote';
+import { ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
@@ -46,6 +47,7 @@ interface MessagesResponse {
   messages: Message[];
   pinned: Message[];
   polls?: Poll[];
+  reactions?: { message_id: number; reactions: Message['reactions'] }[];
 }
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
@@ -237,6 +239,7 @@ export default function Page() {
       if (!incoming.length) return;
       lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
       setMessages((list) => merge(list, incoming));
+      setPinned((list) => replaceMatching(list, incoming));
     };
     const pause = (ms: number) => new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, ms);
@@ -245,7 +248,7 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1' });
+      const params = new URLSearchParams({ polls: '1', reactions: '1' });
       if (lastId.current) params.set('since', String(lastId.current));
       const data = (await (await api(`/api/messages?${params}`, { signal: abort.signal })).json()) as MessagesResponse;
       if (stopped) return;
@@ -253,6 +256,10 @@ export default function Page() {
       addMessages(data.messages);
       setPinned(data.pinned);
       if (data.polls?.length) setMessages((list) => withPolls(list, data.polls ?? []));
+      if (data.reactions) {
+        setMessages((list) => applyReactionList(list, data.reactions ?? []));
+        setPinned((list) => applyReactionList(list, data.reactions ?? []));
+      }
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -537,6 +544,18 @@ export default function Page() {
     }
   };
 
+  const toggleReaction = async (m: Message, emoji: string, on: boolean) => {
+    try {
+      const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
+      const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
+      const data = (await res.json()) as { message: Message };
+      setMessages((list) => merge(list, [data.message]));
+      setPinned((list) => replaceMatching(list, [data.message]));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
   const exportTranscript = async () => {
     try {
       const blob = await (await api('/api/export')).blob();
@@ -725,6 +744,7 @@ export default function Page() {
                     />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
+                  <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
                 </div>
               </article>
             </div>

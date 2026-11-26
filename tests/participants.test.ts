@@ -243,9 +243,9 @@ test('the welcome message and the export name the configured participants', () =
   assert.match(welcomeText(parseParticipants('ana:human,scout:agent')), /Ana and Scout share this stream\..*\n\n- Start a message with `@ana` or `@scout` to/);
 
   const messages: Message[] = [
-    { id: 1, sender: 'hub', recipient: null, text: welcome, created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null },
-    { id: 2, sender: 'quill-2', recipient: 'ana-maria', text: 'DECISION: use four', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null },
-    { id: 3, sender: 'someone-who-left', recipient: null, text: 'still here', created_at: '2026-11-25T13:06:00Z', pinned_at: null, attachments: [], reply_to: null },
+    { id: 1, sender: 'hub', recipient: null, text: welcome, created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null, reactions: [] },
+    { id: 2, sender: 'quill-2', recipient: 'ana-maria', text: 'DECISION: use four', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null, reactions: [] },
+    { id: 3, sender: 'someone-who-left', recipient: null, text: 'still here', created_at: '2026-11-25T13:06:00Z', pinned_at: null, attachments: [], reply_to: null, reactions: [] },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.match(md, /- #2 \(Quill-2, 2026-11-25 14:05\): DECISION: use four\n/);

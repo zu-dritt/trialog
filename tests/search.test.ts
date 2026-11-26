@@ -215,16 +215,19 @@ for (const [name, make] of [
     assert.deepEqual(await texts(store, 'friday?pizza'), []);
   });
 
-  test(`${name}: a result carries its attachments and what it answers`, async () => {
+  test(`${name}: a result carries its attachments, its reactions and what it answers`, async () => {
     const store = await make();
     const first = must(await store.add({ sender: 'grok', recipient: null, text: 'the question' }));
     const upload = must(await store.addAttachment({ sender: 'claude', content_type: 'image/png', width: 4, height: 2, data: Buffer.from('not a real image') }));
     const reply = must(await store.add({ sender: 'claude', recipient: null, text: 'the answer', attachments: [upload.id], reply_to: first.id }));
+    await store.addReaction(reply.id, 'grok', '👍');
+    await store.addReaction(reply.id, 'david', '👍');
     const [found] = await store.search({ words: ['answer'] });
     assert.deepEqual(found, (await store.list({ since: first.id }))[0]);
     assert.equal(found.id, reply.id);
     assert.equal(found.reply_to, first.id);
     assert.deepEqual(found.attachments.map((a) => a.id), [upload.id]);
+    assert.deepEqual(found.reactions?.map((r) => r.emoji), ['👍'], 'the reactions come with a result, as with any message');
     // No words: no results (the route never asks this).
     assert.deepEqual(await store.search({ words: [] }), []);
   });
@@ -285,7 +288,7 @@ test('GET /api/messages?q= finds messages, newest first, with their usual shape'
   // A search answers with the matches and who you are; the pinned list and the polls are not repeated.
   assert.deepEqual(Object.keys(all.body).sort(), ['me', 'messages']);
   const answer = must(all.body.messages?.[0] ?? null);
-  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'poll', 'recipient', 'reply_to', 'sender', 'text']);
+  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'sender', 'text']);
   assert.equal(answer.reply_to, a.id);
 
   assert.deepEqual((await search('q=melon+route')).body.messages?.map((m) => m.id), [c.id, a.id]);

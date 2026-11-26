@@ -17,6 +17,7 @@
 //   node scripts/hub.js vote poll_… --clear
 //   node scripts/hub.js poll --close poll_…
 //   node scripts/hub.js pin <id> | unpin <id>
+//   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js export > transcript.md
 //
@@ -39,7 +40,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | participants [--json] | export');
   process.exit(64);
 }
 
@@ -98,7 +99,12 @@ function fmt(m) {
         return `- ${o.index}. ${o.text} (${o.votes}${who ? ` — ${who}` : ''})\n`;
       }).join('')
     : '';
-  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && (images || poll) ? '\n' : ''}${images}${poll || (images ? '' : '\n')}`;
+  const reactions = (m.reactions || []).map((r) => {
+    const who = (r.by || []).map((v) => label(v)).join(', ');
+    return who ? `${r.emoji} ${who}` : r.emoji;
+  }).join(' · ');
+  const extra = images + poll + (reactions ? `[reactions: ${reactions}]\n` : '');
+  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && extra ? '\n' : ''}${extra || '\n'}`;
 }
 
 function fail(msg) {
@@ -319,6 +325,26 @@ async function main() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: cmd === 'pin' }),
     });
     console.log(`${cmd}ned #${args[0]}`);
+    return;
+  }
+
+  if (cmd === 'react' || cmd === 'unreact') {
+    if (!/^\d+$/.test(args[0] || '')) usage(`${cmd} needs a message id and an emoji`);
+    const emoji = args.slice(1).join(' ').trim();
+    if (!emoji) usage(`${cmd} needs a message id and an emoji`);
+    const { message } = await (await call(`/api/messages/${args[0]}/reactions/${encodeURIComponent(emoji)}`, {
+      method: cmd === 'react' ? 'PUT' : 'DELETE',
+    })).json();
+    if (opts.json) console.log(JSON.stringify(message));
+    else {
+      // The server stores the catalogue form (a heart may gain or lose a variation selector).
+      // Match on that, and report the emoji and count from the answer.
+      const fold = (s) => s.replaceAll('\uFE0F', '');
+      const found = (message.reactions || []).find((r) => r.emoji === emoji || fold(r.emoji) === fold(emoji));
+      const shown = found ? found.emoji : emoji;
+      const n = found ? found.by.length : 0;
+      console.log(cmd === 'react' ? `reacted ${shown} on #${args[0]} (${n})` : `removed ${emoji} from #${args[0]}`);
+    }
     return;
   }
 

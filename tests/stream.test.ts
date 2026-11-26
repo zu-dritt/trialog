@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
 import { SSE_PING, createSseParser, sseEvent, type SseEvent } from '../lib/sse';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { createEventStream, pollMessageIdsChanged } from '../lib/stream';
+import { createEventStream, pollMessageIdsChanged, reactionMessageIdsChanged } from '../lib/stream';
 
 // --- encoder and parser ---------------------------------------------------------------------------
 
@@ -61,14 +61,14 @@ for (const [name, make] of STORES) {
   test(`${name}: version changes with new messages and with pins`, async () => {
     const store = await make();
     await store.ensure();
-    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|' }, 'only the welcome message');
+    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||' });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||' });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||' });
   });
 }
 
@@ -267,4 +267,81 @@ test('pollMessageIdsChanged returns only ids whose entry changed', () => {
   assert.deepEqual(pollMessageIdsChanged('2|12:1:t0,13:1:t0', '2|12:2:t1,13:1:t0'), [12]);
   // A change at a constant count (someone switches option) still shows, because latest moved.
   assert.deepEqual(pollMessageIdsChanged('1|12:1:t0', '1|12:1:t1'), [12]);
+});
+// --- reactions: fingerprint and re-send without moving last ------------------------------------
+
+for (const [name, make] of STORES) {
+  test(`${name}: version changes with a reaction, not last_id`, async () => {
+    const store = await make();
+    const m = must(await store.add({ sender: 'david', recipient: null, text: 'please look' }));
+    const before = await store.version();
+    assert.equal(before.last_id, m.id);
+    assert.equal(before.reactions, '0||');
+    const added = await store.addReaction(m.id, 'claude', '👍');
+    assert.equal(added.status, 'ok');
+    const after = await store.version();
+    assert.equal(after.last_id, before.last_id);
+    assert.equal(after.pins, before.pins);
+    assert.notEqual(after.reactions, before.reactions);
+    const gone = await store.removeReaction(m.id, 'claude', '👍');
+    assert.deepEqual(gone?.reactions, []);
+    assert.equal((await store.version()).reactions, '0||');
+  });
+
+  test(`${name}: a reaction on an older message is re-sent without moving last`, async () => {
+    const store = await make();
+    const a = must(await store.add({ sender: 'david', recipient: null, text: 'old' }));
+    const b = must(await store.add({ sender: 'grok', recipient: null, text: 'new' }));
+    const abort = new AbortController();
+    const r = reader(createEventStream({ store, me: 'claude', since: b.id, signal: abort.signal, ...FAST }));
+    assert.deepEqual((await r.next(2)).map((e) => e.event), ['hello', 'pins']);
+    assert.ok(await r.quiet());
+
+    const added = await store.addReaction(a.id, 'claude', '👍');
+    assert.equal(added.status, 'ok');
+    const [updated] = await r.next();
+    assert.equal(updated.event, 'messages');
+    assert.deepEqual((updated.data as Message[]).map((m) => m.id), [a.id]);
+    assert.deepEqual((updated.data as Message[])[0].reactions, [{ emoji: '👍', by: ['claude'] }]);
+
+    const c = must(await store.add({ sender: 'david', recipient: null, text: 'after' }));
+    const [fresh] = await r.next();
+    assert.equal(fresh.event, 'messages');
+    assert.deepEqual((fresh.data as Message[]).map((m) => m.id), [c.id], 'the cursor was not moved back to a');
+
+    abort.abort();
+    await r.finished();
+  });
+}
+
+test('reactionMessageIdsChanged returns only ids whose entry changed, including a removal', () => {
+  assert.deepEqual(reactionMessageIdsChanged('0||', '0||'), []);
+  assert.deepEqual(reactionMessageIdsChanged('0||', '1|t0|12:1:t0'), [12]);
+  // A reaction on 12 does not re-send 13.
+  assert.deepEqual(reactionMessageIdsChanged('2|t0|12:1:t0,13:1:t0', '2|t1|12:2:t1,13:1:t0'), [12]);
+  // A swap at a constant count still shows, because latest moved.
+  assert.deepEqual(reactionMessageIdsChanged('1|t0|12:1:t0', '1|t1|12:1:t1'), [12]);
+  // The last reaction on a message still re-sends that message so the client can clear it.
+  assert.deepEqual(reactionMessageIdsChanged('1|t0|12:1:t0', '0||'), [12]);
+});
+
+test('a reaction re-sends only the message whose entry changed', async () => {
+  const store = createMemoryStore();
+  const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
+  const b = must(await store.add({ sender: 'david', recipient: null, text: 'two' }));
+  assert.equal((await store.addReaction(a.id, 'claude', '👍')).status, 'ok');
+  assert.equal((await store.addReaction(b.id, 'grok', '🎉')).status, 'ok');
+  const abort = new AbortController();
+  const r = reader(createEventStream({ store, me: 'claude', since: b.id, signal: abort.signal, ...FAST }));
+  assert.deepEqual((await r.next(2)).map((e) => e.event), ['hello', 'pins']);
+  assert.ok(await r.quiet());
+
+  assert.equal((await store.addReaction(a.id, 'david', '❤️')).status, 'ok');
+  const [updated] = await r.next();
+  assert.equal(updated.event, 'messages');
+  assert.deepEqual((updated.data as Message[]).map((m) => m.id), [a.id], 'the unchanged reaction is not re-sent');
+  assert.deepEqual((updated.data as Message[])[0].reactions.map((x) => x.emoji).sort(), ['👍', '❤️'].sort());
+
+  abort.abort();
+  await r.finished();
 });

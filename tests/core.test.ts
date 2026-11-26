@@ -1,6 +1,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { MAX_TEXT_BYTES, UPLOADS_PER_HOUR, uploadsPerHour, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
+import { MAX_TEXT_BYTES, REACTION_HINT, UPLOADS_PER_HOUR, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, uploadsPerHour, welcomeText, type Message } from '../lib/core';
+import { parseParticipants, DEFAULT_PARTICIPANTS } from '../lib/participants';
 import { sniffImageType } from '../lib/images';
 
 // The names that apply when PARTICIPANTS is not set. Other names are covered in participants.test.ts.
@@ -102,8 +103,8 @@ test('parseSince', () => {
 
 test('toMarkdown lists decisions first, then all messages', () => {
   const messages: Message[] = [
-    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null },
-    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null },
+    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null, poll: null, reactions: [] },
+    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null, poll: null, reactions: [] },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.match(md, /^# Trialog transcript/);
@@ -142,8 +143,8 @@ test('toMarkdown names each image, and an image-only message has no empty text b
   const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234, scale: 1 };
   const other = { ...shot, id: 'att_89abcdef0123456789abcdef', width: 40, height: 20 };
   const messages: Message[] = [
-    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot], reply_to: null },
-    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', attachments: [shot, other], reply_to: null },
+    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot], reply_to: null, poll: null, reactions: [] },
+    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', attachments: [shot, other], reply_to: null, poll: null, reactions: [] },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.ok(md.includes('· #3 · 📌\n\nDECISION: this one\n\n[image: att_0123456789abcdef01234567, 1170×2532]\n\n---'));
@@ -180,4 +181,23 @@ test('uploadsPerHour reads the setting, and falls back to the default for anythi
   for (const bad of ['0', '-5', '1001', '99999', '12.5', '1e3', 'many', 'Infinity']) {
     assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: bad }), 60, bad);
   }
+});
+
+test('the welcome text includes the reaction hint next to the decision line', () => {
+  const welcome = welcomeText(parseParticipants(DEFAULT_PARTICIPANTS));
+  assert.ok(welcome.includes(REACTION_HINT));
+  assert.ok(welcome.indexOf('DECISION:') < welcome.indexOf(REACTION_HINT));
+});
+
+test('toMarkdown names who reacted', () => {
+  const messages: Message[] = [
+    {
+      id: 5, sender: 'grok', recipient: null, text: 'Looks good',
+      created_at: '2026-11-26T04:00:00Z', pinned_at: null, attachments: [],
+      reply_to: null, poll: null,
+      reactions: [{ emoji: '👍', by: ['david', 'claude'] }, { emoji: '❤️', by: ['grok'] }],
+    },
+  ];
+  const md = toMarkdown(messages, new Date('2026-11-26T05:00:00Z'));
+  assert.match(md, /Looks good\n\n👍 David, Claude · ❤️ Grok\n\n---/);
 });
