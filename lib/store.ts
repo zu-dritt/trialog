@@ -6,6 +6,7 @@
 // and written only through lib/blobs.ts.
 import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
+import { MAX_SCALE, validScale } from './shared';
 import {
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, welcomeText,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
@@ -28,6 +29,8 @@ export interface NewMessage {
   pinned?: boolean;
   /** Ids of the sender's own uploads that no message links yet, in the order they should appear. */
   attachments?: string[];
+  /** The id of an existing message that this one answers. */
+  reply_to?: number | null;
 }
 /** An image that has already been checked and re-encoded (lib/images.ts). */
 export interface NewAttachment {
@@ -36,6 +39,8 @@ export interface NewAttachment {
   width: number;
   height: number;
   data: Buffer;
+  /** Image pixels per point (Attachment.scale). Left out: 1. */
+  scale?: number;
 }
 export interface StoredAttachment extends Attachment {
   sender: Sender;
@@ -43,6 +48,13 @@ export interface StoredAttachment extends Attachment {
   message_id: number | null;
 }
 /** Thrown by add() when an attachment can't be linked. Nothing is stored in that case. */
+/** Thrown by add() when `reply_to` names a message that does not exist. Nothing is stored in that case. */
+export class ReplyTargetError extends Error {
+  constructor(readonly messageId: number) {
+    super(`Message #${messageId} does not exist, so it can't be replied to.`);
+    this.name = 'ReplyTargetError';
+  }
+}
 export class AttachmentLinkError extends Error {
   constructor(readonly attachmentId: string, readonly reason: 'unknown' | 'not yours' | 'already linked') {
     super({
@@ -99,7 +111,8 @@ export interface Store {
   ensure(): Promise<void>;
   /**
    * Returns the stored message, or null when the sender is over the rate limit.
-   * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked.
+   * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked,
+   * and ReplyTargetError when `reply_to` names a message that does not exist.
    */
   add(input: NewMessage, limitPerMin?: number): Promise<Message | null>;
   /**
@@ -163,7 +176,7 @@ const MIGRATION_LOCK_ID = 7230420;
 //
 // The statements below that have a file in migrations/ are kept word for word as those files
 // have them, so the older ones still list the first three names. The last statement
-// (migrations/005-any-participants.sql) replaces those lists with the checks on the shape, on a
+// (migrations/007-any-participants.sql) replaces those lists with the checks on the shape, on a
 // new database as on an old one.
 const NAME_SHAPE = `'${NAME_PATTERN.source}'`;
 
@@ -214,7 +227,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
   // Polls and votes (migrations/004-polls.sql).
   // polls_creator_is_participant and poll_votes_participant_is_participant list the first three
-  // names. Migration 005 below drops them and checks the shape of the name instead.
+  // names. Migration 007 below drops them and checks the shape of the name instead.
   `CREATE TABLE IF NOT EXISTS polls (
   id          TEXT PRIMARY KEY CHECK (id ~ '^poll_[a-z0-9]+$'),
   message_id  BIGINT NOT NULL UNIQUE REFERENCES messages (id) ON DELETE CASCADE,
@@ -248,7 +261,37 @@ const SCHEMA = [
   PRIMARY KEY (poll_id, participant),
   CONSTRAINT poll_votes_participant_is_participant CHECK (participant IN ('grok', 'claude', 'david'))
 )`,
-  // Any participants (migrations/005-any-participants.sql). The tables above were created with
+  // Replies (migrations/005-replies.sql): a message can name the earlier message it answers.
+  // The column is only added when it is missing. A plain ADD COLUMN IF NOT EXISTS would ask for
+  // an exclusive lock on the table on every cold start, even with nothing to do.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'reply_to'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN reply_to BIGINT REFERENCES messages (id) ON DELETE SET NULL;
+     END IF;
+   END
+   $$`,
+  `CREATE INDEX IF NOT EXISTS messages_reply_to ON messages (reply_to) WHERE reply_to IS NOT NULL`,
+  // The scale of an image (migrations/006-attachment-scale.sql): how many of its pixels make one
+  // point on the screen it was taken on. Images stored before this have 1. The column is only
+  // added when it is missing; a plain ADD COLUMN IF NOT EXISTS would ask for an exclusive lock on
+  // the table every time, even with nothing to do.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'attachments' AND column_name = 'scale'
+     ) THEN
+       ALTER TABLE attachments ADD COLUMN scale SMALLINT NOT NULL DEFAULT 1
+         CONSTRAINT attachments_scale_range CHECK (scale BETWEEN 1 AND ${MAX_SCALE});
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
+  // Any participants (migrations/007-any-participants.sql). The tables above were created with
   // checks that list the first three names. This replaces every one of them with a check on the
   // shape of a name. No row is changed, and every existing row passes, because the old names have
   // that shape. On a database that is already up to date it only looks, and alters nothing.
@@ -287,8 +330,8 @@ const SCHEMA = [
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
-const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at';
-const ATTACHMENT_COLS = 'id, content_type, width, height, bytes';
+const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to';
+const ATTACHMENT_COLS = 'id, content_type, width, height, bytes, scale';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
 const POLL_JSON = `json_build_object(
   'id', p.id,
@@ -310,7 +353,7 @@ const POLL_JSON = `json_build_object(
 )`;
 const COLS = `${BASE_COLS},
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
-            'width', a.width, 'height', a.height, 'bytes', a.bytes) ORDER BY a.position, a.id), '[]'::json)
+            'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY a.position, a.id), '[]'::json)
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
   (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll`;
 // Inserts take a transaction-level advisory lock so ids are committed in order: a poller asking
@@ -332,6 +375,15 @@ const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR reci
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
   m.sender !== 'grok' && m.sender !== 'hub' && (m.recipient === null || m.recipient === 'grok');
 
+/**
+ * A message addressed to its own sender is stored as a message to everyone. "To myself" says
+ * nothing, and it comes about by accident: a message that happens to begin with the writer's own
+ * "@name", for example a pasted line. Stored as written, such a message would be addressed to
+ * nobody else, so nobody would be woken for it.
+ */
+export const notToSelf = (sender: Author, recipient: Sender | null | undefined): Sender | null =>
+  (recipient == null || recipient === sender ? null : recipient);
+
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
 const toAttachment = (r: Row): Attachment => ({
   id: r.id as string,
@@ -339,6 +391,7 @@ const toAttachment = (r: Row): Attachment => ({
   width: Number(r.width),
   height: Number(r.height),
   bytes: Number(r.bytes),
+  scale: validScale(Number(r.scale)),
 });
 /** The json column arrives parsed from pg and PGlite; a string is handled in case a driver doesn't. */
 const toAttachments = (v: unknown): Attachment[] => {
@@ -383,6 +436,7 @@ const toMessage = (r: Row): Message => ({
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
   attachments: toAttachments(r.attachments),
+  reply_to: r.reply_to == null ? null : Number(r.reply_to),
   poll: toPoll(r.poll),
 });
 
@@ -414,8 +468,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
 
   return {
     ensure,
-    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
+      recipient = notToSelf(sender, recipient);
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
         // Counted after taking the lock, so concurrent posts by one sender can't both slip past the limit.
@@ -424,6 +479,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           [sender],
         );
         if ((n as number) >= limitPerMin) return null;
+        // A reply must answer a message that exists. The foreign key would refuse it too; asking
+        // first gives the sender a clear answer instead of a database error.
+        if (reply_to !== null) {
+          const found = await tx.query(`SELECT 1 FROM messages WHERE id = $1::bigint`, [reply_to]);
+          if (!found.length) throw new ReplyTargetError(reply_to);
+        }
         // Checked before the insert, and locked, so two posts can't link the same upload. A failure
         // here throws, which rolls the transaction back: no message, no link.
         const linked: Attachment[] = [];
@@ -441,10 +502,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           }
         }
         const rows = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, pinned_at)
-           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END)
+          `INSERT INTO messages (sender, recipient, text, pinned_at, reply_to)
+           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END, $5::bigint)
            RETURNING ${BASE_COLS}`,
-          [sender, recipient, text, Boolean(pinned)],
+          [sender, recipient, text, Boolean(pinned), reply_to],
         );
         // The link commits together with the message, so a reader never sees one without the other.
         for (const [position, a] of linked.entries()) {
@@ -456,7 +517,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { ...toMessage(rows[0]), attachments: linked };
       });
     },
-    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+    async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
       await ensure();
       const id = newAttachmentId();
       let removed: string[] = [];
@@ -475,12 +536,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         );
         if ((n as number) >= limitPerHour) return null;
         await tx.query(
-          `INSERT INTO attachments (id, sender, content_type, bytes, width, height)
-           VALUES ($1::text, $2::text, $3::text, $4::int, $5::int, $6::int)`,
-          [id, sender, content_type, data.length, width, height],
+          `INSERT INTO attachments (id, sender, content_type, bytes, width, height, scale)
+           VALUES ($1::text, $2::text, $3::text, $4::int, $5::int, $6::int, $7::int)`,
+          [id, sender, content_type, data.length, width, height, scale],
         );
         await blobs.put(tx, id, data);
-        return { id, content_type, width, height, bytes: data.length };
+        return { id, content_type, width, height, bytes: data.length, scale };
       });
       if (removed.length) await blobs.delete(db, removed);
       return stored;
@@ -608,6 +669,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
+      recipient = notToSelf(creator, recipient);
       const id = newPollId();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
@@ -719,7 +781,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], poll: null, ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], reply_to: null, poll: null, ...r };
     rows.push(m);
     return m;
   };
@@ -777,14 +839,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
-  const meta = ({ id, content_type, width, height, bytes }: Attachment): Attachment => ({ id, content_type, width, height, bytes });
+  const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
     async ensure() {},
-    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
+      recipient = notToSelf(sender, recipient);
       const recent = rows.filter((m) => m.sender === sender && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
+      if (reply_to !== null && !rows.some((m) => m.id === reply_to)) throw new ReplyTargetError(reply_to);
       const linked = attachments.map((id) => {
         const upload = uploads.get(id);
         if (!upload) throw new AttachmentLinkError(id, 'unknown');
@@ -792,17 +856,19 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
-      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta) });
+      const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to });
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },
-    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+    async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
+      // The same check the database makes.
+      if (!Number.isInteger(scale) || scale < 1 || scale > MAX_SCALE) throw new Error(`An image's scale must be a whole number from 1 to ${MAX_SCALE}.`);
       const removed = [...uploads.values()].filter((u) => u.message_id === null && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
       for (const id of removed) uploads.delete(id);
       if (removed.length) await blobs.delete(noDb, removed);
       const recent = [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
       if (recent >= limitPerHour) return null;
-      const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length };
+      const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length, scale };
       await blobs.put(noDb, attachment.id, data);
       uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
       return attachment;
@@ -868,6 +934,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
+      recipient = notToSelf(creator, recipient);
       const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
       const m = push({ sender: shaped(creator), recipient: recipient ? shaped(recipient) : null, text: question });

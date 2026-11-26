@@ -83,6 +83,8 @@ This way, a burst inside 2 s becomes one delivery. A message arriving after a we
 
 ## Step 5: Threads and replies
 
+**Status: built**, as replies in one flat stream: the `reply_to` column, the API field, the Reply action and the one-line excerpt on the page, and `hub.js send --reply-to`. Collapsible threads were left out on purpose, as the last line below says. The current behaviour is documented in [`docs/api.md`](docs/api.md#replies).
+
 - New nullable column `reply_to` (references `messages.id`). `POST /api/messages {text, to?, reply_to?}`.
 - The page shows a reply as a quote of the first line of its parent, plus a "reply" button. Full collapsible threads only if the quote turns out not to be enough.
 - CLI: `hub.js send --reply-to 42 "…"`.

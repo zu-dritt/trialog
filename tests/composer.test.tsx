@@ -4,7 +4,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EXPANDED_SHARE, ExpandButton, GROW_SHARE, MAX_DRAFT_CHARS, MIN_BOX_HEIGHT, boxSize, draftFor, draftKey, readDraft, writeDraft } from '../app/composer';
+import { EMPTY_DRAFT, EXPANDED_SHARE, ExpandButton, GROW_SHARE, MAX_DRAFT_CHARS, MIN_BOX_HEIGHT, boxSize, draftFor, draftKey, readDraft, writeDraft } from '../app/composer';
 
 const LINE = 22.5; // one line of text in the box
 const lines = (n: number) => Math.ceil(n * LINE + 14); // text plus padding and border
@@ -52,51 +52,99 @@ function memoryStorage(initial: Record<string, string> = {}) {
   };
 }
 
+const text = (t: string) => ({ text: t, quotes: [] });
+const quote = { author: 'Grok', messageId: 45, kind: 'selection' as const, text: 'the quoted words' };
+const whole = { author: 'Claude', messageId: 46, kind: 'message' as const, text: '- a list\n- in Markdown' };
+
 test('an unsent draft is kept per participant and removed when it is sent', () => {
   const storage = memoryStorage();
-  writeDraft(storage, 'claude', 'half a thought\nsecond line');
-  writeDraft(storage, 'grok', 'another one');
-  assert.equal(readDraft(storage, 'claude'), 'half a thought\nsecond line');
-  assert.equal(readDraft(storage, 'grok'), 'another one');
+  writeDraft(storage, 'claude', text('half a thought\nsecond line'));
+  writeDraft(storage, 'grok', text('another one'));
+  assert.deepEqual(readDraft(storage, 'claude'), text('half a thought\nsecond line'));
+  assert.deepEqual(readDraft(storage, 'grok'), text('another one'));
   assert.deepEqual([...storage.map.keys()].sort(), [draftKey('claude'), draftKey('grok')], 'one entry each, and nothing else');
-  // Sending empties the box, which removes the entry rather than storing an empty one.
-  writeDraft(storage, 'claude', '');
+  assert.equal(storage.map.get(draftKey('grok')), 'another one', 'a draft without quotes is stored as its plain text, as before');
+  // Sending empties the composer, which removes the entry rather than storing an empty one.
+  writeDraft(storage, 'claude', EMPTY_DRAFT);
   assert.equal(storage.map.has(draftKey('claude')), false);
-  assert.equal(readDraft(storage, 'claude'), '');
-  assert.equal(readDraft(storage, 'grok'), 'another one', 'the other participant is untouched');
-  writeDraft(storage, 'grok', '  \n ');
+  assert.deepEqual(readDraft(storage, 'claude'), EMPTY_DRAFT);
+  assert.deepEqual(readDraft(storage, 'grok'), text('another one'), 'the other participant is untouched');
+  writeDraft(storage, 'grok', text('  \n '));
   assert.equal(storage.map.size, 0, 'only spaces is nothing worth keeping');
 });
 
-test('draft storage never breaks the box: oversized text and a storage that refuses', () => {
+test('quotes are kept with the draft, in the same entry, and cleared with it', () => {
   const storage = memoryStorage();
-  writeDraft(storage, 'claude', 'kept');
-  writeDraft(storage, 'claude', 'x'.repeat(MAX_DRAFT_CHARS + 1));
+  writeDraft(storage, 'claude', { text: 'my answer', quotes: [quote, whole] });
+  assert.equal(storage.map.size, 1, 'still one entry per participant');
+  assert.deepEqual(readDraft(storage, 'claude'), { text: 'my answer', quotes: [quote, whole] }, 'text, quotes and their order come back');
+  // Quotes alone are worth keeping: the text field may still be empty.
+  writeDraft(storage, 'grok', { text: '', quotes: [quote] });
+  assert.deepEqual(readDraft(storage, 'grok'), { text: '', quotes: [quote] });
+  // What the page adds to a quote for its own use (a key) is not stored.
+  writeDraft(storage, 'grok', { text: '', quotes: [{ ...quote, key: 7 } as typeof quote] });
+  assert.ok(!String(storage.map.get(draftKey('grok'))).includes('"key"'));
+  // Sent: text and quotes are gone together.
+  writeDraft(storage, 'claude', EMPTY_DRAFT);
+  assert.equal(storage.map.has(draftKey('claude')), false);
+  // Only the message text and the quotes are stored: no token, no images.
+  assert.deepEqual(Object.keys(JSON.parse(String(storage.map.get(draftKey('grok'))))).sort(), ['quotes', 'text', 'v']);
+});
+
+test('what comes out of storage is checked: an old plain draft, a broken one, a tampered one', () => {
+  // A draft stored before quotes existed is plain text, and is read as that.
+  assert.deepEqual(readDraft(memoryStorage({ [draftKey('claude')]: 'written last week' }), 'claude'), text('written last week'));
+  // Plain text that merely looks a little like the new format stays plain text.
+  for (const plain of ['{"v":1, not json at all', '{"v":1,"text":5}', '{"v":2,"text":"x","quotes":[]}', '{"text":"x"}', '[1,2,3]']) {
+    assert.deepEqual(readDraft(memoryStorage({ [draftKey('claude')]: plain }), 'claude'), text(plain), plain);
+  }
+  // Quotes that are not quotes are dropped one by one; the rest and the text survive.
+  const tampered = JSON.stringify({ v: 1, text: 'kept', quotes: [quote, { author: '', messageId: 1, kind: 'selection', text: 'x' }, { author: 'Grok', messageId: -4, kind: 'selection', text: 'x' },
+    { author: 'Grok', messageId: 2, kind: 'html', text: '<img src=x>' }, { author: 'Grok', messageId: 3, kind: 'message', text: '   ' }, 'a string', null, quote, whole] });
+  assert.deepEqual(readDraft(memoryStorage({ [draftKey('claude')]: tampered }), 'claude'), { text: 'kept', quotes: [quote, whole] });
+  // Never more than five quotes, whatever is stored.
+  const many = JSON.stringify({ v: 1, text: '', quotes: Array.from({ length: 9 }, (_, n) => ({ ...quote, messageId: n + 1 })) });
+  assert.equal(readDraft(memoryStorage({ [draftKey('claude')]: many }), 'claude').quotes.length, 5);
+});
+
+test('draft storage never breaks the composer: oversized drafts and a storage that refuses', () => {
+  const storage = memoryStorage();
+  writeDraft(storage, 'claude', text('kept'));
+  writeDraft(storage, 'claude', text('x'.repeat(MAX_DRAFT_CHARS + 1)));
   assert.equal(storage.map.size, 0, 'too long to ever be sent: not kept, and the older draft is not left behind as if current');
-  assert.equal(readDraft(memoryStorage({ [draftKey('claude')]: 'y'.repeat(MAX_DRAFT_CHARS + 1) }), 'claude'), '');
+  assert.deepEqual(readDraft(memoryStorage({ [draftKey('claude')]: 'y'.repeat(MAX_DRAFT_CHARS + 1) }), 'claude'), EMPTY_DRAFT);
+  writeDraft(storage, 'claude', { text: 'kept', quotes: [{ ...quote, text: 'z'.repeat(4 * MAX_DRAFT_CHARS) }] });
+  assert.equal(storage.map.size, 0, 'a quote far too long to send is not kept either');
   const refusing = {
     getItem: () => { throw new Error('storage is off'); },
     setItem: () => { throw new Error('quota'); },
     removeItem: () => { throw new Error('storage is off'); },
   };
-  assert.equal(readDraft(refusing, 'claude'), '');
-  assert.doesNotThrow(() => writeDraft(refusing, 'claude', 'text'));
-  assert.doesNotThrow(() => writeDraft(refusing, 'claude', ''));
+  assert.deepEqual(readDraft(refusing, 'claude'), EMPTY_DRAFT);
+  assert.doesNotThrow(() => writeDraft(refusing, 'claude', { text: 'text', quotes: [quote] }));
+  assert.doesNotThrow(() => writeDraft(refusing, 'claude', EMPTY_DRAFT));
 });
 
-test('whose draft the box shows once the page knows who is signed in', () => {
-  // After a reload: the box is empty and the stored draft comes back.
-  assert.equal(draftFor('', null, 'claude', 'stored text'), 'stored text');
-  assert.equal(draftFor('', null, 'claude', ''), '');
-  // Text typed in the first moment, before the page knew who is signed in, wins over the stored draft.
-  assert.equal(draftFor('typed at once', null, 'claude', 'stored text'), 'typed at once');
-  assert.equal(draftFor('   ', null, 'claude', 'stored text'), 'stored text', 'spaces alone do not count as typing');
-  // The same participant again (a reconnect): the box is left alone.
-  assert.equal(draftFor('still writing', 'claude', 'claude', 'older stored text'), 'still writing');
-  assert.equal(draftFor('', 'claude', 'claude', 'older stored text'), '');
-  // Another participant signs in at the same browser: never the previous one's text.
-  assert.equal(draftFor('text of the first', 'claude', 'grok', 'text of the second'), 'text of the second');
-  assert.equal(draftFor('text of the first', 'claude', 'grok', ''), '');
+test('whose draft the composer shows once the page knows who is signed in', () => {
+  const stored = { text: 'stored text', quotes: [quote] };
+  // After a reload: the composer is empty and the stored draft comes back, quotes included.
+  assert.deepEqual(draftFor(EMPTY_DRAFT, null, 'claude', stored), stored);
+  assert.deepEqual(draftFor(EMPTY_DRAFT, null, 'claude', EMPTY_DRAFT), EMPTY_DRAFT);
+  // Something typed or quoted in the first moment, before the page knew who is signed in, wins.
+  const typed = text('typed at once');
+  assert.equal(draftFor(typed, null, 'claude', stored), typed);
+  const quotedAtOnce = { text: '', quotes: [whole] };
+  assert.equal(draftFor(quotedAtOnce, null, 'claude', stored), quotedAtOnce);
+  assert.deepEqual(draftFor(text('   '), null, 'claude', stored), stored, 'spaces alone do not count as typing');
+  // The same participant again (a reconnect): the composer is left alone.
+  const writing = text('still writing');
+  assert.equal(draftFor(writing, 'claude', 'claude', stored), writing);
+  assert.equal(draftFor(EMPTY_DRAFT, 'claude', 'claude', stored), EMPTY_DRAFT);
+  // Another participant signs in at the same browser: never the previous one's text or quotes.
+  const first = { text: 'text of the first', quotes: [quote] };
+  const second = { text: 'text of the second', quotes: [whole] };
+  assert.deepEqual(draftFor(first, 'claude', 'grok', second), second);
+  assert.deepEqual(draftFor(first, 'claude', 'grok', EMPTY_DRAFT), EMPTY_DRAFT);
 });
 
 test('the expand button says what it does and which state it is in', () => {

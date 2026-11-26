@@ -1,16 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
+import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
+import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
-import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
+import {
+  MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
+  pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
+} from './quote';
+import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
+import { NewVersionPill, useWaitingLong } from './version';
+import { BUILD_ID, isOtherBuild } from '../lib/build';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
@@ -73,11 +81,17 @@ export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
   const [status, setStatus] = useState('connecting…');
+  const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  // The server runs another build than this page was loaded with. The page says so and waits for a click.
+  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
+  const newVersionWaitsLong = useWaitingLong(newVersion);
   const [draft, setDraft] = useState('');
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
   const [participants, setParticipants] = useState<Participant[]>([]);
+  // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
+  const names = useMemo(() => participants.map((p) => p.name), [participants]);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [drafts, setDrafts] = useState<Draft[]>([]); // images waiting in the composer
   const [dragging, setDragging] = useState(false);
@@ -94,8 +108,17 @@ export default function Page() {
   const [pollError, setPollError] = useState('');
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
+  const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [expanded, setExpanded] = useState(false); // the tall writing area
+  const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
+  const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
+  const [quotes, setQuotes] = useState<QuoteChip[]>([]); // quotes waiting above the message box
+  const quotesRef = useRef<QuoteChip[]>([]);
+  const draftRef = useRef('');
+  const nextQuoteKey = useRef(1);
+  quotesRef.current = quotes;
+  draftRef.current = draft;
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
 
@@ -124,7 +147,7 @@ export default function Page() {
    * Adds images to the composer: from the clipboard, a drop or the file picker. Each one gets a
    * preview chip at once and is uploaded in the background (shrunk first when it is over 4 MB).
    */
-  const addImages = useCallback((files: File[]) => {
+  const addImages = useCallback((files: File[], pasted = false) => {
     const images = files.filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
     const accepted = images.filter((f) => ACCEPT.split(',').includes(f.type));
@@ -142,8 +165,7 @@ export default function Page() {
     added.forEach((d, i) => {
       void (async () => {
         try {
-          const blob = await prepareForUpload(taken[i]);
-          const res = await api('/api/attachments', { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+          const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
           update(d.key, { state: 'ready', attachment: (await res.json()) as Attachment });
         } catch (e) {
           update(d.key, { state: 'failed', error: errorMessage(e) === 'unauthorized' ? 'not signed in' : errorMessage(e) });
@@ -235,7 +257,13 @@ export default function Page() {
       let goodbye = false;
       const parser = createSseParser((event: SseEvent) => {
         if (stopped) return;
-        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
+        if (event.event === 'hello') {
+          // Every (re)connect of the stream says who we are and which build the server runs.
+          const hello = JSON.parse(event.data) as { me: Sender; build?: unknown };
+          setMe(hello.me);
+          if (typeof hello.build === 'string') setServerBuild(hello.build);
+          setStatus('live');
+        }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
         else if (event.event === 'bye') goodbye = true;
@@ -309,19 +337,22 @@ export default function Page() {
   // The box grows with its text up to a share of the window, or is the tall writing area.
   useBoxHeight(boxRef, draft, expanded, viewportHeight);
 
-  // An unsent draft survives a reload: the text only, per participant, in this browser.
-  // (This effect comes first on purpose. In the render where `me` changes, the box still holds
-  // the previous text, and it must not be saved under the new name.)
+  // An unsent draft survives a reload: the text and the quotes, never the images, per participant,
+  // in this browser. (This effect comes first on purpose. In the render where `me` changes, the
+  // composer still holds the previous draft, and it must not be saved under the new name.)
   useEffect(() => {
-    if (me && draftOwner.current === me) writeDraft(localStorage, me, draft);
-  }, [draft, me]);
+    if (me && draftOwner.current === me) writeDraft(localStorage, me, { text: draft, quotes });
+  }, [draft, quotes, me]);
   // Once the page knows who is signed in, that participant's draft comes back.
   useEffect(() => {
     if (!me || draftOwner.current === me) return;
     const owner = draftOwner.current;
-    const stored = readDraft(localStorage, me);
     draftOwner.current = me;
-    setDraft((current) => draftFor(current, owner, me, stored));
+    const current = { text: draftRef.current, quotes: quotesRef.current };
+    const next = draftFor(current, owner, me, readDraft(localStorage, me));
+    if (next === current) return;
+    setDraft(next.text);
+    setQuotes(next.quotes.map((q) => ({ ...q, key: nextQuoteKey.current++ })));
   }, [me]);
   const onScroll = () => {
     const el = listRef.current;
@@ -350,27 +381,34 @@ export default function Page() {
     if (at >= box.value.length) box.scrollTop = box.scrollHeight;
   }, [draft]);
 
-  // Quote a selection: text selected inside one message can be put into the message box as a quote.
+  // Quote a selection: text selected inside one message becomes a quote chip above the message box.
   const [quotable, clearQuotable] = useQuotableSelection();
   /** Quotes `selected` from message `m`, or the whole message when `selected` is null. */
   const addQuote = useCallback((m: Message, selected: string | null) => {
-    const box = boxRef.current;
-    if (!box) return;
-    const author = displayName(m.sender);
     const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
-    if (selected === null && source === '') return;
-    const quote = selected === null ? quoteMessage(author, m.id, source) : quoteSelection(author, m.id, selected);
-    const next = insertQuote(box.value, box.selectionStart, box.selectionEnd, quote);
-    cursorAfterInsert.current = next.cursor;
-    setDraft(next.text);
+    const text = selected ?? source;
+    if (text.trim() === '') return;
+    const chip: QuoteChip = { key: nextQuoteKey.current++, author: displayName(m.sender), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
+    const result = withQuote(quotesRef.current, chip);
+    setNotice(result.refused === 'full' ? `A message can carry at most ${MAX_QUOTES} quotes.` : '');
+    quotesRef.current = result.quotes; // so a second quote right away counts this one
+    setQuotes(result.quotes);
     clearQuotable();
-    box.focus();
+    boxRef.current?.focus(); // the box stays free for what the writer wants to say
   }, [clearQuotable]);
+  const removeQuote = (key: number) => {
+    setQuotes((list) => list.filter((q) => q.key !== key));
+    boxRef.current?.focus();
+  };
   const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
 
   const uploading = drafts.some((d) => d.state === 'uploading');
   const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
-  const canSend = !sending && !uploading && (draft.trim() !== '' || ready.length > 0);
+  // What will be sent: the quotes written out as Markdown, then the typed text. The 20 KB limit is
+  // the server's and counts all of it, so the writer is told before sending, not after.
+  const composed = composeMessage(quotes, draft);
+  const overLimit = tooLong(composed, quotes.length);
+  const canSend = !sending && !uploading && !overLimit && (draft.trim() !== '' || ready.length > 0 || quotes.length > 0);
 
   const send = async () => {
     if (!canSend) return;
@@ -378,8 +416,15 @@ export default function Page() {
     setNotice('');
     setEmojiOpen(false);
     try {
-      const body: { text: string; to?: string; attachments?: string[] } = { text: draft };
+      const sentQuotes = quotes; // the quotes that go out with this message, as they are right now
+      const body: { text: string; to?: string; attachments?: string[]; reply_to?: number } = { text: composed };
+      // "@name" and "DECISION:" at the start of what was typed mean what they always mean. The
+      // server looks for them at the start of the message, where the quotes now stand, so the
+      // page asks for the recipient here, and for the pin below.
+      const typed = sentQuotes.length ? typedIntent(draft, names) : { to: null, decision: false };
       if (to) body.to = to;
+      else if (typed.to) body.to = typed.to;
+      if (replyTo) body.reply_to = replyTo.id;
       const sent = ready; // the images that go out with this message, as they are right now
       if (sent.length) body.attachments = sent.map((d) => d.attachment!.id);
       const res = await api('/api/messages', {
@@ -387,12 +432,23 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const { message } = (await res.json()) as { message: Message };
+      let { message } = (await res.json()) as { message: Message };
+      if (typed.decision && !message.pinned_at) {
+        try {
+          const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
+          message = ((await pinnedNow.json()) as { message: Message }).message;
+        } catch (e) {
+          if (errorMessage(e) !== 'unauthorized') setNotice(`The message was sent, but it could not be pinned: ${errorMessage(e)}`);
+        }
+      }
       // Don't move lastId forward here: the next poll picks up anything sent in between.
       setMessages((list) => merge(list, [message]));
       if (message.pinned_at) setPinned((p) => merge(p, [message]));
       setDraft(''); // which also removes the stored draft and lets the box shrink back
+      // Only what was sent leaves the composer: a quote added while the message was on its way stays.
+      setQuotes((list) => list.filter((q) => !sentQuotes.some((sentQuote) => sentQuote.key === q.key)));
       setExpanded(false);
+      setReplyTo(null);
       // Only what was sent leaves the composer. An image added while the message was on its way stays.
       for (const d of sent) URL.revokeObjectURL(d.preview);
       setDrafts((list) => withoutSent(list, sent));
@@ -402,6 +458,22 @@ export default function Page() {
     } finally {
       setSending(false);
     }
+  };
+
+  /** Starts a reply to `m`: the composer shows whom it answers, and the cursor goes to the message box. */
+  const startReply = (m: Message) => {
+    setReplyTo(m);
+    boxRef.current?.focus();
+  };
+  /** Goes to a message in the stream and marks it for a moment, so the eye finds it. */
+  const jumpTo = (id: number) => {
+    const target = document.getElementById(`m-${id}`);
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.focus({ preventScroll: true }); // for a screen reader, and so Tab goes on from there
+    setMarked(id);
+    clearTimeout(markTimer.current);
+    markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
 
   const togglePin = async (m: Message, isPinned: boolean) => {
@@ -485,18 +557,26 @@ export default function Page() {
   if (!token) return <TokenForm onSave={saveToken} />;
 
   const pinnedIds = new Set(pinned.map((m) => m.id));
+  const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
   // A name the server doesn't list (the hub's welcome, a former participant) gets the neutral colour.
   const color = (name: string) => colorOf(name, participants);
   const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
   const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
+  const reload = () => window.location.reload();
 
   return (
     <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
-      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+      {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
+      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        <span className="flex-1" />
+        {/* The free space of the header starts with the "New version available" pill, directly after
+            the status, so the state of the page reads in one spot and nothing else moves when it
+            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
+        <span role="status" className="flex flex-1">
+          {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
+        </span>
         {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
@@ -504,11 +584,13 @@ export default function Page() {
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">Decisions</h2>
+          {/* Every pinned message is listed here. A decision carries its badge; a message pinned by hand does not. */}
+          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
                 <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{displayName(m.sender)}</span>{' '}
+                {isDecision(m.text, names) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -531,7 +613,8 @@ export default function Page() {
               {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
               <article
                 id={`m-${m.id}`}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
+                tabIndex={-1}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`}
                 style={{ borderLeftColor: own }}
               >
                 <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
@@ -545,18 +628,39 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
+                    {isDecision(m.text, names) && <DecisionBadge className="max-sm:hidden" />}
+                    <ReplyButton
+                      messageId={m.id}
+                      onReply={() => startReply(m)}
+                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                    />
                     <QuoteMessageButton
                       messageId={m.id}
                       // With text selected in this message, the button quotes that text; otherwise the whole message.
                       onQuote={() => { const pick = pickSelection(window.getSelection()); addQuote(m, pick?.messageId === m.id ? pick.text : null); }}
-                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                      className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
                     />
                     <button
                       className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
-                      title={isPinned ? 'Unpin decision' : 'Pin as decision'}
+                      // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
+                      title={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-pressed={isPinned}
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
+                  {isDecision(m.text, names) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
+                  {m.reply_to != null && (() => {
+                    const parent = byId.get(m.reply_to);
+                    return (
+                      <ReplyContext
+                        replyTo={m.reply_to} parent={parent} onJump={jumpTo}
+                        author={parent ? displayName(parent.sender) : undefined}
+                        authorColor={parent ? color(parent.sender) : undefined}
+                      />
+                    );
+                  })()}
                   {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
                     <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
                       <MessageBody text={m.text} />
@@ -585,7 +689,15 @@ export default function Page() {
         {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
         {setupError && <div role="alert" className="mb-1.5 text-[13px] text-bad">{setupError}</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
-        <DraftChips drafts={drafts} onRemove={removeDraft} />
+        {overLimit && <div className="mb-1.5 text-[13px] text-bad" role="alert">{overLimit}</div>}
+        {/* Everything that goes with the next message, in one row: the message it answers, quotes, images. */}
+        {(replyTo || quotes.length > 0 || drafts.length > 0) && (
+          <ChipRow>
+            {replyTo && <ReplyingTo parent={replyTo} author={displayName(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
+            <QuoteChips quotes={quotes} onRemove={removeQuote} />
+            <DraftChips drafts={drafts} onRemove={removeDraft} />
+          </ChipRow>
+        )}
         {pollOpen && (
           <PollComposer
             busy={pollBusy}
@@ -607,7 +719,7 @@ export default function Page() {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
               if (!files.length) return; // plain text: paste as usual
               e.preventDefault();
-              addImages(files);
+              addImages(files, true); // from the clipboard: see uploadRequest
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
             // The height is set from the text (see useBoxHeight), so the browser's own resize

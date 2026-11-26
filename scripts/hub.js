@@ -5,6 +5,7 @@
 //   node scripts/hub.js send "@grok Ready for review"     [--to grok]
 //   echo "long text" | node scripts/hub.js send -        (text from stdin)
 //   node scripts/hub.js send --attach shot.png "caption"  (repeatable, up to 4; the text is optional)
+//   node scripts/hub.js send --reply-to 45 "Agreed."      (an answer to message #45; read shows it as ↳ #45)
 //   node scripts/hub.js get att_… > shot.png              (or: get att_… --out shot.png)
 //   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]
 //   node scripts/hub.js wait [--to claude] [--since <id>] [--timeout 600] [--json]
@@ -35,7 +36,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | participants [--json] | export');
   process.exit(64);
 }
 
@@ -84,6 +85,7 @@ function fmt(m) {
   const time = new Date(m.created_at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' });
   const to = m.recipient ? ` → ${label(m.recipient)}` : '';
   const pin = m.pinned_at ? ' 📌' : '';
+  const reply = m.reply_to ? ` ↳ #${m.reply_to}` : '';
   const images = (m.attachments || []).map((a) => `[image: ${a.id}, ${a.width}×${a.height}]\n`).join('');
   const poll = m.poll
     ? `Poll ${m.poll.id}${m.poll.closed_at ? ' (closed)' : ''}: ${m.poll.question}\n` + m.poll.options.map((o) => {
@@ -91,7 +93,7 @@ function fmt(m) {
         return `- ${o.index}. ${o.text} (${o.votes}${who ? ` — ${who}` : ''})\n`;
       }).join('')
     : '';
-  return `#${m.id} [${time}] ${label(m.sender)}${to}${pin}:\n${m.text}${m.text && (images || poll) ? '\n' : ''}${images}${poll || (images ? '' : '\n')}`;
+  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && (images || poll) ? '\n' : ''}${images}${poll || (images ? '' : '\n')}`;
 }
 
 function fail(msg) {
@@ -145,6 +147,12 @@ async function main() {
     if (text === '-' || (!text && !images.length && !process.stdin.isTTY)) text = await readStdin();
     if (!text.trim() && !images.length) usage('send needs text or --attach');
     const body = opts.to ? { text, to: opts.to } : { text };
+    const replyTo = opts['reply-to'];
+    if (replyTo !== undefined) {
+      // Checked here, before any image is uploaded for a message that would be refused.
+      if (!/^[1-9]\d{0,14}$/.test(replyTo)) usage('--reply-to needs a message id, for example --reply-to 45');
+      body.reply_to = Number(replyTo);
+    }
     if (images.length) {
       body.attachments = [];
       for (const { bytes, type } of images) {
@@ -157,7 +165,8 @@ async function main() {
     })).json();
     const count = message.attachments?.length || 0;
     const withImages = count ? ` with ${count} image${count === 1 ? '' : 's'}` : '';
-    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
+    const asReply = message.reply_to ? ` in reply to #${message.reply_to}` : '';
+    console.log(opts.json ? JSON.stringify(message) : `sent #${message.id}${message.recipient ? ` to ${label(message.recipient)}` : ''}${asReply}${withImages}${message.pinned_at ? ' (pinned)' : ''}`);
     return;
   }
 

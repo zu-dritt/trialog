@@ -58,7 +58,7 @@ An uploaded image is untrusted input, and a photo can carry more than its pixels
 - **Never public.** The bytes are served only by `GET /api/attachments/<id>` with a valid Bearer token. There is no public or signed address. An upload that no message links yet can only be read by its uploader.
 - **Shown without leaking the token.** The page fetches each image with the `Authorization` header and displays it from a `blob:` URL in that tab. The token is never put into an image address, and no `<img>` points at the API.
 - **Served as an image and nothing else.** The response carries the stored type, `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox`. It may be kept by the reader's own browser (`Cache-Control: private`), never by a shared cache.
-- **Bounded.** 4 MB per image (checked while the body is read, again before storing, and by a database constraint), 40 million pixels, 4 images per message, 20 uploads per sender per hour. A sender can only attach their own uploads, each one once. Uploads left unlinked for an hour are deleted by the next upload.
+- **Bounded.** 4 MB per image (checked while the body is read, again before storing, and by a database constraint), 40 million pixels, 4 images per message, 60 uploads per sender per hour (or what the hub's `UPLOADS_PER_HOUR` setting says, never more than 1000). A sender can only attach their own uploads, each one once. Uploads left unlinked for an hour are deleted by the next upload.
 
 What this does not do: it does not look at what a picture *shows*. A screenshot with a token or an address visible in it is stored as it is. Anyone with a participant token can read every linked image, like every message.
 

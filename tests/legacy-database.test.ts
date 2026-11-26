@@ -109,7 +109,7 @@ test('first request on an old database: every row is kept, and the name checks b
     [4, 'claude', 'david', 'DECISION: we keep the three colours'],
     [5, 'david', 'grok', 'a screenshot'],
   ]);
-  assert.deepEqual(all[4].attachments, [{ id: IMAGE_ID, content_type: 'image/png', width: 40, height: 20, bytes: IMAGE_BYTES.length }]);
+  assert.deepEqual(all[4].attachments, [{ id: IMAGE_ID, content_type: 'image/png', width: 40, height: 20, bytes: IMAGE_BYTES.length, scale: 1 }]);
   assert.deepEqual((await store.pinned()).map((m) => m.id), [4]);
   assert.ok((await store.getAttachment(IMAGE_ID))?.data.equals(IMAGE_BYTES));
   assert.deepEqual((await store.listStatuses()).map((s) => [s.participant, s.text]), [['grok', 'reviewing']]);
@@ -139,7 +139,7 @@ test('the migration is idempotent: a second start, the migration file and the wh
 
   await createSqlStore(pgliteDb(pg)).ensure(); // the next cold start
   await Promise.all([createSqlStore(pgliteDb(pg)).ensure(), createSqlStore(pgliteDb(pg)).ensure()]); // two at once
-  const migration = await file('../migrations/005-any-participants.sql');
+  const migration = await file('../migrations/007-any-participants.sql');
   await pg.exec(migration);
   await pg.exec(migration);
   await pg.exec(await file('../schema.sql'));

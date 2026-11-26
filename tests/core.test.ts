@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { MAX_TEXT_BYTES, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
+import { MAX_TEXT_BYTES, UPLOADS_PER_HOUR, uploadsPerHour, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
 import { sniffImageType } from '../lib/images';
 
 // The names that apply when PARTICIPANTS is not set. Other names are covered in participants.test.ts.
@@ -56,7 +56,7 @@ const fail = (body: unknown) => {
 };
 
 test('parseMessageInput: addressing by "to" or by @prefix', () => {
-  assert.deepEqual(parseMessageInput({ text: 'hi all' }, THREE), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [] });
+  assert.deepEqual(parseMessageInput({ text: 'hi all' }, THREE), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [], replyTo: null });
   assert.equal(ok({ text: '@grok please review' }).recipient, 'grok');
   assert.equal(ok({ text: '  @Claude: done?' }).recipient, 'claude');
   assert.equal(ok({ text: 'mail @grok later' }).recipient, null);
@@ -102,8 +102,8 @@ test('parseSince', () => {
 
 test('toMarkdown lists decisions first, then all messages', () => {
   const messages: Message[] = [
-    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [] },
-    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [] },
+    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null },
+    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.match(md, /^# Trialog transcript/);
@@ -139,11 +139,11 @@ test('parseMessageInput: attachments are optional, at most 4, and make the text 
 });
 
 test('toMarkdown names each image, and an image-only message has no empty text block', () => {
-  const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234 };
+  const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234, scale: 1 };
   const other = { ...shot, id: 'att_89abcdef0123456789abcdef', width: 40, height: 20 };
   const messages: Message[] = [
-    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot] },
-    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', attachments: [shot, other] },
+    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot], reply_to: null },
+    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', attachments: [shot, other], reply_to: null },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.ok(md.includes('· #3 · 📌\n\nDECISION: this one\n\n[image: att_0123456789abcdef01234567, 1170×2532]\n\n---'));
@@ -166,4 +166,18 @@ test('sniffImageType reads the first bytes and nothing else', () => {
   // A view into a larger buffer is read from its own start.
   const padded = Buffer.concat([Buffer.from('junk'), Buffer.from([0xff, 0xd8, 0xff, 0xdb])]);
   assert.equal(sniffImageType(padded.subarray(4)), 'image/jpeg');
+});
+
+test('uploadsPerHour reads the setting, and falls back to the default for anything it cannot use', () => {
+  assert.equal(UPLOADS_PER_HOUR, 60);
+  assert.equal(uploadsPerHour({}), 60);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '' }), 60);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '200' }), 200);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: ' 20 ' }), 20);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '1' }), 1);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '1000' }), 1000);
+  // Never "no limit": zero, negative, too large, fractions and words all mean the default.
+  for (const bad of ['0', '-5', '1001', '99999', '12.5', '1e3', 'many', 'Infinity']) {
+    assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: bad }), 60, bad);
+  }
 });
