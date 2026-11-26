@@ -38,7 +38,19 @@ export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
 export const MIN_TOKEN_LENGTH = 16;
 
-export const UPLOADS_PER_HOUR = 20; // image uploads per sender per rolling hour
+/** Image uploads per sender per rolling hour, unless the UPLOADS_PER_HOUR setting says otherwise. */
+export const UPLOADS_PER_HOUR = 60;
+export const MAX_UPLOADS_PER_HOUR = 1000;
+/**
+ * The hourly upload limit for this hub: the UPLOADS_PER_HOUR setting if it is a whole number
+ * from 1 to 1000, otherwise the default. A value that can't be used is ignored, never read as "no limit".
+ */
+export function uploadsPerHour(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.UPLOADS_PER_HOUR?.trim();
+  if (!raw || !/^\d{1,4}$/.test(raw)) return UPLOADS_PER_HOUR;
+  const n = Number(raw);
+  return n >= 1 && n <= MAX_UPLOADS_PER_HOUR ? n : UPLOADS_PER_HOUR;
+}
 export const ORPHAN_MAX_AGE_MS = 60 * 60 * 1000; // an upload that no message links within this time is deleted
 /** Ids look like att_3f9c… (24 hex digits). The pattern is a little wider so the format can grow. */
 export const ATTACHMENT_ID = /^att_[a-z0-9]{8,48}$/;

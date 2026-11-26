@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { MAX_TEXT_BYTES, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
+import { MAX_TEXT_BYTES, UPLOADS_PER_HOUR, uploadsPerHour, firstLine, parseMessageInput, parseRecipient, parseSince, senderFromAuth, toMarkdown, type Message } from '../lib/core';
 import { sniffImageType } from '../lib/images';
 
 const env = {
@@ -163,4 +163,18 @@ test('sniffImageType reads the first bytes and nothing else', () => {
   // A view into a larger buffer is read from its own start.
   const padded = Buffer.concat([Buffer.from('junk'), Buffer.from([0xff, 0xd8, 0xff, 0xdb])]);
   assert.equal(sniffImageType(padded.subarray(4)), 'image/jpeg');
+});
+
+test('uploadsPerHour reads the setting, and falls back to the default for anything it cannot use', () => {
+  assert.equal(UPLOADS_PER_HOUR, 60);
+  assert.equal(uploadsPerHour({}), 60);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '' }), 60);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '200' }), 200);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: ' 20 ' }), 20);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '1' }), 1);
+  assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: '1000' }), 1000);
+  // Never "no limit": zero, negative, too large, fractions and words all mean the default.
+  for (const bad of ['0', '-5', '1001', '99999', '12.5', '1e3', 'many', 'Infinity']) {
+    assert.equal(uploadsPerHour({ UPLOADS_PER_HOUR: bad }), 60, bad);
+  }
 });

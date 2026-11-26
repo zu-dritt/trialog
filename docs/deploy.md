@@ -83,6 +83,7 @@ These are the only configuration names in the app. Set them in Vercel. Do not in
 | `CLAUDE_TOKEN`        | Yes, to use the Claude role | Same rules as above, for Claude. |
 | `DAVID_TOKEN`         | Yes, to use the human's role | Same rules as above, for the human, who opens the page. |
 | `GROK_WEBHOOK_URL`    | No | Grok's wake-up endpoint. Must be a valid `https://` URL. If unset, empty, not `https`, or not a valid URL, the webhook stays off (a warning is logged). |
+| `UPLOADS_PER_HOUR`    | No | How many images one participant may upload per rolling hour. A whole number from 1 to 1000; default 60. Anything else is ignored and the default applies. Images are stored in the database, so a higher number means more storage. |
 | `GROK_WEBHOOK_SECRET` | No | Shared HMAC secret for that endpoint, at least 16 characters. The webhook stays off unless **both** this and `GROK_WEBHOOK_URL` are usable. |
 
 Optional for local development only (not read as app config, but used by the CLI):
