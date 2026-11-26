@@ -561,7 +561,10 @@ const SCHEMA = [
   `DO $$
    BEGIN
      PERFORM pg_advisory_xact_lock(7230421);
-     ALTER TABLE reactions DROP CONSTRAINT IF EXISTS reactions_participant_is_participant;
+     -- Only when it is there: the ALTER would lock the table on every cold start for nothing.
+     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_is_participant') THEN
+       ALTER TABLE reactions DROP CONSTRAINT reactions_participant_is_participant;
+     END IF;
      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_shape') THEN
        ALTER TABLE reactions ADD CONSTRAINT reactions_participant_shape CHECK (participant ~ ${NAME_SHAPE});
      END IF;

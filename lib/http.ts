@@ -116,7 +116,10 @@ export function safe<A extends unknown[]>(handler: (...args: A) => Promise<Respo
       return await handler(...args);
     } catch (e) {
       if (e instanceof ConfigError) return misconfigured(e, args[0]);
-      console.error('[trialog]', e);
+      // Only what identifies the failure. A database error's detail can quote the row it refused,
+      // and a row may hold a secret.
+      const code = typeof e === 'object' && e !== null && 'code' in e ? ` (${String((e as { code: unknown }).code)})` : '';
+      console.error(`[trialog] ${e instanceof Error ? (e.stack ?? e.message) : String(e)}${code}`);
       return error(500, 'Server error. Check the Vercel function logs.');
     }
   };

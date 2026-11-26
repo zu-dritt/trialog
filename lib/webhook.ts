@@ -144,13 +144,19 @@ export function parseWakeTarget(input: { url?: unknown; secret?: unknown }): Wak
   if (parsed.protocol !== 'https:') return { ok: false, error: 'The URL must be https.' };
   if (!parsed.hostname) return { ok: false, error: 'The URL must include a host.' };
   if (parsed.username || parsed.password) return { ok: false, error: 'The URL must not include a username or a password.' };
-  if (secret.length < MIN_SECRET_LENGTH || secret.length > MAX_SECRET_LENGTH) {
+  // Postgres counts characters (code points), JavaScript's length counts UTF-16 units: count as Postgres does.
+  const secretLength = [...secret].length;
+  if (secretLength < MIN_SECRET_LENGTH || secretLength > MAX_SECRET_LENGTH) {
     return { ok: false, error: `The secret must be between ${MIN_SECRET_LENGTH} and ${MAX_SECRET_LENGTH} characters.` };
   }
   if (isInternalHostname(parsed.hostname)) {
     return { ok: false, error: 'The URL must not point at an internal host.' };
   }
-  return { ok: true, target: { url: parsed.toString(), secret } };
+  // What is stored is the normalised URL, which can be much longer than what was typed (ä becomes %C3%A4).
+  // Check that one, so the database never refuses the row (its error would name the row, secret included).
+  const stored = parsed.toString();
+  if (stored.length > MAX_TARGET_URL_LENGTH) return { ok: false, error: 'The URL is too long.' };
+  return { ok: true, target: { url: stored, secret } };
 }
 
 /** The host of a stored target URL, for public answers. Never a path, query, secret or full URL. */
@@ -184,10 +190,14 @@ INTERNAL_V4.addSubnet('127.0.0.0', 8, 'ipv4');
 INTERNAL_V4.addSubnet('172.16.0.0', 12, 'ipv4');
 INTERNAL_V4.addSubnet('192.168.0.0', 16, 'ipv4');
 INTERNAL_V4.addSubnet('169.254.0.0', 16, 'ipv4');
+INTERNAL_V4.addSubnet('198.18.0.0', 15, 'ipv4'); // benchmarking networks
+INTERNAL_V4.addSubnet('224.0.0.0', 3, 'ipv4'); // multicast and reserved (224/4 and 240/4)
 
 const INTERNAL_V6 = new BlockList();
-INTERNAL_V6.addSubnet('::', 128, 'ipv6');
-INTERNAL_V6.addSubnet('::1', 128, 'ipv6');
+INTERNAL_V6.addSubnet('::', 96, 'ipv6'); // ::, ::1 and IPv4-compatible addresses such as ::127.0.0.1
+INTERNAL_V6.addSubnet('64:ff9b::', 96, 'ipv6'); // NAT64: reaches IPv4 addresses, internal ones included
+INTERNAL_V6.addSubnet('fec0::', 10, 'ipv6'); // site-local (deprecated, still routed in some networks)
+INTERNAL_V6.addSubnet('ff00::', 8, 'ipv6'); // multicast
 INTERNAL_V6.addSubnet('fc00::', 7, 'ipv6');
 INTERNAL_V6.addSubnet('fe80::', 10, 'ipv6');
 
