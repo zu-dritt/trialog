@@ -17,7 +17,7 @@ import {
   MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteCommentBox, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
-import { ReactionBar, applyReactionList, replaceMatching } from './reactions';
+import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
@@ -798,25 +798,33 @@ export default function Page() {
                     <span className="text-xs">#{m.id}</span>
                     {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
                     {isDecision(m.text, names, m.decision) && <DecisionBadge className="max-sm:hidden" />}
-                    <ReplyButton
-                      messageId={m.id}
-                      onReply={() => startReply(m)}
-                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-                    />
-                    <QuoteMessageButton
-                      messageId={m.id}
-                      // With text selected in this message, the button quotes that text; otherwise the whole message.
-                      onQuote={(at) => { const pick = pickSelection(window.getSelection()); startQuote(m, pick?.messageId === m.id ? pick.text : null, at); }}
-                      className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-                    />
-                    <button
-                      className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
-                      // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
-                      title={isPinned ? 'Unpin this message' : 'Pin this message'}
-                      aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
-                      aria-pressed={isPinned}
-                      onClick={() => togglePin(m, isPinned)}
-                    >📌</button>
+                    <div className="ml-auto flex items-baseline gap-0">
+                      <ReplyButton
+                        messageId={m.id}
+                        onReply={() => startReply(m)}
+                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                      />
+                      <QuoteMessageButton
+                        messageId={m.id}
+                        // With text selected in this message, the button quotes that text; otherwise the whole message.
+                        onQuote={(at) => { const pick = pickSelection(window.getSelection()); startQuote(m, pick?.messageId === m.id ? pick.text : null, at); }}
+                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                      />
+                      <button
+                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
+                        // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
+                        title={isPinned ? 'Unpin this message' : 'Pin this message'}
+                        aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
+                        aria-pressed={isPinned}
+                        onClick={() => togglePin(m, isPinned)}
+                      >📌</button>
+                      <ReactButton
+                        message={m}
+                        me={me}
+                        onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }}
+                        className="cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                      />
+                    </div>
                   </div>
                   {isDecision(m.text, names, m.decision) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
                   {m.reply_to != null && (() => {

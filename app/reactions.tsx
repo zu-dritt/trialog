@@ -1,8 +1,11 @@
 'use client';
 
-// Reactions on a message: a smiley that opens a short row (👍❤️👎😂🎉 plus more),
-// pills for the current tally, and a quiet hint. The allow-list is the picker catalog.
-import { useEffect, useId, useRef, useState } from 'react';
+// Reactions on a message: a react button in the message's action row opens a short row
+// (👍❤️👎😂🎉 plus more), pills for the current tally sit under the text, and a quiet hint
+// is in the panel. The allow-list is the picker catalog. The panel is fixed, so it is not
+// clipped by the stream, and it opens upward when there is no room above the message box.
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { REACTION_HINT, type Message, type Reaction, type Sender } from '../lib/core';
 import { displayName, type Participant } from '../lib/shared';
 import type { MessageReactions } from '../lib/store';
@@ -25,6 +28,31 @@ export function replaceMatching(list: Message[], incoming: Message[]): Message[]
   return list.map((m) => byId.get(m.id) ?? m);
 }
 
+/**
+ * Where to put the reaction panel, in viewport coordinates. Opens below the button when there is
+ * room above the message box (`reserveBottom` is the box's height); otherwise it opens upward.
+ * The panel is then clamped so it stays on screen and its bottom edge stays above the message box.
+ */
+export function placeReactionPanel(
+  anchor: { top: number; bottom: number; left: number },
+  panel: { width: number; height: number },
+  viewport: { width: number; height: number },
+  reserveBottom = 0,
+  gap = 4,
+): { top: number; left: number; placement: 'below' | 'above' } {
+  const floor = viewport.height - Math.max(0, reserveBottom);
+  const spaceBelow = floor - anchor.bottom - gap;
+  const spaceAbove = anchor.top - gap;
+  const placement: 'below' | 'above' = spaceBelow >= panel.height || spaceBelow >= spaceAbove ? 'below' : 'above';
+  let top = placement === 'below' ? anchor.bottom + gap : anchor.top - gap - panel.height;
+  const maxTop = floor - panel.height;
+  // Prefer staying above the message box: if the panel is taller than the room above the box,
+  // its top may go off-screen rather than cover the box.
+  top = maxTop >= 0 ? Math.min(Math.max(0, top), maxTop) : maxTop;
+  const left = Math.min(Math.max(0, anchor.left), Math.max(0, viewport.width - panel.width));
+  return { top, left, placement };
+}
+
 function loadRecent(): string[] {
   try { return parseRecent(localStorage.getItem(RECENT_KEY)); } catch { return []; }
 }
@@ -45,21 +73,53 @@ interface BarProps {
   participants?: readonly Participant[];
   /** PUT or DELETE the emoji, then hand the updated message back. */
   onToggle: (emoji: string, on: boolean) => void;
+  className?: string;
 }
 
-export function ReactionBar({ message, me, participants = [], onToggle }: BarProps) {
+/** The pills under a message. The react button itself lives in the action row. */
+export function ReactionBar({ message, me, onToggle }: BarProps) {
+  const reactions = message.reactions ?? [];
+  if (!reactions.length) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {reactions.map((r) => {
+        const mine = me !== null && r.by.includes(me);
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            className={`cursor-pointer rounded-full border px-1.5 py-0.5 text-[13px] ${mine ? 'border-line bg-[#2a2f3a] text-fg' : 'border-line bg-transparent text-muted hover:bg-panel'}`}
+            aria-pressed={mine}
+            aria-label={labelFor(r, me)}
+            title={r.by.map((v) => displayName(v)).join(', ')}
+            onClick={() => onToggle(r.emoji, !mine)}
+          >
+            {r.emoji} {r.by.length}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The react control in the message's action row: Reply, Quote, pin and react. */
+export function ReactButton({ message, me, onToggle, className = '' }: BarProps) {
   const [open, setOpen] = useState(false);
   const [more, setMore] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
-  const root = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; placement: 'below' | 'above' } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const reactions = message.reactions ?? [];
 
   useEffect(() => {
-    if (!open) { setMore(false); return undefined; }
+    if (!open) { setMore(false); setPos(null); return undefined; }
     setRecent(loadRecent());
     const onDoc = (e: MouseEvent) => {
-      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (button.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDoc);
@@ -69,6 +129,30 @@ export function ReactionBar({ message, me, participants = [], onToggle }: BarPro
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const anchor = button.current;
+      const box = panel.current;
+      if (!anchor || !box) return;
+      const footer = document.querySelector('footer');
+      const reserveBottom = footer ? Math.max(0, window.innerHeight - footer.getBoundingClientRect().top) : 0;
+      setPos(placeReactionPanel(
+        anchor.getBoundingClientRect(),
+        { width: box.offsetWidth, height: box.offsetHeight },
+        { width: window.innerWidth, height: window.innerHeight },
+        reserveBottom,
+      ));
+    };
+    place();
+    window.addEventListener('resize', place);
+    document.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      document.removeEventListener('scroll', place, true);
+    };
+  }, [open, more]);
 
   const toggle = (emoji: string) => {
     if (!me) return;
@@ -82,35 +166,31 @@ export function ReactionBar({ message, me, participants = [], onToggle }: BarPro
   };
 
   return (
-    <div ref={root} className="relative mt-1">
-      <div className="flex flex-wrap items-center gap-1">
-        {reactions.map((r) => {
-          const mine = me !== null && r.by.includes(me);
-          return (
-            <button
-              key={r.emoji}
-              type="button"
-              className={`cursor-pointer rounded-full border px-1.5 py-0.5 text-[13px] ${mine ? 'border-line bg-[#2a2f3a] text-fg' : 'border-line bg-transparent text-muted hover:bg-panel'}`}
-              aria-pressed={mine}
-              aria-label={labelFor(r, me)}
-              title={r.by.map((v) => displayName(v)).join(', ')}
-              onClick={() => toggle(r.emoji)}
-            >
-              {r.emoji} {r.by.length}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          className="cursor-pointer rounded-full border border-transparent px-1.5 py-0.5 text-[13px] text-muted opacity-40 hover:border-line hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
-          aria-label="Add a reaction"
-          aria-expanded={open}
-          aria-controls={open ? panelId : undefined}
-          onClick={() => setOpen((v) => !v)}
-        >☺</button>
-      </div>
-      {open && (
-        <div id={panelId} className="absolute z-20 mt-1 rounded-md border border-line bg-[#1c1f28] p-2 shadow-lg">
+    <>
+      <button
+        ref={button}
+        type="button"
+        className={className}
+        aria-label="Add a reaction"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        title="React"
+        onClick={() => setOpen((v) => !v)}
+      >☺</button>
+      {open && createPortal(
+        <div
+          ref={panel}
+          id={panelId}
+          // z-50 is above the message box (the footer stacks after the stream and would cover an
+          // in-flow panel). fixed keeps the panel out of the stream's overflow.
+          className="fixed z-50 rounded-md border border-line bg-[#1c1f28] p-2 shadow-lg"
+          style={{
+            top: pos?.top ?? 0,
+            left: pos?.left ?? 0,
+            visibility: pos ? 'visible' : 'hidden',
+          }}
+          data-placement={pos?.placement}
+        >
           <div className="flex flex-wrap items-center gap-1">
             {QUICK_REACTIONS.map((emoji) => {
               const mine = me !== null && reactions.some((r) => r.emoji === emoji && r.by.includes(me));
@@ -141,8 +221,9 @@ export function ReactionBar({ message, me, participants = [], onToggle }: BarPro
               />
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
