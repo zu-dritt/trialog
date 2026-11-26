@@ -27,6 +27,8 @@ export interface NewMessage {
   pinned?: boolean;
   /** Ids of the sender's own uploads that no message links yet, in the order they should appear. */
   attachments?: string[];
+  /** The id of an existing message that this one answers. */
+  reply_to?: number | null;
 }
 /** An image that has already been checked and re-encoded (lib/images.ts). */
 export interface NewAttachment {
@@ -42,6 +44,13 @@ export interface StoredAttachment extends Attachment {
   message_id: number | null;
 }
 /** Thrown by add() when an attachment can't be linked. Nothing is stored in that case. */
+/** Thrown by add() when `reply_to` names a message that does not exist. Nothing is stored in that case. */
+export class ReplyTargetError extends Error {
+  constructor(readonly messageId: number) {
+    super(`Message #${messageId} does not exist, so it can't be replied to.`);
+    this.name = 'ReplyTargetError';
+  }
+}
 export class AttachmentLinkError extends Error {
   constructor(readonly attachmentId: string, readonly reason: 'unknown' | 'not yours' | 'already linked') {
     super({
@@ -78,7 +87,8 @@ export interface Store {
   ensure(): Promise<void>;
   /**
    * Returns the stored message, or null when the sender is over the rate limit.
-   * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked.
+   * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked,
+   * and ReplyTargetError when `reply_to` names a message that does not exist.
    */
   add(input: NewMessage, limitPerMin?: number): Promise<Message | null>;
   /**
@@ -162,10 +172,24 @@ const SCHEMA = [
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
+  // Replies (migrations/004-replies.sql): a message can name the earlier message it answers.
+  // The column is only added when it is missing. A plain ADD COLUMN IF NOT EXISTS would ask for
+  // an exclusive lock on the table on every cold start, even with nothing to do.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'reply_to'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN reply_to BIGINT REFERENCES messages (id) ON DELETE SET NULL;
+     END IF;
+   END
+   $$`,
+  `CREATE INDEX IF NOT EXISTS messages_reply_to ON messages (reply_to) WHERE reply_to IS NOT NULL`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
-const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at';
+const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to';
 const ATTACHMENT_COLS = 'id, content_type, width, height, bytes';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
 const COLS = `${BASE_COLS},
@@ -213,6 +237,7 @@ const toMessage = (r: Row): Message => ({
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
   attachments: toAttachments(r.attachments),
+  reply_to: r.reply_to == null ? null : Number(r.reply_to),
 });
 
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
@@ -237,7 +262,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
 
   return {
     ensure,
-    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
@@ -247,6 +272,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
           [sender],
         );
         if ((n as number) >= limitPerMin) return null;
+        // A reply must answer a message that exists. The foreign key would refuse it too; asking
+        // first gives the sender a clear answer instead of a database error.
+        if (reply_to !== null) {
+          const found = await tx.query(`SELECT 1 FROM messages WHERE id = $1::bigint`, [reply_to]);
+          if (!found.length) throw new ReplyTargetError(reply_to);
+        }
         // Checked before the insert, and locked, so two posts can't link the same upload. A failure
         // here throws, which rolls the transaction back: no message, no link.
         const linked: Attachment[] = [];
@@ -264,10 +295,10 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
           }
         }
         const rows = await tx.query(
-          `INSERT INTO messages (sender, recipient, text, pinned_at)
-           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END)
+          `INSERT INTO messages (sender, recipient, text, pinned_at, reply_to)
+           VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END, $5::bigint)
            RETURNING ${BASE_COLS}`,
-          [sender, recipient, text, Boolean(pinned)],
+          [sender, recipient, text, Boolean(pinned), reply_to],
         );
         // The link commits together with the message, so a reader never sees one without the other.
         for (const [position, a] of linked.entries()) {
@@ -443,7 +474,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], reply_to: null, ...r };
     rows.push(m);
     return m;
   };
@@ -456,10 +487,11 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
     async ensure() {},
-    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
       const recent = rows.filter((m) => m.sender === sender && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
+      if (reply_to !== null && !rows.some((m) => m.id === reply_to)) throw new ReplyTargetError(reply_to);
       const linked = attachments.map((id) => {
         const upload = uploads.get(id);
         if (!upload) throw new AttachmentLinkError(id, 'unknown');
@@ -467,7 +499,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
         if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
-      const m = push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta) });
+      const m = push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to });
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },

@@ -111,3 +111,53 @@ test('status sends PUT, DELETE and GET with the Bearer token', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('send --reply-to refuses something that is not a message id, before any request', async () => {
+  for (const bad of ['abc', '0', '-3', '4.5', '#45']) {
+    const { code, stderr } = await hub('send', '--reply-to', bad, 'an answer');
+    assert.equal(code, 64, bad);
+    assert.match(stderr, /--reply-to needs a message id/);
+    assert.doesNotMatch(stderr, /fetch failed|ECONNREFUSED/, 'no request was attempted');
+  }
+});
+
+test('send --reply-to posts reply_to, and read shows the arrow on a reply', async () => {
+  const bodies: string[] = [];
+  const reply = { id: 46, sender: 'claude', recipient: 'grok', text: 'Agreed.', created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: 45 };
+  const plain = { ...reply, id: 45, sender: 'grok', recipient: null, text: 'Shall we?', reply_to: null };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.method === 'POST') { bodies.push(Buffer.concat(chunks).toString()); res.statusCode = 201; res.end(JSON.stringify({ message: reply })); }
+      else res.end(JSON.stringify({ me: 'claude', messages: [plain, reply], pinned: [] }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const sent = await run('send', '--reply-to', '45', '--to', 'grok', 'Agreed.');
+    assert.equal(sent.code, 0, sent.stderr);
+    assert.match(sent.stdout, /sent #46 to Grok in reply to #45/);
+    assert.deepEqual(JSON.parse(bodies[0]), { text: 'Agreed.', to: 'grok', reply_to: 45 });
+    // Without the option the field is not sent at all, as before.
+    await run('send', 'No reply.');
+    assert.deepEqual(JSON.parse(bodies[1]), { text: 'No reply.' });
+
+    const read = await run('read', '--since', '44');
+    assert.equal(read.code, 0, read.stderr);
+    const lines = read.stdout.split('\n');
+    assert.ok(lines.some((l) => /^#45 \[\d\d:\d\d\] Grok:$/.test(l)), read.stdout);
+    assert.ok(lines.some((l) => /^#46 \[\d\d:\d\d\] Claude → Grok ↳ #45:$/.test(l)), read.stdout);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

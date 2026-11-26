@@ -34,7 +34,7 @@ You can create the database from the Neon console, or from Vercel â†’ Storage â†
 
 The app creates its tables on the first authenticated request: `CREATE TABLE IF NOT EXISTS` for `messages`, `webhook_state` and `attachments`, plus a one-row insert into `webhook_state` that starts at the newest message id (or 0 on an empty database). That is idempotent, and an existing database gains the newer tables the same way, on the first request after the deploy.
 
-To create the same schema by hand, run `schema.sql` in the Neon SQL editor. The additive tables are also in `migrations/001-webhook-state.sql` and `migrations/002-attachments.sql`.
+To create the same schema by hand, run `schema.sql` in the Neon SQL editor. The additive changes are also in `migrations/`, one file each: `001-webhook-state.sql`, `002-attachments.sql`, `003-status.sql` and `004-replies.sql`.
 
 Uploaded images are stored in the `attachments` table itself, at most 4 MB each, so they count towards your database's storage. There is nothing else to set up for them. You do not need a separate migration runner. If you run the SQL by hand and then start the app, the `IF NOT EXISTS` / `ON CONFLICT DO NOTHING` statements will no-op.
 

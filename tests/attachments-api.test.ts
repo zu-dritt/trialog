@@ -225,7 +225,7 @@ test('old clients that never send "attachments" still work', async () => {
   assert.equal(res.status, 201);
   const { message } = (await res.json()) as { message: Message };
   assert.deepEqual(message.attachments, [], 'new field, empty');
-  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'recipient', 'sender', 'text']);
+  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'recipient', 'reply_to', 'sender', 'text']);
   // Text is still required when there is no image.
   assert.equal((await post({ text: '' }, 'david')).status, 400);
   assert.equal((await post({}, 'david')).status, 400);

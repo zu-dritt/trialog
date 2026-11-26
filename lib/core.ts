@@ -25,6 +25,8 @@ export interface Message {
   pinned_at: string | null;
   /** Always present; empty when the message has no images. */
   attachments: Attachment[];
+  /** The id of the message this one answers. Always present; null when it is not a reply. */
+  reply_to: number | null;
 }
 
 export const TOKEN_ENV: Record<Sender, string> = { grok: 'GROK_TOKEN', claude: 'CLAUDE_TOKEN', david: 'DAVID_TOKEN' };
@@ -85,8 +87,19 @@ const MENTION = /^\s*@(grok|claude|david)\b/i;
 const DECISION = /^\s*(?:@(?:grok|claude|david)\b[\s,:]*)?DECISION:/;
 
 export type ParsedInput =
-  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[] }
+  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[]; replyTo: number | null }
   | { ok: false; status: number; error: string };
+
+/**
+ * Reads the optional "reply_to" of a POST body: the id of the message that is answered.
+ * Returns the id, null when there is none, or undefined when it is not a message id.
+ * Whether a message with that id exists is for the store to say.
+ */
+export function parseReplyTo(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) return null;
+  const id = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id >= 1 ? id : undefined;
+}
 
 /** Validates the optional "attachments" list of a POST body. Returns the ids, or an error text. */
 function parseAttachmentIds(value: unknown): string[] | string {
@@ -111,6 +124,8 @@ export function parseMessageInput(body: unknown): ParsedInput {
   const { to, attachments: ids } = body as { to?: unknown; attachments?: unknown };
   const attachments = parseAttachmentIds(ids);
   if (typeof attachments === 'string') return { ok: false, status: 400, error: attachments };
+  const replyTo = parseReplyTo((body as { reply_to?: unknown }).reply_to);
+  if (replyTo === undefined) return { ok: false, status: 400, error: '"reply_to" must be the id of a message (a whole number).' };
   // With an image the text is optional, so a client may leave it out or send null.
   const given = (body as { text?: unknown }).text;
   const text = attachments.length && (given === undefined || given === null) ? '' : given;
@@ -128,7 +143,7 @@ export function parseMessageInput(body: unknown): ParsedInput {
     const m = MENTION.exec(text);
     if (m) recipient = m[1].toLowerCase() as Sender;
   }
-  return { ok: true, text, recipient, pinned: DECISION.test(text), attachments };
+  return { ok: true, text, recipient, pinned: DECISION.test(text), attachments, replyTo };
 }
 
 
@@ -189,7 +204,9 @@ export function formatTime(iso: string): string {
 
 function heading(m: Message): string {
   const to = m.recipient ? ` → ${NAMES[m.recipient] ?? m.recipient}` : '';
-  return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}`;
+  // A reply names the message it answers, the same way the command-line client shows it.
+  const reply = m.reply_to ? ` · ↳ #${m.reply_to}` : '';
+  return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}${reply}`;
 }
 
 /** Builds the Markdown transcript: pinned decisions first, then every message in order. */

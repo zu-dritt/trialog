@@ -45,3 +45,16 @@ CREATE TABLE IF NOT EXISTS participant_status (
    );
 
 CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at);
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'reply_to'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN reply_to BIGINT REFERENCES messages (id) ON DELETE SET NULL;
+     END IF;
+   END
+   $$;
+
+CREATE INDEX IF NOT EXISTS messages_reply_to ON messages (reply_to) WHERE reply_to IS NOT NULL;
