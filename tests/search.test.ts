@@ -308,7 +308,8 @@ test('GET /api/messages?q= refuses what is not a query', async () => {
 test('GET /api/messages without q is what it was', async () => {
   const res = await search('limit=3');
   assert.equal(res.status, 200);
-  assert.deepEqual(Object.keys(res.body).sort(), ['me', 'messages', 'pinned', 'polls']);
+  assert.deepEqual(Object.keys(res.body).sort(), ['me', 'messages', 'pinned']);
+  assert.deepEqual(Object.keys((await search('limit=3&polls=1')).body).sort(), ['me', 'messages', 'pinned', 'polls']);
   assert.equal(res.body.messages?.length, 3);
   // Oldest first, as always.
   const ids = res.body.messages?.map((m) => m.id) ?? [];

@@ -45,8 +45,15 @@ export const GET = safe(async (request: Request) => {
     if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
     return json({ me, messages: await store.search({ words: query.words, to, decisions, pinned, limit }) });
   }
-  const [messages, pinned, polls] = await Promise.all([store.list({ since, to, limit }), store.pinned(), store.listPolls()]);
-  return json({ me, messages, pinned, polls });
+  // The top-level polls list is opt-in (`?polls=1`). The page asks for it so a since-poll
+  // still sees votes on older polls; the CLI, which polls every few seconds, leaves it off.
+  const includePolls = params.get('polls') === '1';
+  const [messages, pinned, polls] = await Promise.all([
+    store.list({ since, to, limit }),
+    store.pinned(),
+    includePolls ? store.listPolls() : Promise.resolve(null),
+  ]);
+  return json(includePolls ? { me, messages, pinned, polls } : { me, messages, pinned });
 });
 
 // POST /api/messages {"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45}
