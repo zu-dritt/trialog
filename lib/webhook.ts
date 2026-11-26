@@ -26,6 +26,8 @@ export interface WakeupPayload {
   last_id: number;
   count: number;
   sent_at: number;
+  /** The ids of the rooms the messages are in, in alphabetical order. Read each with ?room=<id>. */
+  rooms: string[];
 }
 
 /**
@@ -155,7 +157,7 @@ export function createWakeup(options: WakeupOptions) {
 
     // One body and one timestamp for all attempts: the receiver sees identical bytes on a retry.
     const sentAt = Math.floor(now() / 1000);
-    const payload: WakeupPayload = { first_id: claim.first_id, last_id: claim.last_id, count: claim.count, sent_at: sentAt };
+    const payload: WakeupPayload = { first_id: claim.first_id, last_id: claim.last_id, count: claim.count, sent_at: sentAt, rooms: claim.rooms };
     const body = JSON.stringify(payload);
     const timestamp = String(sentAt);
     const headers = {

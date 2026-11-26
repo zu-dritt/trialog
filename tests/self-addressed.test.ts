@@ -53,7 +53,7 @@ for (const [name, make] of STORES) {
     // Before this change it was addressed to the human alone, and nobody was woken.
     const m = must(await store.add({ sender: 'david', recipient: 'david', text: '@david pasted line' }));
     assert.equal(wakesGrok(m), true);
-    assert.deepEqual(await store.claimWakeup(), { first_id: m.id, last_id: m.id, count: 1, previous_id: 0 });
+    assert.deepEqual(await store.claimWakeup(), { first_id: m.id, last_id: m.id, count: 1, previous_id: 0, rooms: ['main'] });
     // Grok writing "to Grok" is a message to everyone too, and Grok's own messages still never wake Grok.
     const own = must(await store.add({ sender: 'grok', recipient: 'grok', text: 'note' }));
     assert.equal(own.recipient, null);

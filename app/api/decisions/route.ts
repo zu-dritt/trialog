@@ -1,15 +1,15 @@
 import { waitUntil } from '@vercel/functions';
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseDecisionInput } from '../../../lib/core';
-import { authenticate, error, json, readJson, safe } from '../../../lib/http';
+import { authenticate, error, json, readJson, roomError, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
-import { ReplyTargetError, getStore } from '../../../lib/store';
+import { ReplyTargetError, RoomError, getStore } from '../../../lib/store';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-// POST /api/decisions {"prompt": "...", "to": "<name>", "reply_to": 45}
+// POST /api/decisions {"prompt": "...", "to": "<name>", "reply_to": 45, "room": "<id>"}
 // Creates a message and an attached decision card. The creator is the owner of the Bearer token;
 // any "sender"/"from"/"participant"/"creator" in the body is ignored.
 export const POST = safe(async (request: Request) => {
@@ -28,9 +28,11 @@ export const POST = safe(async (request: Request) => {
       prompt: input.prompt,
       recipient: input.recipient,
       reply_to: input.replyTo,
+      room: input.room,
     }, names);
   } catch (e) {
     if (e instanceof ReplyTargetError) return error(400, e.message);
+    if (e instanceof RoomError) return roomError(e);
     throw e;
   }
   if (!created) {

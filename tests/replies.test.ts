@@ -119,7 +119,7 @@ for (const [name, make] of STORES) {
     const toAll = must(await store.add({ sender: 'david', recipient: null, text: 'for all', reply_to: fromGrok.id }));
     assert.equal(wakesGrok(toClaude), false);
     assert.equal(wakesGrok(toAll), true);
-    assert.deepEqual(await store.claimWakeup(), { first_id: toAll.id, last_id: toAll.id, count: 1, previous_id: 0 });
+    assert.deepEqual(await store.claimWakeup(), { first_id: toAll.id, last_id: toAll.id, count: 1, previous_id: 0, rooms: ['main'] });
     // Replies count towards the sender's posts per minute like any message.
     for (let i = 0; i < 2; i++) assert.ok(await store.add({ sender: 'claude', recipient: null, text: `r${i}`, reply_to: fromGrok.id }, 2));
     assert.equal(await store.add({ sender: 'claude', recipient: null, text: 'one too many', reply_to: fromGrok.id }, 2), null);
@@ -181,7 +181,7 @@ test('sql: a database from before replies gains the column on first request and 
 // --- the export ---------------------------------------------------------------------------------
 
 test('the export names the message a reply answers', () => {
-  const base: Pick<Message, 'recipient' | 'created_at' | 'attachments' | 'poll' | 'reactions'> = { recipient: null, created_at: '2026-11-25T13:00:00Z', attachments: [], poll: null, reactions: [] };
+  const base: Pick<Message, 'recipient' | 'created_at' | 'room' | 'attachments' | 'poll' | 'reactions'> = { recipient: null, created_at: '2026-11-25T13:00:00Z', room: 'main', attachments: [], poll: null, reactions: [] };
   const messages: Message[] = [
     { ...base, id: 45, sender: 'grok', text: 'a question', pinned_at: null, reply_to: null },
     { ...base, id: 46, sender: 'claude', recipient: 'grok', text: 'DECISION: an answer', pinned_at: '2026-11-25T13:01:00Z', reply_to: 45 },
@@ -257,7 +257,7 @@ test('old clients that send no reply_to work unchanged', async () => {
   assert.equal(res.status, 201);
   const { message } = (await res.json()) as { message: Message };
   assert.equal(message.reply_to, null);
-  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'sender', 'text']);
+  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'room', 'sender', 'text']);
   assert.equal((await post({ text: 'null is fine too', reply_to: null }, 'david')).status, 201);
   // A "sender" in the body is still ignored, also on a reply.
   const spoof = await posted({ text: 'I am not Grok', sender: 'grok', reply_to: message.id }, 'claude');

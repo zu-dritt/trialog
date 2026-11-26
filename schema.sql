@@ -183,3 +183,27 @@ CREATE TABLE IF NOT EXISTS decision_positions (
    );
 
 CREATE INDEX IF NOT EXISTS decision_cards_message_id ON decision_cards (message_id);
+
+CREATE TABLE IF NOT EXISTS rooms (
+     id         TEXT PRIMARY KEY CONSTRAINT rooms_id_shape CHECK (id ~ '^[a-z][a-z0-9-]{0,23}$'),
+     name       TEXT NOT NULL CONSTRAINT rooms_name_length CHECK (char_length(name) BETWEEN 1 AND 40),
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     created_by TEXT NOT NULL CONSTRAINT rooms_created_by_shape CHECK (created_by ~ '^[a-z][a-z0-9-]{0,23}$')
+   );
+
+INSERT INTO rooms (id, name, created_by) VALUES ('main', 'Main', 'hub') ON CONFLICT (id) DO NOTHING;
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'room'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN room TEXT NOT NULL DEFAULT 'main'
+         CONSTRAINT messages_room_exists REFERENCES rooms (id);
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$;
+
+CREATE INDEX IF NOT EXISTS messages_room_id ON messages (room, id);

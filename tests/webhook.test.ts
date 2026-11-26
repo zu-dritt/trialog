@@ -170,7 +170,7 @@ for (const [name, make] of STORES) {
 
     // Thin payload: ids only, no message text.
     const payload = payloadOf(call);
-    assert.deepEqual(payload, { first_id: a.message.id, last_id: c.message.id, count: 3, sent_at: 1795620000 });
+    assert.deepEqual(payload, { first_id: a.message.id, last_id: c.message.id, count: 3, sent_at: 1795620000, rooms: ['main'] });
     assert.ok(!call.body.includes('SECRET-TEXT'), 'no message text in the payload');
     assert.ok(!call.body.includes(CONFIG.secret));
 
@@ -190,7 +190,7 @@ for (const [name, make] of STORES) {
     const [result] = await settle([second.job]);
     assert.equal(result.status, 'delivered');
     assert.equal(calls.length, 2);
-    assert.deepEqual(payloadOf(calls[1]), { first_id: second.message.id, last_id: second.message.id, count: 1, sent_at: 1795620000 });
+    assert.deepEqual(payloadOf(calls[1]), { first_id: second.message.id, last_id: second.message.id, count: 1, sent_at: 1795620000, rooms: ['main'] });
   });
 
   test(`${name}: only messages for Grok or everyone trigger, never Grok's own`, async () => {
@@ -204,7 +204,7 @@ for (const [name, make] of STORES) {
     const real = await post('claude', 'grok');
     await settle([real.job]);
     assert.equal(calls.length, 1);
-    assert.deepEqual(payloadOf(calls[0]), { first_id: real.message.id, last_id: real.message.id, count: 1, sent_at: 1795620000 });
+    assert.deepEqual(payloadOf(calls[0]), { first_id: real.message.id, last_id: real.message.id, count: 1, sent_at: 1795620000, rooms: ['main'] });
   });
 
   test(`${name}: retries, then succeeds with identical bytes`, async () => {
@@ -212,7 +212,7 @@ for (const [name, make] of STORES) {
     const { calls, post } = setup(store, [500, 'throw', 200]);
     const m = await post('david', 'grok');
     const [result] = await settle([m.job]);
-    assert.deepEqual(result, { status: 'delivered', attempts: 3, claim: { first_id: m.message.id, last_id: m.message.id, count: 1, previous_id: 0 } });
+    assert.deepEqual(result, { status: 'delivered', attempts: 3, claim: { first_id: m.message.id, last_id: m.message.id, count: 1, previous_id: 0, rooms: ['main'] } });
     assert.equal(calls.length, 3);
     assert.equal(calls[1].body, calls[0].body);
     assert.deepEqual(calls[2].headers, calls[0].headers);
@@ -235,7 +235,7 @@ for (const [name, make] of STORES) {
     const next = await post('claude', null);
     const [result] = await settle([next.job]);
     assert.equal(result.status, 'delivered');
-    assert.deepEqual(payloadOf(calls[3]), { first_id: lost.message.id, last_id: next.message.id, count: 2, sent_at: 1795620000 });
+    assert.deepEqual(payloadOf(calls[3]), { first_id: lost.message.id, last_id: next.message.id, count: 2, sent_at: 1795620000, rooms: ['main'] });
   });
 
   test(`${name}: a failed claim is not put back once a later claim has moved on`, async () => {
@@ -264,7 +264,7 @@ test('history from before the webhook existed never triggers a wake-up', async (
   assert.equal(await store.claimWakeup(), null);
   const fresh = await store.add({ sender: 'david', recipient: null, text: 'new' });
   assert.ok(fresh);
-  assert.deepEqual(await store.claimWakeup(), { first_id: fresh.id, last_id: fresh.id, count: 1, previous_id: fresh.id - 1 });
+  assert.deepEqual(await store.claimWakeup(), { first_id: fresh.id, last_id: fresh.id, count: 1, previous_id: fresh.id - 1, rooms: ['main'] });
 });
 
 test('a job never rejects, even when the store fails', async () => {
@@ -316,7 +316,7 @@ test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 i
       assert.equal(signature, expected);
       assert.equal(headers['x-hub-grok-signature'], `t=${timestamp},v1=${expected.slice(7)}`);
       assert.deepEqual(verify({ secret: CONFIG.secret, timestamp, signature, rawBody: raw }), { ok: true });
-      assert.deepEqual(Object.keys(JSON.parse(raw.toString('utf8')) as object), ['first_id', 'last_id', 'count', 'sent_at']);
+      assert.deepEqual(Object.keys(JSON.parse(raw.toString('utf8')) as object), ['first_id', 'last_id', 'count', 'sent_at', 'rooms']);
     }
     assert.ok(received[0].raw.equals(received[1].raw), 'identical bytes on the retry');
   } finally {

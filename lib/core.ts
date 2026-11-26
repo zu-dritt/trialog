@@ -7,8 +7,9 @@ import {
   POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
-  addressing, attachmentLabel, displayName, firstLine,
-  type Attachment, type Author, type DecisionCard, type Participant, type Poll, type Sender,
+  MAIN_ROOM, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH,
+  addressing, attachmentLabel, cleanRoomName, displayName, firstLine, roomIdFromName,
+  type Attachment, type Author, type DecisionCard, type Participant, type Poll, type Room, type Sender,
 } from './shared';
 
 // The image limits, the shape of a name and the status limits live in lib/shared.ts, which the page can load too.
@@ -20,7 +21,8 @@ export {
   DECISION_HINT, HUMAN_DECISION_HINT, DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, decisionIsAgreed, decisionPositionText,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine, pollResultText,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Sender,
+  ALL_ROOMS, MAIN_ROOM, MAX_ROOMS, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, formatSeen, parseSeen, roomIdFromName,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Room, type Sender,
 } from './shared';
 // Who the participants are is a setting: lib/participants.ts.
 export { MIN_TOKEN_LENGTH } from './participants';
@@ -32,6 +34,8 @@ export interface Message {
   text: string;
   created_at: string;
   pinned_at: string | null;
+  /** The id of the room the message is in. Always present; `main` for every message from before rooms. */
+  room: string;
   /** Always present; empty when the message has no images. */
   attachments: Attachment[];
   /** The id of the message this one answers. Always present; null when it is not a reply. */
@@ -131,8 +135,43 @@ export function parseRecipient(value: unknown, names: readonly string[]): Sender
 export const recipientHint = (names: readonly string[]): string => `"to" must be one of ${names.join(', ')} (or left out for everyone).`;
 
 export type ParsedInput =
-  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[]; replyTo: number | null }
+  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[]; replyTo: number | null; room: string | null }
   | { ok: false; status: number; error: string };
+
+/** What a room id that can't be one is answered with. */
+export const ROOM_ID_HINT = '"room" must be the id of a room, like "main" (GET /api/rooms lists them).';
+
+/**
+ * Reads an optional room id from a body or a query. Returns the id, null when none is given, or
+ * undefined when it is not the id of a room. Whether a room with that id exists is for the store to say.
+ */
+export function parseRoomId(value: unknown): string | null | undefined {
+  if (value === undefined || value === null || value === '') return null;
+  return typeof value === 'string' && ROOM_ID_PATTERN.test(value) ? value : undefined;
+}
+
+export type ParsedRoomInput =
+  | { ok: true; id: string; name: string }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Validates the POST /api/rooms body {name, id?}. Without an id, one is made from the name.
+ * Any `created_by` in the body is ignored on purpose.
+ */
+export function parseRoomInput(body: unknown): ParsedRoomInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"name": "...", "id": "..."}.' };
+  }
+  const { id: rawId, name: rawName } = body as { id?: unknown; name?: unknown };
+  const name = cleanRoomName(rawName);
+  if (!name) return { ok: false, status: 400, error: `"name" must be plain text of 1 to ${ROOM_NAME_MAX_LENGTH} characters.` };
+  const id = rawId === undefined || rawId === null || rawId === '' ? roomIdFromName(name) : rawId;
+  if (typeof id !== 'string' || !ROOM_ID_PATTERN.test(id)) {
+    return { ok: false, status: 400, error: '"id" must start with a lowercase letter and continue with lowercase letters, digits or "-", at most 24 characters. Give one if the name has no letters to make it from.' };
+  }
+  if (RESERVED_ROOM_IDS.includes(id)) return { ok: false, status: 400, error: `"${id}" can't be the id of a room.` };
+  return { ok: true, id, name };
+}
 
 /**
  * Reads the optional "reply_to" of a POST body: the id of the message that is answered.
@@ -170,6 +209,8 @@ export function parseMessageInput(body: unknown, names: readonly string[]): Pars
   if (typeof attachments === 'string') return { ok: false, status: 400, error: attachments };
   const replyTo = parseReplyTo((body as { reply_to?: unknown }).reply_to);
   if (replyTo === undefined) return { ok: false, status: 400, error: '"reply_to" must be the id of a message (a whole number).' };
+  const room = parseRoomId((body as { room?: unknown }).room);
+  if (room === undefined) return { ok: false, status: 400, error: ROOM_ID_HINT };
   // With an image the text is optional, so a client may leave it out or send null.
   const given = (body as { text?: unknown }).text;
   const text = attachments.length && (given === undefined || given === null) ? '' : given;
@@ -186,7 +227,7 @@ export function parseMessageInput(body: unknown, names: readonly string[]): Pars
     const m = mention.exec(text);
     if (m) recipient = m[1].toLowerCase();
   }
-  return { ok: true, text, recipient, pinned: decision.test(text), attachments, replyTo };
+  return { ok: true, text, recipient, pinned: decision.test(text), attachments, replyTo, room };
 }
 
 
@@ -224,7 +265,7 @@ export function parseStatusInput(body: unknown): ParsedStatusInput {
 }
 
 export type ParsedPollInput =
-  | { ok: true; question: string; options: string[]; recipient: Sender | null }
+  | { ok: true; question: string; options: string[]; recipient: Sender | null; room: string | null }
   | { ok: false; status: number; error: string };
 
 function cleanPollText(value: unknown, label: string, max: number): string | { status: number; error: string } {
@@ -269,7 +310,9 @@ export function parsePollInput(body: unknown, names: readonly string[]): ParsedP
   }
   const recipient = parseRecipient(to, names);
   if (recipient === undefined) return { ok: false, status: 400, error: recipientHint(names) };
-  return { ok: true, question, options, recipient };
+  const room = parseRoomId((body as { room?: unknown }).room);
+  if (room === undefined) return { ok: false, status: 400, error: ROOM_ID_HINT };
+  return { ok: true, question, options, recipient, room };
 }
 
 export type ParsedVoteInput =
@@ -295,7 +338,7 @@ export function parseVoteInput(body: unknown): ParsedVoteInput {
 export const isPollId = (value: unknown): value is string => typeof value === 'string' && POLL_ID.test(value);
 
 export type ParsedDecisionInput =
-  | { ok: true; prompt: string; recipient: Sender | null; replyTo: number | null }
+  | { ok: true; prompt: string; recipient: Sender | null; replyTo: number | null; room: string | null }
   | { ok: false; status: number; error: string };
 
 /**
@@ -318,7 +361,9 @@ export function parseDecisionInput(body: unknown, names: readonly string[]): Par
     }
     replyTo = reply_to;
   }
-  return { ok: true, prompt, recipient, replyTo };
+  const room = parseRoomId((body as { room?: unknown }).room);
+  if (room === undefined) return { ok: false, status: 400, error: ROOM_ID_HINT };
+  return { ok: true, prompt, recipient, replyTo, room };
 }
 
 export type ParsedDecisionPosition =
@@ -392,19 +437,23 @@ function heading(m: Message): string {
 }
 
 /** Builds the Markdown transcript: pinned decisions first, then every message in order. */
-export function toMarkdown(messages: Message[], exportedAt: Date = new Date()): string {
-  const out = ['# Trialog transcript', '', `Exported ${formatTime(exportedAt.toISOString())} (Europe/Zurich), ${messages.length} messages.`, ''];
+export function toMarkdown(messages: Message[], exportedAt: Date = new Date(), room: Pick<Room, 'id' | 'name'> | 'all' | null = null): string {
+  // The transcript of `main` reads as it always did. Another room's says which room it is, and
+  // the transcript of every room says for each message where it was written.
+  const everyRoom = room === 'all';
+  const title = everyRoom ? '# Trialog transcript: all rooms' : room && room.id !== MAIN_ROOM ? `# Trialog transcript: ${room.name}` : '# Trialog transcript';
+  const out = [title, '', `Exported ${formatTime(exportedAt.toISOString())} (Europe/Zurich), ${messages.length} messages.`, ''];
   const pinned = messages.filter((m) => m.pinned_at);
   if (pinned.length) {
     out.push('## Decisions', '');
     for (const m of pinned) {
-      out.push(`- #${m.id} (${displayName(m.sender)}, ${formatTime(m.created_at)}): ${firstLine(m, 200)}`);
+      out.push(`- #${m.id} (${displayName(m.sender)}, ${formatTime(m.created_at)}${everyRoom ? `, ${m.room}` : ''}): ${firstLine(m, 200)}`);
     }
     out.push('');
   }
   out.push('## Messages', '');
   for (const m of messages) {
-    out.push(heading(m) + (m.pinned_at ? ' · 📌' : ''), '');
+    out.push(heading(m) + (everyRoom ? ` · ${m.room}` : '') + (m.pinned_at ? ' · 📌' : ''), '');
     if (m.text.trim()) out.push(m.text.trimEnd(), '');
     // The transcript names each image; the bytes stay in the hub, behind the token.
     if (m.attachments?.length) out.push(m.attachments.map(attachmentLabel).join('  \n'), '');

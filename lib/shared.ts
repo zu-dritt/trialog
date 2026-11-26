@@ -67,6 +67,73 @@ export function displayName(name: string): string {
   return name.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');
 }
 
+// --- rooms --------------------------------------------------------------------------------------
+// A hub has one stream per room. Every participant sees every room. The room `main` always exists,
+// and a call that names no room means `main`, so a client from before rooms keeps working.
+
+/** The room that always exists. */
+export const MAIN_ROOM = 'main';
+/** The id of a room has the shape of a participant's name: lowercase, starts with a letter, at most 24 characters. */
+export const ROOM_ID_PATTERN = NAME_PATTERN;
+/** What a reader passes as the room to get every room at once. No room can have this id. */
+export const ALL_ROOMS = 'all';
+export const RESERVED_ROOM_IDS: readonly string[] = [ALL_ROOMS];
+export const ROOM_NAME_MAX_LENGTH = 40;
+/** A hub has at most this many rooms, `main` included. */
+export const MAX_ROOMS = 12;
+
+export interface Room {
+  id: string;
+  /** What the page shows on the tab. */
+  name: string;
+  created_at: string;
+  /** The participant who created it; `hub` for `main`. */
+  created_by: Author;
+  /** The id of the newest message in the room, or 0 when it has none. */
+  last_id: number;
+  /** Only when the caller said what they have seen: messages by others that are newer than that. */
+  unread?: number;
+}
+
+/**
+ * An id for a room, made from its name: "Calm talk" → "calm-talk", "Büro 2" → "buro-2".
+ * Returns '' when nothing of the name can be used, and then the writer has to give an id.
+ */
+export function roomIdFromName(name: string): string {
+  const plain = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const slug = plain.replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+/, '').slice(0, 24).replace(/-+$/, '');
+  return ROOM_ID_PATTERN.test(slug) ? slug : '';
+}
+
+/** A room's name as it is stored: one line, trimmed. Returns null when it is empty, too long or not plain text. */
+export function cleanRoomName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.replace(/[\r\n\t]+/g, ' ').trim();
+  if (!name || /[\x00-\x1f\x7f]/.test(name) || [...name].length > ROOM_NAME_MAX_LENGTH) return null;
+  return name;
+}
+
+/**
+ * What a caller has seen, per room, as it travels in a query: "main:120,dev:45" (the id of the
+ * newest message seen in each room). `parseSeen` returns null for anything else.
+ */
+export function formatSeen(seen: Readonly<Record<string, number>>): string {
+  return Object.entries(seen).filter(([room, id]) => ROOM_ID_PATTERN.test(room) && Number.isSafeInteger(id) && id >= 0)
+    .map(([room, id]) => `${room}:${id}`).join(',');
+}
+export function parseSeen(value: string): Record<string, number> | null {
+  const seen: Record<string, number> = {};
+  if (value.trim() === '') return seen;
+  const parts = value.split(',');
+  if (parts.length > MAX_ROOMS * 2) return null;
+  for (const part of parts) {
+    const m = /^([a-z][a-z0-9-]{0,23}):(\d{1,15})$/.exec(part.trim());
+    if (!m) return null;
+    seen[m[1]] = Number(m[2]);
+  }
+  return seen;
+}
+
 export const STATUS_MAX_LENGTH = 80;
 export const STATUS_DEFAULT_TTL_SECONDS = 300;
 export const STATUS_MIN_TTL_SECONDS = 30;

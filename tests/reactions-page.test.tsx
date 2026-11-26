@@ -14,6 +14,7 @@ const base = (over: Partial<Message> = {}): Message => ({
   text: 'Looks good',
   created_at: '2026-11-26T04:00:00.000Z',
   pinned_at: null,
+  room: 'main',
   attachments: [],
   reply_to: null,
   poll: null,

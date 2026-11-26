@@ -144,7 +144,7 @@ const PARTICIPANTS: Participant[] = [
   { name: 'david', kind: 'human', color: 2 },
 ];
 const message = (over: Partial<Message>): Message => ({
-  id: 1, sender: 'grok', recipient: null, text: '', created_at: '2026-11-20T09:30:00.000Z', pinned_at: null, attachments: [], reply_to: null, poll: null, reactions: [], ...over,
+  id: 1, sender: 'grok', recipient: null, text: '', created_at: '2026-11-20T09:30:00.000Z', pinned_at: null, room: 'main', attachments: [], reply_to: null, poll: null, reactions: [], ...over,
 });
 
 test('a result shows sender, time, number and one line with the matches marked', () => {

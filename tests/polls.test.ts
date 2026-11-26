@@ -51,8 +51,8 @@ const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
 test('parsePollInput trims, enforces lengths, option count, uniqueness and ignores spoofed identity', () => {
   const body = { question: '  Lunch?\n', options: [' Pizza ', 'Salad', 'Soup'], participant: 'david', sender: 'claude', creator: 'david' };
-  assert.deepEqual(parsePollInput(body, THREE), { ok: true, question: 'Lunch?', options: ['Pizza', 'Salad', 'Soup'], recipient: null });
-  assert.deepEqual(parsePollInput({ question: 'Q', options: ['A', 'B'], to: '@claude' }, THREE), { ok: true, question: 'Q', options: ['A', 'B'], recipient: 'claude' });
+  assert.deepEqual(parsePollInput(body, THREE), { ok: true, question: 'Lunch?', options: ['Pizza', 'Salad', 'Soup'], recipient: null, room: null });
+  assert.deepEqual(parsePollInput({ question: 'Q', options: ['A', 'B'], to: '@claude' }, THREE), { ok: true, question: 'Q', options: ['A', 'B'], recipient: 'claude', room: null });
 
   assert.equal(parsePollInput(null, THREE).ok, false);
   assert.equal(parsePollInput([], THREE).ok, false);

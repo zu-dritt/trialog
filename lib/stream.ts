@@ -5,7 +5,7 @@
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
 // pinned ids, poll tallies, reaction tallies, decision-card positions) and only reads messages when that changed. A vote, a reaction or a decision-card change re-sends only the message whose fingerprint entry changed. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
-import type { Message, Sender } from './core';
+import { MAIN_ROOM, type Message, type Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
 import type { Store } from './store';
 
@@ -99,6 +99,10 @@ export interface StreamOptions {
   me: Sender;
   /** Last message id the client has. null: send the latest messages first, like GET /api/messages. */
   since: number | null;
+  /** The room whose messages and pins are sent. Left out: `main`. */
+  room?: string;
+  /** What the client has seen, per room. With it, the `rooms` event says how many messages are unread in each. */
+  seen?: Readonly<Record<string, number>>;
   signal?: AbortSignal;
   /** The id of the build this server runs, for the page to compare with its own. Left out of the event when not given. */
   build?: string;
@@ -110,14 +114,16 @@ export interface StreamOptions {
 
 /**
  * Events, each with JSON data:
- *   hello     {"me": "david", "build": "…"}   once, first; "build" is the server's build id (lib/build.ts)
- *   messages  [Message, …]           new messages, oldest first
- *   pins      [Message, …]           the full list of pinned messages, at the start and on every change
+ *   hello     {"me": "david", "build": "…", "room": "main"}   once, first; "build" is the server's build id (lib/build.ts)
+ *   messages  [Message, …]           new messages of the room, oldest first
+ *   pins      [Message, …]           the full list of the room's pinned messages, at the start and on every change
+ *   rooms     [Room, …]              every room with its newest message id, at the start and whenever another room gets a message or a room is created
  *   bye       {"reason": "…"}        the server is ending the stream; reconnect with ?since=<last id>
  *   error     {"message": "…"}       something failed; the stream ends
  */
 export function createEventStream(options: StreamOptions): ReadableStream<Uint8Array> {
-  const { store, me, since, signal, build } = options;
+  const { store, me, since, signal, build, seen } = options;
+  const room = options.room ?? MAIN_ROOM;
   const intervalMs = options.intervalMs ?? INTERVAL_MS;
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const maxMs = options.maxMs ?? MAX_STREAM_MS;
@@ -156,6 +162,12 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       let polls = '';
       let reactions = '';
       let decisions = '';
+      let rooms = '';
+      // The other rooms' part of the rooms fingerprint. A message in this room is sent as a message;
+      // it needs no word about the rooms as well.
+      const others = (fingerprint: string) => fingerprint.split(',').filter((entry) => !entry.startsWith(`${room}:`)).join(',');
+      // A vote, a reaction or a position can be on a message in another room. This stream has one room.
+      const mine = (messages: Message[]) => messages.filter((m) => m.room === room);
       const sendMessages = (messages: Message[]) => {
         if (!messages.length) return;
         last = messages[messages.length - 1].id;
@@ -163,15 +175,17 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       };
 
       try {
-        send('hello', build === undefined ? { me } : { me, build });
+        send('hello', build === undefined ? { me, room } : { me, build, room });
         // Read the fingerprint before the lists: a change in between is then picked up by the first tick.
-        const version = await store.version();
+        const version = await store.version(room);
         pins = version.pins;
         polls = version.polls;
         reactions = version.reactions;
         decisions = version.decisions;
-        sendMessages(await store.list({ since, limit: BATCH }));
-        send('pins', await store.pinned());
+        rooms = others(version.rooms);
+        sendMessages(await store.list({ since, room, limit: BATCH }));
+        send('pins', await store.pinned(room));
+        send('rooms', await store.listRooms({ seen, me }));
       } catch (e) {
         return fail(e);
       }
@@ -185,16 +199,22 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             send('bye', { reason: 'time limit' });
             return end();
           }
-          const version = await store.version();
+          const version = await store.version(room);
           if (closed) return;
           let wrote = false;
           if (version.last_id > last) {
-            sendMessages(await store.list({ since: last, limit: BATCH }));
+            sendMessages(await store.list({ since: last, room, limit: BATCH }));
             wrote = true;
           }
           if (version.pins !== pins) {
             pins = version.pins;
-            send('pins', await store.pinned());
+            send('pins', await store.pinned(room));
+            wrote = true;
+          }
+          // A message in another room, or a new room: the page shows it on that room's tab.
+          if (others(version.rooms) !== rooms) {
+            rooms = others(version.rooms);
+            send('rooms', await store.listRooms({ seen, me }));
             wrote = true;
           }
           // Vote and close changes do not move last_id, so they need their own fingerprint.
@@ -203,7 +223,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             const ids = pollMessageIdsChanged(polls, version.polls);
             polls = version.polls;
             if (ids.length) {
-              const updated = await store.listMessagesByIds(ids);
+              const updated = mine(await store.listMessagesByIds(ids));
               if (updated.length) send('messages', updated);
             }
             wrote = true;
@@ -214,7 +234,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             const ids = reactionMessageIdsChanged(reactions, version.reactions);
             reactions = version.reactions;
             if (ids.length) {
-              const updated = await store.listMessagesByIds(ids);
+              const updated = mine(await store.listMessagesByIds(ids));
               if (updated.length) send('messages', updated);
             }
             wrote = true;
@@ -225,7 +245,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
             const ids = decisionMessageIdsChanged(decisions, version.decisions);
             decisions = version.decisions;
             if (ids.length) {
-              const updated = await store.listMessagesByIds(ids);
+              const updated = mine(await store.listMessagesByIds(ids));
               if (updated.length) send('messages', updated);
             }
             wrote = true;

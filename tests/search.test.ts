@@ -298,7 +298,7 @@ test('GET /api/messages?q= finds messages, newest first, with their usual shape'
   // A search answers with the matches and who you are; the pinned list and the polls are not repeated.
   assert.deepEqual(Object.keys(all.body).sort(), ['me', 'messages']);
   const answer = must(all.body.messages?.[0] ?? null);
-  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'sender', 'text']);
+  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'room', 'sender', 'text']);
   assert.equal(answer.reply_to, a.id);
 
   assert.deepEqual((await search('q=melon+route')).body.messages?.map((m) => m.id), [c.id, a.id]);

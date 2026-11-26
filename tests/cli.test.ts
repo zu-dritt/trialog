@@ -526,3 +526,84 @@ test('search sends the words as q with the token, and prints the results like re
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('--room goes out with send, read, wait, search, poll, decision and export; rooms lists and creates', async () => {
+  const seen: { method: string; url: string; body: string }[] = [];
+  const base = { sender: 'grok', recipient: null, created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: null, reactions: [] };
+  const inCalm = { ...base, id: 46, text: 'in calm', room: 'calm' };
+  const inMain = { ...base, id: 45, text: 'in main', room: 'main' };
+  const room = { id: 'calm', name: 'Calm talk', created_at: '2026-11-26T04:00:00.000Z', created_by: 'david', last_id: 46 };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ method: req.method || '', url: req.url || '', body: Buffer.concat(chunks).toString() });
+      const path = (req.url || '').split('?')[0];
+      res.setHeader('Content-Type', 'application/json');
+      if (path === '/api/export') { res.setHeader('Content-Type', 'text/markdown'); res.end('# Trialog transcript: all rooms\n'); }
+      else if (path === '/api/rooms' && req.method === 'POST') { res.statusCode = 201; res.end(JSON.stringify({ room: { ...room, last_id: 0 } })); }
+      else if (path === '/api/rooms') res.end(JSON.stringify({ me: 'claude', rooms: [{ ...room, id: 'main', name: 'Main', created_by: 'hub', last_id: 45 }, room] }));
+      else if (path === '/api/polls') { res.statusCode = 201; res.end(JSON.stringify({ message: { ...inCalm, id: 47 }, poll: { id: 'poll_0123456789abcdef', question: 'Lunch?' } })); }
+      else if (path === '/api/decisions') { res.statusCode = 201; res.end(JSON.stringify({ message: { ...inCalm, id: 48, decision: { id: 'decision_0123456789abcdef' } } })); }
+      else if (req.method === 'POST') { res.statusCode = 201; res.end(JSON.stringify({ message: inCalm })); }
+      else res.end(JSON.stringify({ me: 'claude', messages: [inMain, inCalm], pinned: [] }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  const last = () => seen[seen.length - 1];
+  try {
+    const sent = await run('send', '--room', 'calm', 'in calm');
+    assert.equal(sent.code, 0, sent.stderr);
+    assert.match(sent.stdout, /^sent #46 in calm$/m);
+    assert.deepEqual(JSON.parse(last().body), { text: 'in calm', room: 'calm' });
+    // Without the option nothing about rooms is sent, as before.
+    await run('send', 'plain');
+    assert.deepEqual(JSON.parse(last().body), { text: 'plain' });
+
+    const read = await run('read', '--room', 'all', '--since', '44');
+    assert.equal(last().url, '/api/messages?since=44&room=all');
+    const lines = read.stdout.split('\n');
+    assert.ok(lines.some((l) => /^#45 \[\d\d:\d\d\] Grok:$/.test(l)), 'a message in main reads as it always did');
+    assert.ok(lines.some((l) => /^#46 \[\d\d:\d\d\] \[calm\] Grok:$/.test(l)), read.stdout);
+    await run('read');
+    assert.equal(last().url, '/api/messages', 'read without --room asks as before');
+
+    await run('search', 'calm', '--room', 'calm');
+    assert.equal(last().url, '/api/messages?q=calm&room=calm');
+    const waited = await run('wait', '--room', 'calm', '--since', '44', '--timeout', '5');
+    assert.equal(waited.code, 0, waited.stderr);
+    assert.equal(last().url, '/api/messages?since=44&room=calm');
+
+    await run('poll', 'Lunch?', 'Yes', 'No', '--room', 'calm');
+    assert.deepEqual(JSON.parse(last().body), { question: 'Lunch?', options: ['Yes', 'No'], room: 'calm' });
+    await run('decision', 'Ship it?', '--room', 'calm');
+    assert.deepEqual(JSON.parse(last().body), { prompt: 'Ship it?', room: 'calm' });
+    await run('decision', 'Ship it?');
+    assert.deepEqual(JSON.parse(last().body), { prompt: 'Ship it?' });
+
+    const exported = await run('export', '--room', 'all');
+    assert.equal(last().url, '/api/export?room=all');
+    assert.match(exported.stdout, /all rooms/);
+    await run('export');
+    assert.equal(last().url, '/api/export');
+
+    const listed = await run('rooms');
+    assert.deepEqual(listed.stdout.trim().split('\n'), ['main  Main  (newest #45)', 'calm  Calm talk  (newest #46)']);
+    const created = await run('rooms', '--create', 'Calm talk', '--id', 'calm');
+    assert.equal(created.code, 0, created.stderr);
+    assert.deepEqual([last().method, last().url, JSON.parse(last().body)], ['POST', '/api/rooms', { name: 'Calm talk', id: 'calm' }]);
+    assert.match(created.stdout, /^room calm created: Calm talk$/m);
+    await run('rooms', '--create', 'Calm talk');
+    assert.deepEqual(JSON.parse(last().body), { name: 'Calm talk' }, 'without --id the server makes the id from the name');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

@@ -57,7 +57,7 @@ const fail = (body: unknown) => {
 };
 
 test('parseMessageInput: addressing by "to" or by @prefix', () => {
-  assert.deepEqual(parseMessageInput({ text: 'hi all' }, THREE), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [], replyTo: null });
+  assert.deepEqual(parseMessageInput({ text: 'hi all' }, THREE), { ok: true, text: 'hi all', recipient: null, pinned: false, attachments: [], replyTo: null, room: null });
   assert.equal(ok({ text: '@grok please review' }).recipient, 'grok');
   assert.equal(ok({ text: '  @Claude: done?' }).recipient, 'claude');
   assert.equal(ok({ text: 'mail @grok later' }).recipient, null);
@@ -103,8 +103,8 @@ test('parseSince', () => {
 
 test('toMarkdown lists decisions first, then all messages', () => {
   const messages: Message[] = [
-    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, attachments: [], reply_to: null, poll: null, reactions: [] },
-    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', attachments: [], reply_to: null, poll: null, reactions: [] },
+    { id: 1, sender: 'hub', recipient: null, text: 'Welcome', created_at: '2026-11-25T13:00:00Z', pinned_at: null, room: 'main', attachments: [], reply_to: null, poll: null, reactions: [] },
+    { id: 2, sender: 'grok', recipient: 'claude', text: 'DECISION: use Neon\nmore', created_at: '2026-11-25T13:05:00Z', pinned_at: '2026-11-25T13:05:00Z', room: 'main', attachments: [], reply_to: null, poll: null, reactions: [] },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.match(md, /^# Trialog transcript/);
@@ -143,8 +143,8 @@ test('toMarkdown names each image, and an image-only message has no empty text b
   const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234, scale: 1 };
   const other = { ...shot, id: 'att_89abcdef0123456789abcdef', width: 40, height: 20 };
   const messages: Message[] = [
-    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot], reply_to: null, poll: null, reactions: [] },
-    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', attachments: [shot, other], reply_to: null, poll: null, reactions: [] },
+    { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', room: 'main', attachments: [shot], reply_to: null, poll: null, reactions: [] },
+    { id: 4, sender: 'claude', recipient: 'david', text: '', created_at: '2026-11-25T13:01:00Z', pinned_at: '2026-11-25T13:02:00Z', room: 'main', attachments: [shot, other], reply_to: null, poll: null, reactions: [] },
   ];
   const md = toMarkdown(messages, new Date('2026-11-25T14:00:00Z'));
   assert.ok(md.includes('· #3 · 📌\n\nDECISION: this one\n\n[image: att_0123456789abcdef01234567, 1170×2532]\n\n---'));
@@ -193,7 +193,7 @@ test('toMarkdown names who reacted', () => {
   const messages: Message[] = [
     {
       id: 5, sender: 'grok', recipient: null, text: 'Looks good',
-      created_at: '2026-11-26T04:00:00Z', pinned_at: null, attachments: [],
+      created_at: '2026-11-26T04:00:00Z', pinned_at: null, room: 'main', attachments: [],
       reply_to: null, poll: null,
       reactions: [{ emoji: '👍', by: ['david', 'claude'] }, { emoji: '❤️', by: ['grok'] }],
     },

@@ -48,11 +48,15 @@ async function legacyDatabase(): Promise<PGlite> {
   return pg;
 }
 
-/** Every row of every table, as text, to compare before and after. */
+/**
+ * Every row of every table, as text, to compare before and after. The `room` column that rooms
+ * added to messages is left out: an old row has `main` there (tests/rooms.test.ts checks that),
+ * and everything it had before must be as it was.
+ */
 async function contents(pg: PGlite): Promise<string> {
   const out: unknown[] = [];
   for (const table of ['messages', 'attachments', 'participant_status', 'webhook_state', 'polls', 'poll_votes']) {
-    out.push((await pg.query(`SELECT t::text AS row FROM ${table} t ORDER BY 1`)).rows);
+    out.push((await pg.query(`SELECT (to_jsonb(t) - 'room')::text AS row FROM ${table} t ORDER BY 1`)).rows);
   }
   return JSON.stringify(out);
 }
@@ -167,7 +171,8 @@ test('an old database, a new database and the migration files by hand all end wi
   const files = (await readdir(new URL('../migrations/', import.meta.url))).filter((f) => f.endsWith('.sql')).sort();
   assert.ok(files.includes('007-any-participants.sql'), 'the migration that replaces the name lists is present');
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
-  assert.equal(files.at(-1), '009-decision-cards.sql', 'decision cards come after reactions, with the same name check');
+  assert.ok(files.indexOf('009-decision-cards.sql') > files.indexOf('008-reactions.sql'), 'decision cards come after reactions, with the same name check');
+  assert.equal(files.at(-1), '010-rooms.sql', 'rooms come last');
   assert.ok(files.includes('008-reactions.sql'));
   for (const name of files) await byHand.exec(await file(`../migrations/${name}`));
   assert.equal(await contents(byHand), before);

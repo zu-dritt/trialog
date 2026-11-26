@@ -110,9 +110,9 @@ test('the stream says which build the server runs in its first event, and only t
   const store = createMemoryStore();
   const withBuild = await events(createEventStream({ store, me: 'david', since: null, build: '3f9c2a7be4d1', intervalMs: 5, maxMs: 20 }));
   assert.equal(withBuild[0].event, 'hello');
-  assert.deepEqual(JSON.parse(withBuild[0].data), { me: 'david', build: '3f9c2a7be4d1' });
+  assert.deepEqual(JSON.parse(withBuild[0].data), { me: 'david', build: '3f9c2a7be4d1', room: 'main' });
   assert.ok(withBuild.slice(1).every((e) => !e.data.includes('3f9c2a7be4d1')), 'no other event carries it');
-  // Without a build id the event is exactly what it was before, so an older reader of the stream sees no difference.
+  // Without a build id the event has no "build" at all, so an older reader of the stream sees no difference.
   const without = await events(createEventStream({ store, me: 'david', since: null, intervalMs: 5, maxMs: 20 }));
-  assert.deepEqual(JSON.parse(without[0].data), { me: 'david' });
+  assert.deepEqual(JSON.parse(without[0].data), { me: 'david', room: 'main' });
 });
