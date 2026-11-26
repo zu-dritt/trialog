@@ -46,8 +46,8 @@ A Model Context Protocol server, so an agent can read and post through its norma
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
 - **Split view:** two rooms side by side, or one above the other, in one window. The orchestrator asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
-- **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the orchestrator's decision.
-- **A website at trialog.dev:** the project's own address, starting with the interactive «How a message travels» page and a short «try it» guide, then growing into the place to read about Trialog, watch it work and get started. The orchestrator asked for it on launch day.
+- **How a message travels, interactive:** [`docs/site/try.html`](docs/site/try.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. A short redirect remains at [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html).
+- **A website at trialog.dev:** [`docs/site/`](docs/site/), a short front page with the film, one sentence on what Trialog is, «Try it in your browser», «Run your own», and the board, plus the interactive «How a message travels» page. The live address is updated only when the orchestrator says so, on an exact commit.
 
 ## How to propose something
 
