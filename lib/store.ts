@@ -305,6 +305,15 @@ const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR reci
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
   m.sender !== 'grok' && m.sender !== 'hub' && (m.recipient === null || m.recipient === 'grok');
 
+/**
+ * A message addressed to its own sender is stored as a message to everyone. "To myself" says
+ * nothing, and it comes about by accident: a message that happens to begin with the writer's own
+ * "@name", for example a pasted line. Stored as written, such a message would be addressed to
+ * nobody else, so nobody would be woken for it.
+ */
+export const notToSelf = (sender: Author, recipient: Sender | null | undefined): Sender | null =>
+  (recipient == null || recipient === sender ? null : recipient);
+
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
 const toAttachment = (r: Row): Attachment => ({
   id: r.id as string,
@@ -384,6 +393,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
     ensure,
     async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
+      recipient = notToSelf(sender, recipient);
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
         // Counted after taking the lock, so concurrent posts by one sender can't both slip past the limit.
@@ -582,6 +592,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
     },
     async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
+      recipient = notToSelf(creator, recipient);
       const id = newPollId();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
@@ -752,6 +763,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     async ensure() {},
     async add({ sender, recipient, text, pinned, attachments = [], reply_to = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
+      recipient = notToSelf(sender, recipient);
       const recent = rows.filter((m) => m.sender === sender && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
       if (reply_to !== null && !rows.some((m) => m.id === reply_to)) throw new ReplyTargetError(reply_to);
@@ -838,6 +850,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     },
     async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
       const cutoff = now() - 60_000;
+      recipient = notToSelf(creator, recipient);
       const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
       const m = push({ sender: creator, recipient: recipient ?? null, text: question });
