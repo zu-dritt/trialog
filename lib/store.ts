@@ -1,7 +1,15 @@
 // Message storage. Production uses Neon Postgres through `pg` on the pooled DATABASE_URL.
 // The same SQL store is tested against PGlite. Without DATABASE_URL, `next dev` falls back to
 // an in-memory store (lost on restart) so the page can be tried locally; production refuses.
-import { RATE_LIMIT_PER_MIN, WELCOME_TEXT, type Author, type Message, type Sender } from './core';
+//
+// Image attachments: this file keeps their rows (who, size, which message). Their bytes are read
+// and written only through lib/blobs.ts.
+import { randomBytes } from 'node:crypto';
+import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
+import {
+  MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
+  type Attachment, type Author, type ImageType, type Message, type Sender,
+} from './core';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -17,6 +25,32 @@ export interface NewMessage {
   recipient: Sender | null;
   text: string;
   pinned?: boolean;
+  /** Ids of the sender's own uploads that no message links yet, in the order they should appear. */
+  attachments?: string[];
+}
+/** An image that has already been checked and re-encoded (lib/images.ts). */
+export interface NewAttachment {
+  sender: Sender;
+  content_type: ImageType;
+  width: number;
+  height: number;
+  data: Buffer;
+}
+export interface StoredAttachment extends Attachment {
+  sender: Sender;
+  /** null until a message links it. */
+  message_id: number | null;
+}
+/** Thrown by add() when an attachment can't be linked. Nothing is stored in that case. */
+export class AttachmentLinkError extends Error {
+  constructor(readonly attachmentId: string, readonly reason: 'unknown' | 'not yours' | 'already linked') {
+    super({
+      unknown: `Attachment ${attachmentId} does not exist (uploads that are not linked within an hour are deleted).`,
+      'not yours': `Attachment ${attachmentId} was uploaded by someone else. You can only attach your own uploads.`,
+      'already linked': `Attachment ${attachmentId} already belongs to a message.`,
+    }[reason]);
+    this.name = 'AttachmentLinkError';
+  }
 }
 export interface ListOptions {
   since?: number | null;
@@ -37,8 +71,18 @@ export interface StreamVersion {
 }
 export interface Store {
   ensure(): Promise<void>;
-  /** Returns the stored message, or null when the sender is over the rate limit. */
+  /**
+   * Returns the stored message, or null when the sender is over the rate limit.
+   * Throws AttachmentLinkError when one of `attachments` is unknown, someone else's or already linked.
+   */
   add(input: NewMessage, limitPerMin?: number): Promise<Message | null>;
+  /**
+   * Stores an upload that no message links yet. Returns null when the sender is over the hourly limit.
+   * Every call first deletes uploads that have stayed unlinked for more than an hour.
+   */
+  addAttachment(input: NewAttachment, limitPerHour?: number): Promise<Attachment | null>;
+  /** The attachment and its bytes, or null. */
+  getAttachment(id: string): Promise<{ attachment: StoredAttachment; data: Buffer } | null>;
   /** since=null → the latest `limit` messages; since=n → messages with id > n, oldest first. */
   list(options?: ListOptions): Promise<Message[]>;
   pinned(): Promise<Message[]>;
@@ -77,20 +121,59 @@ const SCHEMA = [
   `INSERT INTO webhook_state (id, last_notified_id)
    SELECT 1, coalesce(max(id), 0) FROM messages
    ON CONFLICT (id) DO NOTHING`,
+  // Image attachments (migrations/002-attachments.sql). A row is created by an upload and linked to
+  // a message later. `data` holds the re-encoded image; only lib/blobs.ts reads or writes it.
+  `CREATE TABLE IF NOT EXISTS attachments (
+     id           TEXT PRIMARY KEY CHECK (id ~ '^att_[a-z0-9]+$'),
+     sender       TEXT NOT NULL CHECK (sender IN ('grok', 'claude', 'david')),
+     message_id   BIGINT REFERENCES messages (id) ON DELETE CASCADE,
+     position     SMALLINT NOT NULL DEFAULT 0,
+     content_type TEXT NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
+     bytes        INT NOT NULL CHECK (bytes > 0 AND bytes <= ${MAX_ATTACHMENT_BYTES}),
+     width        INT NOT NULL CHECK (width > 0),
+     height       INT NOT NULL CHECK (height > 0),
+     data         BYTEA CHECK (data IS NULL OR octet_length(data) = bytes),
+     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS attachments_message_id ON attachments (message_id)`,
+  `CREATE INDEX IF NOT EXISTS attachments_sender_created_at ON attachments (sender, created_at)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
-const COLS = 'id, sender, recipient, text, created_at, pinned_at';
+const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at';
+const ATTACHMENT_COLS = 'id, content_type, width, height, bytes';
+// Every message comes back with its attachments (never their bytes), in the order the sender gave.
+const COLS = `${BASE_COLS},
+  (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
+            'width', a.width, 'height', a.height, 'bytes', a.bytes) ORDER BY a.position, a.id), '[]'::json)
+     FROM attachments a WHERE a.message_id = messages.id) AS attachments`;
 // Inserts take a transaction-level advisory lock so ids are committed in order: a poller asking
 // for "since=<id>" can never skip a message that committed late with a lower id. Transaction-level
 // locks work behind Neon's pooler (PgBouncer in transaction mode).
 const LOCK_ID = 7230418;
+// Uploads take their own lock, so a slow upload never holds up posting. It makes the hourly count
+// exact when one sender uploads several images at once.
+const UPLOAD_LOCK_ID = 7230419;
+const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
+const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
   m.sender !== 'grok' && m.sender !== 'hub' && (m.recipient === null || m.recipient === 'grok');
 
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
+const toAttachment = (r: Row): Attachment => ({
+  id: r.id as string,
+  content_type: r.content_type as ImageType,
+  width: Number(r.width),
+  height: Number(r.height),
+  bytes: Number(r.bytes),
+});
+/** The json column arrives parsed from pg and PGlite; a string is handled in case a driver doesn't. */
+const toAttachments = (v: unknown): Attachment[] => {
+  const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
+  return Array.isArray(list) ? (list as Row[]).map(toAttachment) : [];
+};
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -98,10 +181,11 @@ const toMessage = (r: Row): Message => ({
   text: r.text as string,
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
+  attachments: toAttachments(r.attachments),
 });
 
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
-export function createSqlStore(db: Db): Store {
+export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
   let ready: Promise<void> | null = null;
   async function init() {
     for (const stmt of SCHEMA) await db.query(stmt, []);
@@ -122,7 +206,7 @@ export function createSqlStore(db: Db): Store {
 
   return {
     ensure,
-    async add({ sender, recipient, text, pinned }, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
@@ -132,14 +216,75 @@ export function createSqlStore(db: Db): Store {
           [sender],
         );
         if ((n as number) >= limitPerMin) return null;
+        // Checked before the insert, and locked, so two posts can't link the same upload. A failure
+        // here throws, which rolls the transaction back: no message, no link.
+        const linked: Attachment[] = [];
+        if (attachments.length) {
+          const found = await tx.query(
+            `SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`,
+            [attachments],
+          );
+          for (const id of attachments) {
+            const row = found.find((r) => r.id === id);
+            if (!row) throw new AttachmentLinkError(id, 'unknown');
+            if (row.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
+            if (row.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+            linked.push(toAttachment(row));
+          }
+        }
         const rows = await tx.query(
           `INSERT INTO messages (sender, recipient, text, pinned_at)
            VALUES ($1::text, $2::text, $3::text, CASE WHEN $4::boolean THEN now() END)
-           RETURNING ${COLS}`,
+           RETURNING ${BASE_COLS}`,
           [sender, recipient, text, Boolean(pinned)],
         );
-        return toMessage(rows[0]);
+        // The link commits together with the message, so a reader never sees one without the other.
+        for (const [position, a] of linked.entries()) {
+          await tx.query(
+            `UPDATE attachments SET message_id = $1::bigint, position = $2::int WHERE id = $3::text`,
+            [rows[0].id, position, a.id],
+          );
+        }
+        return { ...toMessage(rows[0]), attachments: linked };
       });
+    },
+    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+      await ensure();
+      const id = newAttachmentId();
+      let removed: string[] = [];
+      const stored = await db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${UPLOAD_LOCK_ID})`, []);
+        // Clean-up: uploads nobody linked within the hour. Linked attachments are never touched.
+        const gone = await tx.query(
+          `DELETE FROM attachments
+           WHERE message_id IS NULL AND created_at < now() - $1::int * interval '1 second' RETURNING id`,
+          [ORPHAN_SECONDS],
+        );
+        removed = gone.map((r) => r.id as string);
+        const [{ n }] = await tx.query(
+          `SELECT count(*)::int AS n FROM attachments WHERE sender = $1::text AND created_at > now() - interval '1 hour'`,
+          [sender],
+        );
+        if ((n as number) >= limitPerHour) return null;
+        await tx.query(
+          `INSERT INTO attachments (id, sender, content_type, bytes, width, height)
+           VALUES ($1::text, $2::text, $3::text, $4::int, $5::int, $6::int)`,
+          [id, sender, content_type, data.length, width, height],
+        );
+        await blobs.put(tx, id, data);
+        return { id, content_type, width, height, bytes: data.length };
+      });
+      if (removed.length) await blobs.delete(db, removed);
+      return stored;
+    },
+    async getAttachment(id) {
+      await ensure();
+      const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = $1::text`, [id]);
+      if (!row) return null;
+      const data = await blobs.get(db, id);
+      if (!data) return null;
+      const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id) };
+      return { attachment, data };
     },
     async list({ since = null, to = null, limit = 200 } = {}) {
       await ensure();
@@ -213,25 +358,61 @@ export function createSqlStore(db: Db): Store {
   };
 }
 
+export interface MemoryStoreOptions {
+  blobs?: Blobs;
+  /** The clock, in milliseconds. Tests move it forward to age uploads. */
+  now?: () => number;
+}
+
 /** In-memory store with the same behaviour (local development and tests only). */
-export function createMemoryStore(): Store {
+export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now }: MemoryStoreOptions = {}): Store {
   const rows: Message[] = [];
   let nextId = 1;
+  const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: new Date().toISOString(), ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], ...r };
     rows.push(m);
     return m;
   };
   push({ sender: 'hub', text: WELCOME_TEXT });
-  const copy = (m: Message): Message => ({ ...m });
+  const copy = (m: Message): Message => ({ ...m, attachments: m.attachments.map((a) => ({ ...a })) });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
+  const uploads = new Map<string, StoredAttachment & { created: number }>();
+  const meta = ({ id, content_type, width, height, bytes }: Attachment): Attachment => ({ id, content_type, width, height, bytes });
+  const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
     async ensure() {},
-    async add({ sender, recipient, text, pinned }, limitPerMin = RATE_LIMIT_PER_MIN) {
-      const cutoff = Date.now() - 60_000;
+    async add({ sender, recipient, text, pinned, attachments = [] }, limitPerMin = RATE_LIMIT_PER_MIN) {
+      const cutoff = now() - 60_000;
       const recent = rows.filter((m) => m.sender === sender && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return null;
-      return copy(push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? new Date().toISOString() : null }));
+      const linked = attachments.map((id) => {
+        const upload = uploads.get(id);
+        if (!upload) throw new AttachmentLinkError(id, 'unknown');
+        if (upload.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
+        if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+        return upload;
+      });
+      const m = push({ sender, recipient: recipient ?? null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta) });
+      for (const upload of linked) upload.message_id = m.id;
+      return copy(m);
+    },
+    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+      const removed = [...uploads.values()].filter((u) => u.message_id === null && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
+      for (const id of removed) uploads.delete(id);
+      if (removed.length) await blobs.delete(noDb, removed);
+      const recent = [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
+      if (recent >= limitPerHour) return null;
+      const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length };
+      await blobs.put(noDb, attachment.id, data);
+      uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
+      return attachment;
+    },
+    async getAttachment(id) {
+      const upload = uploads.get(id);
+      const data = upload && (await blobs.get(noDb, id));
+      if (!upload || !data) return null;
+      return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id }, data };
     },
     async list({ since = null, to = null, limit = 200 } = {}) {
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
@@ -241,7 +422,7 @@ export function createMemoryStore(): Store {
     async setPinned(id, pinned) {
       const m = rows.find((r) => r.id === id);
       if (!m) return null;
-      m.pinned_at = pinned ? (m.pinned_at ?? new Date().toISOString()) : null;
+      m.pinned_at = pinned ? (m.pinned_at ?? timestamp()) : null;
       return copy(m);
     },
     async all() { return rows.map(copy); },
@@ -297,7 +478,7 @@ export function getStore(): Promise<Store> {
   if (!globalStore.__collabHubStore) {
     const url = process.env.DATABASE_URL;
     if (url) {
-      globalStore.__collabHubStore = createPgDb(url).then(createSqlStore).catch((e: unknown) => {
+      globalStore.__collabHubStore = createPgDb(url).then((db) => createSqlStore(db)).catch((e: unknown) => {
         globalStore.__collabHubStore = undefined; // retry on the next request
         throw e;
       });

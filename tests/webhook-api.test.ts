@@ -45,6 +45,8 @@ test('schema.sql and the migration match the schema the app creates', async () =
   if (process.env.UPDATE_SCHEMA) await (await import('node:fs/promises')).writeFile(file, SCHEMA_SQL);
   assert.equal(await readFile(file, 'utf8'), SCHEMA_SQL, 'run UPDATE_SCHEMA=1 npm test to regenerate schema.sql');
   const squash = (sql: string) => sql.replace(/--.*$/gm, '').replace(/\s+/g, ' ').trim();
-  const migration = squash(await readFile(new URL('../migrations/001-webhook-state.sql', import.meta.url), 'utf8'));
-  assert.ok(squash(SCHEMA_SQL).endsWith(migration), 'migrations/001-webhook-state.sql differs from the statements in lib/store.ts');
+  // The migrations, one after the other, are the tail of the schema.
+  const migration = async (name: string) => squash(await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
+  const tail = `${await migration('001-webhook-state.sql')} ${await migration('002-attachments.sql')}`;
+  assert.ok(squash(SCHEMA_SQL).endsWith(tail), 'migrations/001-webhook-state.sql or 002-attachments.sql differs from the statements in lib/store.ts');
 });
