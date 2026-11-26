@@ -41,6 +41,10 @@ test('a result shows the line with the most matching words', () => {
   // Words on different lines: the lines that have them, so every word can be seen.
   assert.equal(matchLine(m, ['first', 'last']), 'First line about storage. · Last line.');
   assert.equal(matchLine(m, ['zebra']), 'First line about storage.', 'nothing to show: the first line');
+  // The writer's own line comes before a quoted one; a quoted line is shown only when the word is nowhere else.
+  const quoting = { text: '> **Claude** in #2:\n>\n> DECISION: kiwi one\n\nkiwi four only quotes a decision' };
+  assert.equal(matchLine(quoting, ['kiwi']), 'kiwi four only quotes a decision');
+  assert.equal(matchLine(quoting, ['one']), '> DECISION: kiwi one');
   // A poll: an option can be the line.
   const poll = { text: 'Where do we eat?', poll: { question: 'Where do we eat?', options: [{ text: 'Pizza place' }, { text: 'Salad bar' }] } };
   assert.deepEqual(searchLines(poll), ['Where do we eat?', 'Pizza place', 'Salad bar']);
@@ -149,13 +153,28 @@ test('a result shows sender, time, number and one line with the matches marked',
   const options = [...out.matchAll(/<li id="(s-\d+)" role="option" aria-selected="(true|false)"[^>]*>(.*?)<\/li>/g)];
   assert.deepEqual(options.map((o) => [o[1], o[2]]), [['s-46', 'false'], ['s-45', 'true']]);
   const [first, second] = options.map((o) => o[3]);
-  assert.match(first, /<span class="font-bold text-claude">Claude<\/span><time dateTime="2026-11-20T09:30:00\.000Z">20\.11\.26, \d\d:30<\/time><span>#46<\/span><span>pinned<\/span>/);
+  assert.match(first, /<span class="font-bold text-claude">Claude<\/span><time dateTime="2026-11-20T09:30:00\.000Z">20\.11\.26, \d\d:30<\/time><span>#46<\/span><span [^>]*>.*Decision<\/span><span>pinned<\/span>/);
+  // The badge is the one from the stream: the word in a label, never an emoji.
+  assert.ok(!/✅|✔|✓|📌/.test(out), out);
   assert.match(first, /DECISION: <\/span><mark[^>]*>Images<\/mark><span> go into the database\.<\/span>/);
   assert.match(second, /<span class="font-bold text-grok">Grok<\/span>.*<span>#45<\/span><\/div>/);
-  assert.ok(!second.includes('pinned'));
+  assert.ok(!second.includes('pinned') && !second.includes('Decision'), 'neither pinned nor a decision');
   // The line with the match, not the first line.
   assert.match(second, /<span>Which storage for the <\/span><mark[^>]*>images<\/mark><span>\?<\/span>/);
   assert.ok(!second.includes('Intro'));
+});
+
+test('a result shows the Decision badge by the text, and "pinned" by the pin', () => {
+  const marks = (m: Message) => {
+    const out = renderToStaticMarkup(<SearchResults listId="s" results={[m]} words={['plan']} active={-1} onPick={() => {}} names={NAMES} colour={() => ''} />);
+    const head = /<div class="flex items-baseline[^"]*">(.*?)<\/div>/.exec(out)?.[1] ?? '';
+    return { decision: />Decision<\/span>/.test(head), pinned: /<span>pinned<\/span>/.test(head) };
+  };
+  const at = '2026-11-20T09:31:00.000Z';
+  assert.deepEqual(marks(message({ text: 'DECISION: the plan', pinned_at: at })), { decision: true, pinned: true });
+  assert.deepEqual(marks(message({ text: 'DECISION: the plan, unpinned later', pinned_at: null })), { decision: true, pinned: false });
+  assert.deepEqual(marks(message({ text: 'A plan note, pinned by hand', pinned_at: at })), { decision: false, pinned: true });
+  assert.deepEqual(marks(message({ text: '> DECISION: the plan\n\nI only quote it', pinned_at: null })), { decision: false, pinned: false });
 });
 
 test('a result is text: nothing from a message becomes markup', () => {

@@ -487,9 +487,9 @@ export default function Page() {
   };
 
   /** Asks the server for the messages that contain every word of `q`. */
-  const runSearch = useCallback(async (q: string, pinnedOnly: boolean) => {
+  const runSearch = useCallback(async (q: string, decisionsOnly: boolean) => {
     const params = new URLSearchParams({ q });
-    if (pinnedOnly) params.set('pinned', '1');
+    if (decisionsOnly) params.set('decisions', '1');
     return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
   }, [api]);
 

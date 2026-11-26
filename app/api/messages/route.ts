@@ -10,8 +10,8 @@ export const runtime = 'nodejs';
 // Room for the wake-up webhook job after the response: 2 s debounce plus three attempts of up to 5 s.
 export const maxDuration = 60;
 
-/** `pinned=1` narrows a search to pinned messages. Left out or 0: all messages. */
-function parsePinnedOnly(value: string | null): boolean | undefined {
+/** A switch in the query, such as `decisions=1`. Left out or 0: off. */
+function parseSwitch(value: string | null): boolean | undefined {
   if (value === null || value === '' || value === '0' || value === 'false') return false;
   return value === '1' || value === 'true' ? true : undefined;
 }
@@ -20,8 +20,9 @@ function parsePinnedOnly(value: string | null): boolean | undefined {
 // Without `since`: the latest messages. With `since`: messages with a higher id, oldest first.
 // Always includes the pinned decisions and who you are (derived from your token).
 //
-// GET /api/messages?q=<words>&to=<name>&pinned=1&limit=<n>
+// GET /api/messages?q=<words>&to=<name>&decisions=1&pinned=1&limit=<n>
 // Search: the messages that contain every word, newest first, as {me, messages}.
+// decisions=1: only messages that start with DECISION: (pinned or not). pinned=1: only pinned ones.
 export const GET = safe(async (request: Request) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;
@@ -38,9 +39,11 @@ export const GET = safe(async (request: Request) => {
     const query = parseQuery(q);
     if (!query.ok) return error(400, query.error);
     if (since !== null) return error(400, '"since" cannot be combined with "q": a search returns the newest matches first.');
-    const pinned = parsePinnedOnly(params.get('pinned'));
+    const decisions = parseSwitch(params.get('decisions'));
+    if (decisions === undefined) return error(400, '"decisions" must be 1 or 0.');
+    const pinned = parseSwitch(params.get('pinned'));
     if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
-    return json({ me, messages: await store.search({ words: query.words, to, pinned, limit }) });
+    return json({ me, messages: await store.search({ words: query.words, to, decisions, pinned, limit }) });
   }
   const [messages, pinned, polls] = await Promise.all([store.list({ since, to, limit }), store.pinned(), store.listPolls()]);
   return json({ me, messages, pinned, polls });

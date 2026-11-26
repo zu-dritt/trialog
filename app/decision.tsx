@@ -7,23 +7,10 @@
 // The badge is a word in a label, with a check mark drawn as part of it. It is deliberately not
 // an emoji: a participant may answer a message with a check-mark emoji, and that must never look
 // like the mark of a decision.
-import { SENDERS } from '../lib/shared';
+import { isDecision } from '../lib/decision';
 
-const NAMES = SENDERS.join('|');
-// The same rule the server pins by (lib/core.ts): DECISION: in capitals, after an optional @name.
-const STARTS_DECISION = new RegExp(`^\\s*(?:@(?:${NAMES})\\b[\\s,:]*)?DECISION:`);
-
-/**
- * Whether a message is a decision: what its writer wrote starts with DECISION:, by the server's
- * rule. Lines of a quote at the top (starting with ">") and empty lines are skipped first, so a
- * decision that opens with what it answers is still one. A DECISION: inside a quote, or further
- * down in the text, does not make a message a decision.
- */
-export function isDecision(text: string): boolean {
-  const lines = text.split('\n');
-  const first = lines.findIndex((line) => line.trim() !== '' && !line.trimStart().startsWith('>'));
-  return first !== -1 && STARTS_DECISION.test(lines.slice(first).join('\n'));
-}
+// The rule itself lives in lib/decision.ts, so the server's search can use the very same one.
+export { isDecision };
 
 /** What to call the list at the top, which holds every pinned message. */
 export function pinnedListTitle(pinned: { text: string }[]): 'Decisions' | 'Decisions and pinned' | 'Pinned' {

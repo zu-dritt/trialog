@@ -84,11 +84,14 @@ export function markMatches(line: string, words: string[]): Piece[] {
 
 /**
  * One line of a message to show in a list of results: the line with the most of the words in it
- * (the first such line). When words are still missing, the lines that have them follow, joined
+ * (the first such line; the writer's own lines before quoted ones). When words are still missing, the lines that have them follow, joined
  * by " · ", so every word of the query can be seen. A long line is cut around its first match.
  */
 export function matchLine(m: Searchable, words: string[], max = 140): string {
-  const lines = searchLines(m).map((line) => line.trim()).filter((line) => line !== '');
+  const all = searchLines(m).map((line) => line.trim()).filter((line) => line !== '');
+  // What the writer wrote comes before what they quoted, so a result shows a quoted line only
+  // when the words are nowhere else.
+  const lines = [...all.filter((line) => !line.startsWith('>')), ...all.filter((line) => line.startsWith('>'))];
   const chosen: string[] = [];
   let missing = [...words];
   // At most three lines: enough for a question and two options, and it stays one row on the screen.

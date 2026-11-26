@@ -8,6 +8,8 @@
 // here. The rules of a query (lib/search.ts) are the same ones the server uses.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Author, Message } from '../lib/core';
+import { isDecision } from '../lib/decision';
+import { DecisionBadge } from './decision';
 import { SEARCH_LIMIT, debounce, markMatches, matchLine, newestOnly, parseQuery } from '../lib/search';
 
 /** How long the page waits after the last key before it asks the server. */
@@ -54,6 +56,8 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
             <span className={`font-bold ${colour(m.sender)}`}>{names[m.sender] ?? m.sender}</span>
             <time dateTime={m.created_at}>{whenFmt.format(new Date(m.created_at))}</time>
             <span>#{m.id}</span>
+            {/* The same two signs as in the stream: the badge for a decision, the word for a pin. */}
+            {isDecision(m.text) && <DecisionBadge />}
             {m.pinned_at && <span>pinned</span>}
           </div>
           <div className="truncate text-[13px]">
@@ -68,11 +72,11 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
 }
 
 /** What the panel says when it has no list to show, or under the list. */
-export function searchNote(state: SearchState, pinnedOnly: boolean): string {
+export function searchNote(state: SearchState, decisionsOnly: boolean): string {
   if (state.kind === 'idle') return 'Type a word or two. A message is found when it contains all of them.';
   if (state.kind === 'problem') return state.message;
   if (state.kind === 'searching') return 'Searching…';
-  if (!state.results.length) return pinnedOnly ? 'No decision found.' : 'Nothing found.';
+  if (!state.results.length) return decisionsOnly ? 'No decision found.' : 'Nothing found.';
   return state.results.length >= SEARCH_LIMIT ? `These are the newest ${SEARCH_LIMIT}. Add a word to narrow it down.` : '';
 }
 
@@ -90,11 +94,11 @@ const Magnifier = () => (
  *   onPick  the reader chose a result
  */
 export function SearchBox({ search, onPick, names, colour }: Look & {
-  search: (q: string, pinnedOnly: boolean) => Promise<Message[]>;
+  search: (q: string, decisionsOnly: boolean) => Promise<Message[]>;
   onPick: (m: Message) => void;
 }) {
   const [text, setText] = useState('');
-  const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [decisionsOnly, setDecisionsOnly] = useState(false);
   const [open, setOpen] = useState(false); // the panel
   const [bar, setBar] = useState(false); // narrow screens: the field is out
   const [state, setState] = useState<SearchState>({ kind: 'idle' });
@@ -108,9 +112,9 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
   searchRef.current = search;
 
   // Ask the server a moment after the last key. An answer counts only if no newer question was asked since.
-  const ask = useRef(debounce((q: string, words: string[], pinned: boolean) => {
+  const ask = useRef(debounce((q: string, words: string[], decisions: boolean) => {
     const ticket = order.current.ticket();
-    searchRef.current(q, pinned).then(
+    searchRef.current(q, decisions).then(
       (results) => { if (order.current.isNewest(ticket)) { setState({ kind: 'done', results, words }); setActive(results.length ? 0 : -1); } },
       (e: unknown) => { if (order.current.isNewest(ticket)) setState({ kind: 'problem', message: `The search failed: ${e instanceof Error ? e.message : String(e)}` }); },
     );
@@ -120,9 +124,9 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
     return () => waiting.cancel();
   }, []);
 
-  const change = (nextText: string, nextPinned: boolean) => {
+  const change = (nextText: string, nextDecisions: boolean) => {
     setText(nextText);
-    setPinnedOnly(nextPinned);
+    setDecisionsOnly(nextDecisions);
     setOpen(true);
     order.current.ticket(); // whatever is still on its way answers an older question
     if (nextText.trim() === '') { ask.current.cancel(); setState({ kind: 'idle' }); setActive(-1); return; }
@@ -130,7 +134,7 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
     if (!query.ok) { ask.current.cancel(); setState({ kind: 'problem', message: queryProblem(query.error) }); setActive(-1); return; }
     // The results of the previous question stay until the new ones are there, so the list doesn't flicker.
     setState((s) => (s.kind === 'done' ? s : { kind: 'searching' }));
-    ask.current.call(nextText, query.words, nextPinned);
+    ask.current.call(nextText, query.words, nextDecisions);
   };
 
   const close = (returnFocus: boolean) => {
@@ -163,7 +167,7 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
     }
   };
 
-  const note = searchNote(state, pinnedOnly);
+  const note = searchNote(state, decisionsOnly);
   return (
     <div
       // On a narrow screen this holds only the magnifier button, and must not shrink under it.
@@ -181,7 +185,7 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
           ref={field} type="search" role="combobox" aria-label="Search messages" aria-autocomplete="list"
           aria-expanded={open} aria-controls={results.length ? listId : undefined} aria-activedescendant={activeId}
           placeholder="Search" autoComplete="off" spellCheck={false} maxLength={400}
-          value={text} onChange={(e) => change(e.target.value, pinnedOnly)} onFocus={() => setOpen(true)}
+          value={text} onChange={(e) => change(e.target.value, decisionsOnly)} onFocus={() => setOpen(true)}
           className="w-full min-w-0 rounded-md border border-line bg-panel px-2.5 py-[5px] text-[13px] placeholder:text-muted"
         />
         <button type="button" onClick={() => close(true)} className="cursor-pointer rounded-md border border-line bg-transparent px-2.5 py-[5px] text-[13px] md:hidden">Close</button>
@@ -190,7 +194,7 @@ export function SearchBox({ search, onPick, names, colour }: Look & {
           // the panel doesn't take it for "the reader went elsewhere" and close. The click still counts.
           <div onMouseDown={(e) => e.preventDefault()} className="absolute left-0 top-full z-40 w-[min(560px,calc(100vw-2rem))] overflow-hidden rounded-md border border-line bg-panel shadow-lg shadow-black/50 max-md:inset-x-0 max-md:w-auto max-md:rounded-none max-md:border-x-0 md:mt-1.5">
             <label className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px]">
-              <input type="checkbox" checked={pinnedOnly} onChange={(e) => change(text, e.target.checked)} className="accent-decision" />
+              <input type="checkbox" checked={decisionsOnly} onChange={(e) => change(text, e.target.checked)} className="accent-decision" />
               Decisions only
             </label>
             {results.length > 0 && (

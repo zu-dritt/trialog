@@ -11,6 +11,7 @@ import {
   MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
 } from './core';
+import { DECISION_SQL_PATTERN, isDecision } from './decision';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 
 export type Row = Record<string, unknown>;
@@ -92,7 +93,9 @@ export interface SearchOptions {
   /** A message matches when it contains every one of these, in upper or lower case. */
   words: string[];
   to?: Sender | null;
-  /** Only pinned messages. */
+  /** Only decisions: messages that start with DECISION:, by the rule in lib/decision.ts. Pinned or not. */
+  decisions?: boolean;
+  /** Only pinned messages, decision or not. */
   pinned?: boolean;
   limit?: number;
 }
@@ -537,7 +540,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
         );
       return rows.map(toMessage);
     },
-    async search({ words, to = null, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisions = false, pinned = false, limit = SEARCH_LIMIT }) {
       await ensure();
       if (!words.length) return [];
       // Plain ILIKE over the text, and over the poll's question and options when there is one.
@@ -551,8 +554,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
                ILIKE ALL ($1::text[])
            AND ($2::text IS NULL OR recipient = $2::text)
            AND (NOT $3::boolean OR pinned_at IS NOT NULL)
-         ORDER BY id DESC LIMIT $4::int`,
-        [words.map(likePattern), to, pinned, limit],
+           AND (NOT $4::boolean OR messages.text ~ $5::text)
+         ORDER BY id DESC LIMIT $6::int`,
+        [words.map(likePattern), to, pinned, decisions, DECISION_SQL_PATTERN, limit],
       );
       return rows.map(toMessage);
     },
@@ -857,10 +861,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
       return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
     },
-    async search({ words, to = null, pinned = false, limit = SEARCH_LIMIT }) {
+    async search({ words, to = null, decisions = false, pinned = false, limit = SEARCH_LIMIT }) {
       if (!words.length) return [];
       return rows.map(copy)
-        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && matchesAll(m, words))
+        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && (!decisions || isDecision(m.text)) && matchesAll(m, words))
         .reverse().slice(0, limit);
     },
     async pinned() { return rows.filter((m) => m.pinned_at).map(copy); },

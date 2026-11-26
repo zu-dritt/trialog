@@ -3,6 +3,7 @@ import { beforeAll, test } from 'vitest';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
+import { DECISION_SQL_PATTERN, isDecision } from '../lib/decision';
 import { MAX_SEARCH_CHARS, MAX_SEARCH_WORDS, SEARCH_LIMIT, likePattern, parseQuery } from '../lib/search';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 
@@ -43,7 +44,7 @@ for (const [name, make] of [
   ['sql (PGlite)', async (): Promise<Store> => createSqlStore(pgliteDb(new PGlite()))],
   ['memory', async (): Promise<Store> => createMemoryStore()],
 ] as const) {
-  const texts = async (store: Store, q: string, options: { to?: 'grok' | 'claude' | 'david'; pinned?: boolean; limit?: number } = {}) => {
+  const texts = async (store: Store, q: string, options: { to?: 'grok' | 'claude' | 'david'; decisions?: boolean; pinned?: boolean; limit?: number } = {}) => {
     const query = parseQuery(q);
     assert.ok(query.ok, q);
     return (await store.search({ words: query.words, ...options })).map((m) => m.text);
@@ -98,6 +99,49 @@ for (const [name, make] of [
     assert.equal(bulk.length, SEARCH_LIMIT);
     assert.equal(bulk[0], 'bulk 55');
     assert.equal(bulk[49], 'bulk 6');
+  });
+
+  test(`${name}: "decisions only" goes by the text, not by the pin`, async () => {
+    const store = await make();
+    const pinnedDecision = must(await store.add({ sender: 'claude', recipient: null, text: 'DECISION: kiwi one, pinned as usual', pinned: true }));
+    const unpinned = must(await store.add({ sender: 'grok', recipient: 'claude', text: '@claude DECISION: kiwi two, unpinned later', pinned: true }));
+    await store.setPinned(unpinned.id, false);
+    const byHand = must(await store.add({ sender: 'david', recipient: null, text: 'kiwi three, a note pinned by hand' }));
+    await store.setPinned(byHand.id, true);
+    await store.add({ sender: 'david', recipient: null, text: '> **Claude** in #2:\n>\n> DECISION: kiwi one\n\nkiwi four only quotes a decision' });
+    await store.add({ sender: 'grok', recipient: null, text: '> **Grok** in #1:\n>\n> which kiwi?\n\nDECISION: kiwi five, after a quote' });
+    await store.add({ sender: 'claude', recipient: null, text: 'kiwi six mentions DECISION: further down' });
+
+    const all = ['kiwi six', 'DECISION: kiwi five', 'kiwi four', 'kiwi three', 'kiwi two', 'kiwi one'];
+    const found = async (options: { decisions?: boolean; pinned?: boolean; to?: 'claude' }) =>
+      (await texts(store, 'kiwi', options)).map((t) => all.find((label) => t.includes(label)));
+    assert.deepEqual(await found({}), all);
+    // A decision that was unpinned is found. A note pinned by hand is left out, and so is a
+    // message that only quotes a decision or mentions the word further down.
+    assert.deepEqual(await found({ decisions: true }), ['DECISION: kiwi five', 'kiwi two', 'kiwi one']);
+    // "pinned" is the other question: what is pinned, decision or not.
+    assert.deepEqual(await found({ pinned: true }), ['kiwi three', 'kiwi one']);
+    assert.deepEqual(await found({ decisions: true, pinned: true }), ['kiwi one']);
+    assert.deepEqual(await found({ decisions: true, to: 'claude' }), ['kiwi two']);
+    assert.equal(pinnedDecision.pinned_at !== null, true);
+  });
+
+  test(`${name}: the search and the Decision badge agree on what a decision is`, async () => {
+    const store = await make();
+    const cases = [
+      'DECISION: ship', '  DECISION: ship', '\n\nDECISION: ship\nmore', '@grok DECISION: ship', '@claude, DECISION: ship', '@david: DECISION: ship',
+      '@grok\nDECISION: ship', 'DECISION:ship', '> quote\n\nDECISION: ship', '>quote\n> more\n   \n\t\n@grok DECISION: ship', '  > indented quote\nDECISION: ship',
+      'ship it', 'no DECISION: ship', 'decision: ship', 'Decision: ship', 'DECISION ship', '@nobody DECISION: ship', '@GROK DECISION: ship', '@grokx DECISION: ship',
+      'First line ship\nDECISION: no', '✅ DECISION: ship', '> DECISION: ship', '> DECISION: ship\n\nI only quote, ship', '> quote\n> DECISION: ship\nmy ship answer',
+      '@grok\n> quote\nDECISION: ship', 'x DECISION: ship', '-DECISION: ship',
+    ];
+    const ids = new Map<number, string>();
+    for (const text of cases) ids.set(must(await store.add({ sender: 'david', recipient: null, text }, 1000)).id, text);
+    const found = new Set((await store.search({ words: ['ship'], decisions: true, limit: 500 })).map((m) => m.id));
+    assert.equal((await store.search({ words: ['ship'], limit: 500 })).length, cases.length);
+    for (const [id, text] of ids) assert.equal(found.has(id), isDecision(text), JSON.stringify(text));
+    // The list has both kinds in it.
+    assert.ok(found.size >= 10 && found.size <= cases.length - 10, String(found.size));
   });
 
   test(`${name}: nothing in a query acts as a pattern`, async () => {
@@ -218,6 +262,8 @@ test('GET /api/messages?q= finds messages, newest first, with their usual shape'
   assert.deepEqual((await search('q=melon+route')).body.messages?.map((m) => m.id), [c.id, a.id]);
   assert.deepEqual((await search('q=melon&to=grok')).body.messages?.map((m) => m.id), [b.id]);
   assert.deepEqual((await search('q=melon&pinned=1')).body.messages?.map((m) => m.id), [b.id]);
+  assert.deepEqual((await search('q=melon&decisions=1')).body.messages?.map((m) => m.id), [b.id]);
+  assert.deepEqual((await search('q=melon&decisions=0')).body.messages?.map((m) => m.id), [c.id, b.id, a.id]);
   assert.deepEqual((await search('q=melon&pinned=0')).body.messages?.map((m) => m.id), [c.id, b.id, a.id]);
   assert.deepEqual((await search('q=melon&limit=2')).body.messages?.map((m) => m.id), [c.id, b.id]);
   assert.deepEqual((await search('q=melon&limit=')).body.messages?.length, 3);
@@ -252,6 +298,7 @@ test('GET /api/messages?q= refuses what is not a query', async () => {
   await bad('q=a+b+c+d+e+f+g+h+i', /at most 8 words/);
   await bad('q=melon&since=3', /"since" cannot be combined with "q"/);
   await bad('q=melon&pinned=yes', /"pinned" must be 1 or 0/);
+  await bad('q=melon&decisions=yes', /"decisions" must be 1 or 0/);
   await bad('q=melon&to=nobody', /"to" must be/);
   await bad('q=melon&limit=many', /"limit" must be/);
   assert.equal((await search(`q=${'x'.repeat(200)}`)).status, 200);
@@ -266,8 +313,37 @@ test('GET /api/messages without q is what it was', async () => {
   // Oldest first, as always.
   const ids = res.body.messages?.map((m) => m.id) ?? [];
   assert.deepEqual(ids, [...ids].sort((x, y) => x - y));
-  // "pinned" without "q" is not a filter and is ignored, as any unknown parameter is.
-  assert.equal((await search('limit=3&pinned=1')).body.messages?.length, 3);
+  // "pinned" and "decisions" without "q" are not filters and are ignored, as any unknown parameter is.
+  assert.equal((await search('limit=3&pinned=1&decisions=1')).body.messages?.length, 3);
   const since = await search(`since=${ids[0]}&limit=500`);
   assert.deepEqual(since.body.messages?.map((m) => m.id).slice(0, 2), [ids[1], ids[2]]);
+});
+
+test('"decisions only" through the route: an unpinned decision is found, a note pinned by hand is not', async () => {
+  const pinRoute = (await import('../app/api/messages/[id]/pin/route')) as unknown as { POST: Handler };
+  const setPin = async (id: number, pinned: boolean) => {
+    const res = await pinRoute.POST(new Request(`${BASE}/api/messages/${id}/pin`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...auth('david') }, body: JSON.stringify({ pinned }),
+    }), { params: Promise.resolve({ id: String(id) }) });
+    assert.equal(res.status, 200);
+  };
+  const decision = await post({ text: 'DECISION: the quince plan' }, 'grok');
+  const note = await post({ text: 'A quince note, pinned by hand' }, 'claude');
+  assert.ok(decision.pinned_at, 'the server pins a decision when it is posted');
+  await setPin(decision.id, false);
+  await setPin(note.id, true);
+
+  assert.deepEqual((await search('q=quince+plan')).body.messages?.map((m) => m.id), [decision.id]);
+  const decisions = (await search('q=quince&decisions=1')).body.messages ?? [];
+  assert.deepEqual(decisions.map((m) => m.id), [decision.id]);
+  assert.equal(decisions[0].pinned_at, null, 'unpinned, and still a decision');
+  assert.ok(!decisions.some((m) => m.id === note.id), 'pinned by hand is not a decision');
+  // "pinned" asks the other question.
+  const pinned = (await search('q=quince&pinned=1')).body.messages ?? [];
+  assert.ok(pinned.some((m) => m.id === note.id) && !pinned.some((m) => m.id === decision.id));
+});
+
+test('the decision rule for the database is built from the same names as the page\'s rule', () => {
+  assert.match(DECISION_SQL_PATTERN, /@\(\?:grok\|claude\|david\)\\y/);
+  assert.ok(DECISION_SQL_PATTERN.endsWith('DECISION:'));
 });

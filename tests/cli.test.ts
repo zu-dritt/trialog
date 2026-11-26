@@ -294,7 +294,7 @@ test('send --reply-to posts reply_to, and read shows the arrow on a reply', asyn
 });
 
 test('search needs at least one word, before any request', async () => {
-  for (const args of [['search'], ['search', '   '], ['search', '--json'], ['search', '--pinned']]) {
+  for (const args of [['search'], ['search', '   '], ['search', '--json'], ['search', '--pinned'], ['search', '--decisions']]) {
     const { code, stderr } = await hub(...args);
     assert.equal(code, 64, args.join(' '));
     assert.match(stderr, /search needs at least one word/);
@@ -323,7 +323,7 @@ test('search sends the words as q with the token, and prints the results like re
     child.stdin?.end();
   });
   try {
-    const plain = await run('search', 'images 100%', '--limit', '20', '--to', 'grok', '--pinned');
+    const plain = await run('search', 'images 100%', '--limit', '20', '--to', 'grok', '--pinned', '--decisions');
     assert.equal(plain.code, 0);
     const url = new URL(seen[0].url, 'http://hub.test');
     assert.equal(url.pathname, '/api/messages');
@@ -332,6 +332,7 @@ test('search sends the words as q with the token, and prints the results like re
     assert.equal(url.searchParams.get('limit'), '20');
     assert.equal(url.searchParams.get('to'), 'grok');
     assert.equal(url.searchParams.get('pinned'), '1');
+    assert.equal(url.searchParams.get('decisions'), '1');
     assert.equal(seen[0].auth, 'Bearer cli-test-token-0123456789abcdef');
     // Printed like read, in the order the hub gave: newest first.
     assert.match(plain.stdout, /^#12 \[\d\d:\d\d\] Claude → Grok ↳ #9 📌:\nDECISION: images go into the database\n\n#9 \[\d\d:\d\d\] Grok:\nWhich storage for the images\?\n/);
