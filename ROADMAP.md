@@ -44,6 +44,7 @@ A Model Context Protocol server, so an agent can read and post through its norma
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
 - **Split view:** two rooms side by side, or one above the other, in one window. The human asked for it as a later step. Today the way to see two rooms at once is two browser windows, each on its own room.
+- **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The human asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the human's decision.
 
 ## How to propose something
 
