@@ -18,13 +18,27 @@ export interface ChipProps {
   onRemove: () => void;
   /** What the ✕ does, in words: read by screen readers and shown as its tooltip. */
   removeLabel: string;
+  /**
+   * When the chip can be opened (to look at what it holds, or to change it): what a click on the
+   * chip does. The chip's sign and text then are one button, reachable with Tab and pressed with
+   * Enter. The ✕ stays a button of its own next to it.
+   */
+  onOpen?: () => void;
+  /** What opening does, in words. Needed with `onOpen`. */
+  openLabel?: string;
 }
 
-export function Chip({ visual, children, title, tone = 'plain', onRemove, removeLabel }: ChipProps) {
+export function Chip({ visual, children, title, tone = 'plain', onRemove, removeLabel, onOpen, openLabel }: ChipProps) {
+  const sign = visual !== undefined && <span aria-hidden="true" className="flex flex-none items-center text-muted">{visual}</span>;
+  const text = <span className="min-w-0 max-w-[min(20rem,48vw)] truncate" title={onOpen ? undefined : title}>{children}</span>;
   return (
     <li className={`flex h-[38px] max-w-full flex-none items-center gap-2 rounded-md border bg-panel py-1 pl-2 pr-1 text-[13px] ${tone === 'bad' ? 'border-bad' : 'border-line'}`}>
-      {visual !== undefined && <span aria-hidden="true" className="flex flex-none items-center text-muted">{visual}</span>}
-      <span className="min-w-0 max-w-[min(20rem,48vw)] truncate" title={title}>{children}</span>
+      {onOpen ? (
+        <button
+          type="button" onClick={onOpen} aria-label={openLabel} title={title ?? openLabel}
+          className="flex min-w-0 cursor-pointer items-center gap-2 self-stretch rounded border-none bg-transparent p-0 text-left text-[13px] text-fg hover:text-white"
+        >{sign}{text}</button>
+      ) : <>{sign}{text}</>}
       <button
         type="button" onClick={onRemove} aria-label={removeLabel} title={removeLabel}
         className="flex-none cursor-pointer rounded border-none bg-transparent px-1 text-base leading-none text-muted hover:text-fg"

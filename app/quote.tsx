@@ -1,14 +1,19 @@
 'use client';
 
-// Quote a selection: select part of a message in the stream and press Quote. The quote becomes a
-// chip above the message box, next to images and the "Replying to" marker, and the box stays
-// free for what the writer wants to say. Several quotes can be collected.
+// Quote a selection: select part of a message in the stream and press Quote. A small box opens at
+// the selection, where the writer can say something about those words; Enter makes the quote a
+// chip above the message box, next to images and the "Replying to" marker. The message box stays
+// free for what else the writer wants to say. Several quotes can be collected, each with its own
+// comment.
 //
-// When the message is sent, the chips are written out as Markdown in front of the typed text:
+// When the message is sent, the chips are written out as Markdown in front of the typed text,
+// each followed by its comment:
 //
 //   > **Grok** in #45:
 //   >
 //   > the selected text
+//
+//   what the writer says about it
 //
 // So a message with quotes is ordinary Markdown text for the server, the API, the command-line
 // client and every agent that reads it. Two things matter here. A quote is text from start to
@@ -18,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MAX_TEXT_BYTES, addressing } from '../lib/shared';
 import { Chip } from './chips';
+import { isDecision } from './decision';
 
 /** Marks the element that holds one message's text. Its value is the message id. */
 export const MESSAGE_TEXT_ATTRIBUTE = 'data-message-text';
@@ -127,11 +133,30 @@ export interface Quote {
   /** 'selection': text as the reader saw it, to be escaped. 'message': a whole message, in its own Markdown. */
   kind: 'selection' | 'message';
   text: string;
+  /**
+   * What the writer says about this quote. It is their own Markdown, like the main text, and is
+   * sent right below the quote. Left out or empty: the quote stands alone.
+   */
+  comment?: string;
 }
 /** A quote on the page, with a key that tells two chips apart. */
 export interface QuoteChip extends Quote { key: number }
 
-const sameQuote = (a: Quote, b: Quote) => a.messageId === b.messageId && a.kind === b.kind && a.text === b.text;
+/** A comment on one quote can be this long. (The whole message has its own limit of 20 KB.) */
+export const MAX_COMMENT_CHARS = 4000;
+
+/** The same words of the same message, quoted the same way. A comment makes no difference. */
+export const sameQuote = (a: Quote, b: Quote): boolean => a.messageId === b.messageId && a.kind === b.kind && a.text === b.text;
+
+/** A comment as it is kept and sent: no empty lines around it, no white space at its end. Empty when there is nothing to say. */
+export const tidyComment = (comment: string | undefined): string => (comment ?? '').replace(/\r\n?/g, '\n').replace(/^(?:[ \t]*\n)+/, '').trimEnd();
+
+/** A quote with this comment, or without one when the comment is empty. */
+export function withComment<Q extends Quote>(quote: Q, comment: string | undefined): Q {
+  const tidy = tidyComment(comment);
+  const { comment: _old, ...rest } = quote;
+  return (tidy === '' ? rest : { ...rest, comment: tidy }) as Q;
+}
 
 /**
  * The list of quotes after one more was asked for. The same quote twice is kept once, and beyond
@@ -153,13 +178,21 @@ export const quoteNotice = (refused: 'duplicate' | 'full' | null): string => {
 /** One quote as Markdown. */
 export const quoteMarkdown = (q: Quote): string => (q.kind === 'message' ? quoteMessage(q.author, q.messageId, q.text) : quoteSelection(q.author, q.messageId, q.text));
 
+/** One quote as it is sent: the quote, and below it, after an empty line, what the writer says about it. */
+export function quoteBlock(q: Quote): string {
+  const comment = tidyComment(q.comment);
+  return comment === '' ? quoteMarkdown(q) : `${quoteMarkdown(q)}\n\n${comment}`;
+}
+
 /**
- * The text that is sent: every quote in order, each followed by an empty line, then what was
- * typed. With no quotes it is exactly what was typed, so a plain message is untouched.
+ * The text that is sent: every quote in the order it was added, each followed by its comment
+ * (when it has one) and an empty line, then what was typed in the message box. With no quotes it
+ * is exactly what was typed, so a plain message is untouched. A message may be quotes and
+ * comments only.
  */
 export function composeMessage(quotes: Quote[], typed: string): string {
   if (!quotes.length) return typed;
-  const quoted = quotes.map(quoteMarkdown).join('\n\n');
+  const quoted = quotes.map(quoteBlock).join('\n\n');
   return typed.trim() === '' ? quoted : `${quoted}\n\n${typed}`;
 }
 
@@ -194,6 +227,22 @@ export function typedIntent(typed: string, names: readonly string[]): { to: stri
 }
 
 /**
+ * What a message with quotes asks for, which the page then asks of the server explicitly (the
+ * server reads only the very start of the text, and there a quote stands).
+ *
+ *   to        Only "@name" at the start of the message box counts. A quote never addresses
+ *             anyone, and neither does a comment on a quote, whatever it starts with.
+ *   decision  The message is a decision when the first thing its writer says in it starts with
+ *             DECISION: (after an optional "@name"). That first thing is the comment under the
+ *             first quote, or, when the quotes before it have no comment, the message box. This
+ *             is exactly what the Decision badge reads from the sent message (isDecision), so the
+ *             pin and the badge agree. A DECISION: in a later comment or further down is text.
+ */
+export function composedIntent(quotes: Quote[], typed: string, names: readonly string[]): { to: string | null; decision: boolean } {
+  return { to: typedIntent(typed, names).to, decision: isDecision(composeMessage(quotes, typed), names) };
+}
+
+/**
  * A few words of a quote for its chip: white space folded, cut with an ellipsis. A whole message
  * is kept as its Markdown source; for the chip, the backslashes of its escapes are left out, so
  * the few words read the way the message did.
@@ -213,30 +262,163 @@ export function parseQuotes(value: unknown, max: number = MAX_QUOTES): Quote[] {
   const quotes: Quote[] = [];
   for (const item of value as Partial<Quote>[]) {
     if (!item || typeof item !== 'object') continue;
-    const { author, messageId, kind, text } = item;
+    const { author, messageId, kind, text, comment } = item;
     if (typeof author !== 'string' || author.trim() === '' || author.length > 80) continue;
     if (typeof messageId !== 'number' || !Number.isSafeInteger(messageId) || messageId < 1) continue;
     if (kind !== 'selection' && kind !== 'message') continue;
     if (typeof text !== 'string' || text.trim() === '') continue;
-    const quote: Quote = { author, messageId, kind, text };
+    // A comment that is not text, or far too long, is dropped; the quote itself is kept.
+    const quote: Quote = withComment({ author, messageId, kind, text }, typeof comment === 'string' && comment.length <= MAX_COMMENT_CHARS ? comment : undefined);
     if (!quotes.some((q) => sameQuote(q, quote)) && quotes.length < max) quotes.push(quote);
   }
   return quotes;
 }
 
-/** The quotes above the message box, as chips. */
-export function QuoteChips({ quotes, onRemove }: { quotes: QuoteChip[]; onRemove: (key: number) => void }) {
+const cut = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** What a chip says when the pointer rests on it: the quoted text, and below it the writer's comment. */
+export function chipTooltip(q: Quote): string {
+  const comment = tidyComment(q.comment);
+  return comment === '' ? cut(q.text, 1200) : `${cut(q.text, 800)}\n\nYour comment: ${cut(comment, 400)}`;
+}
+
+/**
+ * The quotes above the message box, as chips. A chip shows who, which message and the first
+ * words. One that carries a comment says so with a quiet "with reply". A click on a chip (or
+ * Enter on it) opens its comment for writing or changing.
+ */
+export function QuoteChips({ quotes, onRemove, onEdit }: { quotes: QuoteChip[]; onRemove: (key: number) => void; onEdit?: (key: number) => void }) {
   return (
     <>
-      {quotes.map((q) => (
-        <Chip
-          key={q.key} visual="↳" title={q.text.length > 1200 ? `${q.text.slice(0, 1200)}…` : q.text}
-          onRemove={() => onRemove(q.key)} removeLabel={`Remove the quote from ${q.author}, #${q.messageId}`}
-        >
-          <span className="font-bold">{q.author}</span>, #{q.messageId} <span className="text-muted">“{quoteExcerpt(q.text, 60, q.kind)}”</span>
-        </Chip>
-      ))}
+      {quotes.map((q) => {
+        const commented = tidyComment(q.comment) !== '';
+        const from = `the quote from ${q.author}, #${q.messageId}`;
+        return (
+          <Chip
+            key={q.key} visual="↳" title={chipTooltip(q)}
+            onRemove={() => onRemove(q.key)} removeLabel={`Remove ${from}`}
+            onOpen={onEdit ? () => onEdit(q.key) : undefined} openLabel={commented ? `Edit your comment on ${from}` : `Add a comment to ${from}`}
+          >
+            <span className="font-bold">{q.author}</span>, #{q.messageId} <span className="text-muted">“{quoteExcerpt(q.text, commented ? 40 : 60, q.kind)}”</span>
+            {commented && <span className="text-muted"> · with reply</span>}
+          </Chip>
+        );
+      })}
     </>
+  );
+}
+
+// --- a comment on a quote ---------------------------------------------------------------------
+
+const BOX_WIDTH = 352;
+const BOX_HEIGHT = 132;
+
+/**
+ * Where the comment box goes when it opens at a selection or at a Quote button: at that spot,
+ * moved as far as needed to lie inside the window.
+ */
+export function placeCommentBox(at: { top: number; left: number }, viewport: { width: number; height: number }): { top: number; left: number; width: number } {
+  const width = Math.min(BOX_WIDTH, Math.max(0, viewport.width - 16));
+  const left = Math.max(8, Math.min(at.left, viewport.width - width - 8));
+  const top = Math.max(8, Math.min(at.top, viewport.height - BOX_HEIGHT - 8));
+  return { top: Math.round(top), left: Math.round(left), width };
+}
+
+/** What a key in the comment line does. Enter adds the quote; with Shift it makes a new line. */
+export function commentKey(key: string, shift: boolean, composing: boolean): 'submit' | 'cancel' | null {
+  if (key === 'Escape') return 'cancel';
+  return key === 'Enter' && !shift && !composing ? 'submit' : null;
+}
+
+/**
+ * The small box in which a quote gets its comment: the quoted words on top, and one line below
+ * for what the writer wants to say about them. Enter (or the button) adds the quote, with the
+ * comment if there is one; Escape cancels. The line may stay empty: then the quote is added alone.
+ *
+ *   at       Opened at a selection or a Quote button: the box floats there, and a click anywhere
+ *            else cancels it. Without `at` the box stands in the page (above the message box,
+ *            to change the comment of a chip) and stays until it is saved or cancelled.
+ *   editing  The quote is already a chip: the button says "Save" and the dialog is named for that.
+ */
+export function QuoteCommentBox({ quote, at, editing = false, onSubmit, onCancel }: {
+  quote: Quote;
+  at?: { top: number; left: number } | null;
+  editing?: boolean;
+  onSubmit: (comment: string) => void;
+  /** `how` says what cancelled it: the Escape key, or a press somewhere outside the box. */
+  onCancel: (how: 'escape' | 'outside') => void;
+}) {
+  const [comment, setComment] = useState(quote.comment ?? '');
+  const root = useRef<HTMLDivElement>(null);
+  const line = useRef<HTMLTextAreaElement>(null);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  const [place, setPlace] = useState<{ top: number; left: number; width: number } | null>(null);
+  const floating = Boolean(at);
+
+  // The cursor goes into the line at once, behind what is already there.
+  useEffect(() => {
+    const el = line.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  // The line grows with its text, up to a few lines.
+  useEffect(() => {
+    const el = line.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight + 2, 132)}px`;
+  }, [comment]);
+  useEffect(() => {
+    if (!at) { setPlace(null); return undefined; }
+    const fit = () => setPlace(placeCommentBox(at, { width: window.innerWidth, height: window.visualViewport?.height ?? window.innerHeight }));
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [at]);
+  // A floating box is cancelled by a press anywhere outside it.
+  useEffect(() => {
+    if (!floating) return undefined;
+    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node | null)) cancelRef.current('outside'); };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [floating]);
+
+  const name = editing ? `Your comment on the quote from ${quote.author}, #${quote.messageId}` : `Quote ${quote.author}, #${quote.messageId}, with a comment`;
+  return (
+    <div
+      ref={root} role="dialog" aria-label={name} data-quote-comment
+      style={floating ? { top: place?.top ?? at?.top, left: place?.left ?? at?.left, width: place?.width } : undefined}
+      className={floating
+        ? 'fixed z-40 rounded-lg border border-line bg-panel p-2 text-[13px] shadow-xl shadow-black/50'
+        : 'mb-2 rounded-lg border border-line bg-panel p-2 text-[13px]'}
+    >
+      <div className="mb-1.5 truncate text-muted" title={cut(quote.text, 1200)}>
+        <span aria-hidden="true">↳ </span><span className="font-bold text-fg">{quote.author}</span>, #{quote.messageId} “{quoteExcerpt(quote.text, 70, quote.kind)}”
+      </div>
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={line} rows={1} value={comment} maxLength={MAX_COMMENT_CHARS}
+          placeholder="Add a comment (optional)" aria-label="Your comment on this quote"
+          onChange={(e) => setComment(e.target.value)}
+          onKeyDown={(e) => {
+            const does = commentKey(e.key, e.shiftKey, e.nativeEvent.isComposing);
+            if (!does) return;
+            e.preventDefault();
+            e.stopPropagation(); // Escape here closes this box and nothing else
+            if (does === 'submit') onSubmit(comment); else onCancel('escape');
+          }}
+          className="min-w-0 flex-1 resize-none rounded-md border border-line bg-bg px-2 py-1.5 text-sm"
+        />
+        <button
+          type="button" onClick={() => onSubmit(comment)}
+          title={editing ? 'Save your comment (Enter)' : 'Add the quote to your message (Enter)'}
+          className="flex-none cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-2.5 py-1.5 text-[13px] font-semibold hover:bg-[#343a47]"
+        >{editing ? 'Save' : 'Add'}</button>
+      </div>
+      <div className="mt-1 text-[11px] text-muted">Enter {editing ? 'saves' : 'adds the quote'} · Shift+Enter for a new line · Esc cancels</div>
+    </div>
   );
 }
 
@@ -410,9 +592,18 @@ export function QuoteSelectionButton({ at, onQuote }: { at: { top: number; left:
 }
 
 /** The Quote action in a message's header line: reachable with Tab, and quotes the whole message when nothing in it is selected. */
-export function QuoteMessageButton({ messageId, onQuote, className }: { messageId: number; onQuote: () => void; className: string }) {
+export function QuoteMessageButton({ messageId, onQuote, className }: {
+  messageId: number;
+  /** `at` is the spot right under the button, in window coordinates: where the comment box opens. */
+  onQuote: (at: { top: number; left: number }) => void;
+  className: string;
+}) {
   const label = `Quote message #${messageId}`;
   return (
-    <button type="button" aria-label={label} title={`${label} (or the part of it you selected)`} onMouseDown={(e) => e.preventDefault()} onClick={onQuote} className={className}>Quote</button>
+    <button
+      type="button" aria-label={label} title={`${label} (or the part of it you selected)`} className={className}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); onQuote({ top: r.bottom + 6, left: r.right - BOX_WIDTH }); }}
+    >Quote</button>
   );
 }

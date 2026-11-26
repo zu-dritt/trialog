@@ -118,7 +118,9 @@ export function writeDraft(storage: DraftStorage, participant: string, draft: St
   try {
     const key = draftKey(participant);
     const text = draft.text.length <= MAX_DRAFT_CHARS ? draft.text : '';
-    const quotes = draft.quotes.map(({ author, messageId, kind, text: quoted }) => ({ author, messageId, kind, text: quoted }));
+    // A quote is kept with the comment the writer put on it.
+    const quotes = draft.quotes.map(({ author, messageId, kind, text: quoted, comment }) => (
+      comment ? { author, messageId, kind, text: quoted, comment } : { author, messageId, kind, text: quoted }));
     const value = quotes.length ? JSON.stringify({ v: 1, text, quotes }) : text;
     if (!hasContent({ text, quotes }) || value.length > MAX_STORED_CHARS) storage.removeItem(key);
     else storage.setItem(key, value);
