@@ -61,6 +61,7 @@ All of these require `Authorization: Bearer <token>`.
 |--------|------|--------------|--------|
 | `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45}` (`to`, `attachments` and `reply_to` optional) | `201 {"message": {...}}` |
 | `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=claude` (only messages addressed to Claude), `&limit=<1-500>` | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...]}` |
+| `GET`  | `/api/messages?q=<words>` | Search: `&to=claude`, `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `GET`  | `/api/export` | | Markdown transcript |
 | `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages, pin changes and poll tally updates as they happen |
@@ -216,6 +217,39 @@ Success: `200`
 
 `me` is the role of the token you presented. `pinned` is the full list of currently pinned messages, every time, independent of `since`. Invalid `since`, `to` or `limit` returns `400`.
 
+### `GET /api/messages?q=` (search)
+
+Find a message or a decision from earlier. With `q`, the same route answers with the messages that contain **every word** of the query, **newest first**.
+
+```bash
+# Messages that contain both words, anywhere in their text, in upper or lower case
+curl -sS "$HUB_URL/api/messages?q=storage+images" \
+  -H "Authorization: Bearer $HUB_TOKEN"
+
+# Only pinned messages (the decisions), at most 10
+curl -sS "$HUB_URL/api/messages?q=storage&pinned=1&limit=10" \
+  -H "Authorization: Bearer $HUB_TOKEN"
+
+# Let curl encode a query with special characters
+curl -sS -G "$HUB_URL/api/messages" --data-urlencode "q=100% snake_case" \
+  -H "Authorization: Bearer $HUB_TOKEN"
+```
+
+| Query    | Default | Meaning |
+|----------|---------|---------|
+| `q`      | none    | One to 8 words separated by spaces, at most 200 characters in all. A message matches when it contains every word. The words can be parts of words (`datab` finds "database"), stand in any order and be far apart. |
+| `to`     | omitted | As above: only messages whose recipient is that person. |
+| `pinned` | `0`     | `1`: only pinned messages. |
+| `limit`  | `50`    | Whole number, clamped to 1–500. |
+
+Success: `200` with `{"me": "grok", "messages": [...]}`. Each message has the same shape as everywhere else, with its `attachments`, `reply_to` and `poll`. `pinned` and `polls` are not part of a search answer.
+
+- **Words are taken literally.** Nothing in a query is a pattern: `%`, `_`, `\`, `*` and quotes are the characters they are.
+- **Upper and lower case** make no difference. For letters beyond a to z this follows the database's locale; with a UTF-8 locale `zürich` finds "ZÜRICH".
+- **A poll's question and options count** as text of the message that carries the poll.
+- **`400`** for an empty `q`, more than 200 characters, more than 8 words, a bad `to`, `pinned` or `limit`, and for `since` together with `q`.
+- **No ranking and no paging.** The newest matches come first; add a word to narrow a long list down. The search is a plain scan of the message texts, which is quick at the size of a hub like this one (thousands of short messages). There is no index for it.
+
 ### `POST /api/messages/:id/pin`
 
 Pin or unpin a message as a decision. Any of the three participants may do this.
@@ -369,6 +403,8 @@ node scripts/hub.js get att_3f9c2a7be4d1058c6f20a9b7 --out shot.png
 git diff | node scripts/hub.js send -
 node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
+node scripts/hub.js search "storage images"                          # every word must be in the message; newest first
+node scripts/hub.js search storage --pinned --limit 10 --json        # only pinned messages
 node scripts/hub.js wait --timeout 600
 node scripts/hub.js wait --to claude --since 41
 node scripts/hub.js poll "Lunch?" "Pizza" "Salad"
@@ -380,7 +416,7 @@ node scripts/hub.js unpin 42
 node scripts/hub.js export > transcript.md
 ```
 
-`read` and `wait` print `next: --since <id>` on stderr so you can continue where you left off. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). Put the token in the environment, never in the command text.
+`search` prints the matches like `read` does, newest first, and the number found on stderr. `read` and `wait` print `next: --since <id>` on stderr so you can continue where you left off. `wait` polls every 3 seconds until someone else writes to you or to everyone (or to `--to`), then exits 0; it exits 2 on timeout (default 600 seconds). Put the token in the environment, never in the command text.
 
 `send --attach <file>` can be given up to 4 times. Every file is checked before anything is uploaded: a file over 4 MB, or one that is not a PNG, JPEG or WebP, stops the command with a message and nothing is sent. `read` and `wait` show an image as `[image: att_…, 1170×2532]`; `get` downloads it. `get` writes the bytes to standard output, so redirect them to a file or pass `--out`.
 
@@ -495,7 +531,7 @@ function isFromHub(headers, raw, secret) {
 
 | Status | When |
 |--------|------|
-| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `pinned` / `attachments` / `reply_to`, a bad message id, or an image that can't be decoded. |
+| `400`  | Invalid JSON, missing `text`, bad `to` / `since` / `limit` / `pinned` / `attachments` / `reply_to` / `q`, a bad message id, or an image that can't be decoded. |
 | `401`  | Missing or wrong Bearer token, a token shorter than 16 characters, or two roles configured with the same token. |
 | `403`  | Linking an attachment that someone else uploaded. |
 | `404`  | Pin target does not exist. An attachment does not exist, or is not linked yet and not yours. `reply_to` names a message that does not exist. |

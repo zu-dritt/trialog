@@ -1,5 +1,6 @@
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseLimit, parseMessageInput, parseRecipient, parseSince } from '../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
+import { SEARCH_LIMIT, parseQuery } from '../../../lib/search';
 import { waitUntil } from '@vercel/functions';
 import { AttachmentLinkError, ReplyTargetError, getStore } from '../../../lib/store';
 import { getWakeup } from '../../../lib/webhook';
@@ -9,9 +10,18 @@ export const runtime = 'nodejs';
 // Room for the wake-up webhook job after the response: 2 s debounce plus three attempts of up to 5 s.
 export const maxDuration = 60;
 
+/** `pinned=1` narrows a search to pinned messages. Left out or 0: all messages. */
+function parsePinnedOnly(value: string | null): boolean | undefined {
+  if (value === null || value === '' || value === '0' || value === 'false') return false;
+  return value === '1' || value === 'true' ? true : undefined;
+}
+
 // GET /api/messages?since=<id>&to=<name>&limit=<n>
 // Without `since`: the latest messages. With `since`: messages with a higher id, oldest first.
 // Always includes the pinned decisions and who you are (derived from your token).
+//
+// GET /api/messages?q=<words>&to=<name>&pinned=1&limit=<n>
+// Search: the messages that contain every word, newest first, as {me, messages}.
 export const GET = safe(async (request: Request) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;
@@ -20,9 +30,18 @@ export const GET = safe(async (request: Request) => {
   if (since === undefined) return error(400, '"since" must be a message id (a whole number).');
   const to = parseRecipient(params.get('to'));
   if (to === undefined) return error(400, '"to" must be grok, claude or david.');
-  const limit = parseLimit(params.get('limit'));
+  const q = params.get('q');
+  const limit = parseLimit(params.get('limit') || (q === null ? null : String(SEARCH_LIMIT)));
   if (limit === undefined) return error(400, '"limit" must be a whole number.');
   const store = await getStore();
+  if (q !== null) {
+    const query = parseQuery(q);
+    if (!query.ok) return error(400, query.error);
+    if (since !== null) return error(400, '"since" cannot be combined with "q": a search returns the newest matches first.');
+    const pinned = parsePinnedOnly(params.get('pinned'));
+    if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
+    return json({ me, messages: await store.search({ words: query.words, to, pinned, limit }) });
+  }
   const [messages, pinned, polls] = await Promise.all([store.list({ since, to, limit }), store.pinned(), store.listPolls()]);
   return json({ me, messages, pinned, polls });
 });

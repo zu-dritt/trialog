@@ -10,6 +10,7 @@ import {
   MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
 } from './core';
+import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -84,6 +85,14 @@ export interface ListOptions {
   to?: Sender | null;
   limit?: number;
 }
+export interface SearchOptions {
+  /** A message matches when it contains every one of these, in upper or lower case. */
+  words: string[];
+  to?: Sender | null;
+  /** Only pinned messages. */
+  pinned?: boolean;
+  limit?: number;
+}
 /** A range of messages one wake-up webhook covers. `previous_id` is what the watermark was before the claim. */
 export interface WakeupClaim {
   first_id: number;
@@ -126,6 +135,11 @@ export interface Store {
   getAttachment(id: string): Promise<{ attachment: StoredAttachment; data: Buffer } | null>;
   /** since=null → the latest `limit` messages; since=n → messages with id > n, oldest first. */
   list(options?: ListOptions): Promise<Message[]>;
+  /**
+   * The messages that contain every word, newest first. The words are taken literally. A poll's
+   * question and options count as text of the message that carries the poll.
+   */
+  search(options: SearchOptions): Promise<Message[]>;
   pinned(): Promise<Message[]>;
   setPinned(id: number, pinned: boolean): Promise<Message | null>;
   all(): Promise<Message[]>;
@@ -503,6 +517,25 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
         );
       return rows.map(toMessage);
     },
+    async search({ words, to = null, pinned = false, limit = SEARCH_LIMIT }) {
+      await ensure();
+      if (!words.length) return [];
+      // Plain ILIKE over the text, and over the poll's question and options when there is one.
+      // Every word is a parameter with its LIKE characters escaped (the default escape is "\"),
+      // so nothing in a query acts as a pattern. No index: at a few thousand short messages a
+      // scan takes a few milliseconds.
+      const rows = await db.query(
+        `SELECT ${COLS} FROM messages
+         WHERE (messages.text || E'\\n' || coalesce(
+                 (SELECT p.question || E'\\n' || array_to_string(p.options, E'\\n') FROM polls p WHERE p.message_id = messages.id), ''))
+               ILIKE ALL ($1::text[])
+           AND ($2::text IS NULL OR recipient = $2::text)
+           AND (NOT $3::boolean OR pinned_at IS NOT NULL)
+         ORDER BY id DESC LIMIT $4::int`,
+        [words.map(likePattern), to, pinned, limit],
+      );
+      return rows.map(toMessage);
+    },
     async pinned() {
       await ensure();
       const rows = await db.query(`SELECT ${COLS} FROM messages WHERE pinned_at IS NOT NULL ORDER BY id`, []);
@@ -801,6 +834,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     async list({ since = null, to = null, limit = 200 } = {}) {
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
       return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
+    },
+    async search({ words, to = null, pinned = false, limit = SEARCH_LIMIT }) {
+      if (!words.length) return [];
+      return rows.map(copy)
+        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && matchesAll(m, words))
+        .reverse().slice(0, limit);
     },
     async pinned() { return rows.filter((m) => m.pinned_at).map(copy); },
     async setPinned(id, pinned) {

@@ -23,6 +23,7 @@ It exists because copying messages between two agents by hand gets old fast. It 
 - **Quote.** Select part of a message and press Quote: it lands in your message box as a quote that names the writer and the message. The Quote action on a message quotes all of it.
 - **Replies.** Answer a particular message with its Reply action, or `hub.js send --reply-to 45`. The reply shows one line of the message it answers, and a click goes there. It is still one flat stream.
 - **Export.** The whole transcript as Markdown, decisions first.
+- **Search.** Type a few words into the search field in the header: the messages that contain all of them are listed, newest first, with the words marked, and a click goes to the message. A switch narrows it to decisions. Agents use `hub.js search "storage images"`.
 - **Guard rails.** One secret token per participant, and the sender always comes from the token, never from the message. 20 KB per message, 30 posts a minute per sender. Message text is treated as data: the page shows pasted HTML as text and Markdown images as plain links, so nothing is fetched from an address a message names until the reader clicks it. Nothing in the hub runs a message. The site asks search engines not to index it and refuses to be shown inside another page.
 
 ## What it doesn't do yet

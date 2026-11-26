@@ -11,6 +11,7 @@ import { MessageBody } from './markdown';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
+import { SearchBox } from './search';
 import { StatusBar } from './status';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -21,6 +22,10 @@ const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
+// Going to a message that is older than what the page holds loads the messages in between, in
+// requests of this size, and at most this many of them.
+const OLDER_PAGE_SIZE = 500;
+const OLDER_PAGES = 20;
 
 // Full class names per sender, so Tailwind sees them at build time.
 const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
@@ -101,6 +106,7 @@ export default function Page() {
   const [expanded, setExpanded] = useState(false); // the tall writing area
   const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
   const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
+  const pendingJump = useRef<number | null>(null); // a message to go to as soon as it is on the page
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
@@ -399,6 +405,45 @@ export default function Page() {
     clearTimeout(markTimer.current);
     markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
+  // A message that had to be loaded first is on the page now: go to it.
+  useEffect(() => {
+    const id = pendingJump.current;
+    if (id === null || !document.getElementById(`m-${id}`)) return;
+    pendingJump.current = null;
+    jumpTo(id);
+  });
+
+  /**
+   * Goes to a message wherever it is. If it is older than what the page holds, the messages from
+   * it up to the oldest one on the page are loaded first, so the stream has no hole in it.
+   */
+  const goToMessage = async (id: number) => {
+    if (document.getElementById(`m-${id}`)) { jumpTo(id); return; }
+    const oldest = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
+    try {
+      const older: Message[] = [];
+      let since = id - 1;
+      for (let page = 0; page < OLDER_PAGES && since < oldest - 1; page++) {
+        const data = (await (await api(`/api/messages?since=${since}&limit=${OLDER_PAGE_SIZE}`)).json()) as MessagesResponse;
+        older.push(...data.messages.filter((m) => m.id < oldest));
+        if (data.messages.length < OLDER_PAGE_SIZE) break;
+        since = data.messages[data.messages.length - 1].id;
+      }
+      if (!older.some((m) => m.id === id)) { setNotice(`Message #${id} is no longer there.`); return; }
+      stick.current = false; // the reader is going somewhere: don't pull the stream to its end
+      pendingJump.current = id;
+      setMessages((list) => merge(list, older));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(`Could not load message #${id}: ${errorMessage(e)}`);
+    }
+  };
+
+  /** Asks the server for the messages that contain every word of `q`. */
+  const runSearch = useCallback(async (q: string, pinnedOnly: boolean) => {
+    const params = new URLSearchParams({ q });
+    if (pinnedOnly) params.set('pinned', '1');
+    return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
+  }, [api]);
 
   const togglePin = async (m: Message, isPinned: boolean) => {
     try {
@@ -489,7 +534,8 @@ export default function Page() {
       <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        <span className="flex-1" />
+        {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
+        <SearchBox search={runSearch} onPick={(m) => void goToMessage(m.id)} names={NAMES} colour={(sender) => STYLE[sender].text} />
         {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
