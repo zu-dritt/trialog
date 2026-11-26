@@ -65,15 +65,30 @@ function saveRecent(recent: string[]): void {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)); } catch { /* storage is full or off: the picker works without it */ }
 }
 
-/** The panel is never taller than this, and never squeezed below PANEL_MIN_HEIGHT. */
-const PANEL_MAX_HEIGHT = 352;
-const PANEL_MIN_HEIGHT = 160;
+/** The height of the panel, when the window leaves that much room above the message box. */
+export const PANEL_HEIGHT = 352;
+/** However little room there is, the panel is never squeezed below this. */
+export const PANEL_MIN_HEIGHT = 160;
+
+/**
+ * How tall the panel is. It is one height for as long as the panel is open, whatever it shows:
+ * every emoji, a few matches, none, with or without the "Recently used" row. So the search field
+ * stays where it is on the screen while someone types in it, and only the list below it changes.
+ * (The panel is anchored by its bottom edge. If it took the height of what it shows, the field
+ * at its top would move with every key.)
+ *   room  the room above the message box in pixels, or undefined while it is not known
+ */
+export function panelHeight(room: number | undefined): number | string {
+  return room === undefined ? `min(${PANEL_HEIGHT}px, 50vh)` : Math.min(PANEL_HEIGHT, Math.max(PANEL_MIN_HEIGHT, room));
+}
 
 interface PanelProps {
   id?: string;
   panelRef?: RefObject<HTMLDivElement | null>;
-  /** The room above the composer, in pixels. The panel is kept inside it when it is known. */
+  /** The room above the composer, in pixels. The panel is kept inside it when it is known (see panelHeight). */
   maxHeight?: number;
+  /** What the search field holds when the panel opens. Empty unless something asks for a search right away. */
+  initialQuery?: string;
   /** Emojis to show in the "Recently used" row. */
   recent: string[];
   /** `viaPointer` is true for a mouse or touch pick, false for one made with the keyboard. */
@@ -84,8 +99,8 @@ interface PanelProps {
  * The panel itself. The emojis are real buttons, named for screen readers. The whole grid is one
  * stop for the Tab key; inside it the arrow keys, Home and End move, and Enter or Space picks.
  */
-export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelProps) {
-  const [query, setQuery] = useState('');
+export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick, initialQuery = '' }: PanelProps) {
+  const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(''); // the button the Tab key lands on
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -98,6 +113,8 @@ export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelPro
   const keys = sections.flatMap((s) => s.emojis.map((e) => `${s.id}:${e.char}`));
   const tabStop = keys.includes(active) ? active : keys[0];
   const count = searching ? sections[0].emojis.length : 0;
+  // A new search starts at the top of the list, where its first matches are.
+  useLayoutEffect(() => { if (gridRef.current) gridRef.current.scrollTop = 0; }, [query]);
 
   /** Arrow keys follow what is on screen: up and down go to the nearest button in the next row. */
   const onGridKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -126,11 +143,12 @@ export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelPro
   return (
     <div
       id={id} ref={panelRef} role="dialog" aria-label="Emoji"
-      // It sits above the composer, which can be tall. So its height follows the room that is left.
-      style={{ maxHeight: maxHeight === undefined ? `min(${PANEL_MAX_HEIGHT}px, 50vh)` : Math.min(PANEL_MAX_HEIGHT, Math.max(PANEL_MIN_HEIGHT, maxHeight)) }}
+      // A height, not a largest height: the panel must not shrink to fit a short list (see panelHeight).
+      style={{ height: panelHeight(maxHeight) }}
       className="absolute bottom-full left-2 z-40 mb-1 flex w-[min(22rem,calc(100%-1rem))] flex-col rounded-lg border border-line bg-panel shadow-xl shadow-black/50"
     >
-      <div className="border-b border-line p-2">
+      {/* The search field: outside the scrolling area, so it never moves. */}
+      <div className="flex-none border-b border-line p-2">
         <input
           type="search" value={query} placeholder="Search emoji" aria-label="Search emoji" autoComplete="off"
           onChange={(e) => setQuery(e.target.value)}
@@ -145,8 +163,10 @@ export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelPro
         />
         <div className="sr-only" aria-live="polite">{searching ? `${count} emoji found` : ''}</div>
       </div>
-      <div ref={gridRef} onKeyDown={onGridKey} className="min-h-0 flex-1 overflow-y-auto p-2">
-        {searching && count === 0 && <p className="px-1 py-3 text-sm text-muted">No emoji for “{query.trim()}”.</p>}
+      {/* The list takes all the room that is left and scrolls inside it. It keeps a place for its
+          scroll bar, so the columns don't shift when a short list needs none. */}
+      <div ref={gridRef} onKeyDown={onGridKey} className="min-h-0 flex-1 overflow-y-auto p-2 [scrollbar-gutter:stable]">
+        {searching && count === 0 && <p className="px-1 py-3 text-sm text-muted">No emoji found for “{query.trim()}”.</p>}
         {sections.map((s) => (s.emojis.length === 0 ? null : (
           <div key={s.id} role="group" aria-label={s.label} className="mb-2 last:mb-0">
             <div className="px-1 pb-1 text-[11px] font-bold uppercase tracking-[.06em] text-muted" aria-hidden="true">{s.label}</div>
