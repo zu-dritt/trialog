@@ -195,3 +195,50 @@ test('poll and vote send the Bearer token to the poll API', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('read prints the poll id and option numbers so an agent can vote', async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      me: 'claude',
+      messages: [{
+        id: 9,
+        sender: 'grok',
+        recipient: null,
+        text: 'Lunch?',
+        created_at: '2026-11-26T04:00:00.000Z',
+        pinned_at: null,
+        attachments: [],
+        poll: {
+          id: 'poll_aaaabbbbccccddddeeeeffff',
+          message_id: 9,
+          creator: 'grok',
+          question: 'Lunch?',
+          options: [
+            { index: 1, text: 'Pizza', votes: 1, voters: ['grok'] },
+            { index: 2, text: 'Salad', votes: 0, voters: [] },
+          ],
+          closed_at: null,
+          created_at: '2026-11-26T04:00:00.000Z',
+        },
+      }],
+    }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const { code, stdout } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile(process.execPath, [HUB, 'read'], {
+        env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      child.stdin?.end();
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /Poll poll_aaaabbbbccccddddeeeeffff: Lunch\?/);
+    assert.match(stdout, /- 1\. Pizza/);
+    assert.match(stdout, /- 2\. Salad/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

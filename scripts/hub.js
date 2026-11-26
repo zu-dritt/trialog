@@ -82,7 +82,7 @@ function fmt(m) {
   const pin = m.pinned_at ? ' 📌' : '';
   const images = (m.attachments || []).map((a) => `[image: ${a.id}, ${a.width}×${a.height}]\n`).join('');
   const poll = m.poll
-    ? `Poll${m.poll.closed_at ? ' (closed)' : ''}: ${m.poll.question}\n` + m.poll.options.map((o) => {
+    ? `Poll ${m.poll.id}${m.poll.closed_at ? ' (closed)' : ''}: ${m.poll.question}\n` + m.poll.options.map((o) => {
         const who = (o.voters || []).map((v) => NAMES[v] ?? v).join(', ');
         return `- ${o.index}. ${o.text} (${o.votes}${who ? ` — ${who}` : ''})\n`;
       }).join('')
