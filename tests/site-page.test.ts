@@ -105,3 +105,25 @@ test('every site page links a favicon, and the file is there', () => {
   }
   assert.ok(count >= 3, 'the front page, the explainer and the redirect are all checked');
 });
+
+test('trialog.dev invites search engines and agents: robots.txt, a sitemap of every page, llms.txt', () => {
+  const robots = readFileSync(join(siteDir, 'robots.txt'), 'utf8');
+  assert.match(robots, /^User-agent: \*$/m);
+  assert.match(robots, /^Allow: \/$/m);
+  assert.doesNotMatch(robots, /^Disallow: \/\s*$/m);
+  assert.match(robots, /^Sitemap: https:\/\/trialog\.dev\/sitemap\.xml$/m);
+
+  const sitemap = readFileSync(join(siteDir, 'sitemap.xml'), 'utf8');
+  const listed = [...sitemap.matchAll(/<loc>https:\/\/trialog\.dev\/([^<]*)<\/loc>/g)].map((m) => m[1] || 'index.html').sort();
+  const pages = readdirSync(siteDir).filter((f) => f.endsWith('.html')).sort();
+  assert.deepEqual(listed, pages, 'every page is in the sitemap, and nothing else');
+
+  for (const page of pages) {
+    const text = readFileSync(join(siteDir, page), 'utf8');
+    assert.doesNotMatch(text, /<meta name="robots"[^>]*noindex/i, `${page} is not hidden from search`);
+  }
+
+  const llms = readFileSync(join(siteDir, 'llms.txt'), 'utf8');
+  assert.match(llms, /^# Trialog\n\n> /);
+  for (const page of pages) assert.ok(llms.includes(`https://trialog.dev/${page === 'index.html' ? '' : page})`), `llms.txt links ${page}`);
+});
