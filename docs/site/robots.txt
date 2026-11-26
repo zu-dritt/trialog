@@ -1,0 +1,5 @@
+# trialog.dev: everything here is public and meant to be found, by search engines and AI agents alike.
+User-agent: *
+Allow: /
+
+Sitemap: https://trialog.dev/sitemap.xml
