@@ -13,9 +13,12 @@
 // this browser. Browsers allow sound only after a click on the page, and that click is the button.
 // At most one sound plays per second; what comes in between is skipped. While the tab is hidden,
 // only a message addressed to you and an agreed decision are heard.
+//
+// The open rooms are heard in full. From a room that is not open, only a message addressed to you
+// rings: the page reads what is new there when the list of rooms says a room has grown.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Sender } from '../lib/core';
-import { decisionIsAgreed, type Participant } from '../lib/shared';
+import { decisionIsAgreed, type Participant, type Room } from '../lib/shared';
 
 // --- the notes ---
 
@@ -105,6 +108,42 @@ export function soundCues(before: SoundSnapshot, messages: readonly Message[], m
     }
     if (!isNew && me && m.sender === me && reactionsByOthers(m, me) > (before.reactionsOnMine.get(m.id) ?? Infinity)) cues.push({ kind: 'reaction' });
     if (m.decision && !before.agreed.has(m.decision.id) && isAgreed(m, names)) cues.push({ kind: 'agreed', freqs: names.map((n) => notes.get(n)).filter((f): f is number => Boolean(f)) });
+  }
+  return cues;
+}
+
+// --- rooms that are not open ---
+
+/**
+ * The rooms that are not open and have grown since `known`, each with the id to read after. A room
+ * that `known` doesn't have yet, or knows as empty, is only noted: what it holds is history. (The
+ * page shows an empty Main until the server's list arrives, so a jump from 0 is the list arriving,
+ * not a new message. The price: the very first message of a room you don't have open stays quiet.)
+ */
+export function roomsWithNews(known: ReadonlyMap<string, number>, rooms: readonly Pick<Room, 'id' | 'last_id'>[], open: readonly string[]): { room: string; since: number }[] {
+  const news: { room: string; since: number }[] = [];
+  for (const r of rooms) {
+    const before = known.get(r.id);
+    if (before && r.last_id > before && !open.includes(r.id)) news.push({ room: r.id, since: before });
+  }
+  return news;
+}
+
+/** What `known` should say after `rooms`: each room's newest id, never going back. */
+export function knownAfter(known: ReadonlyMap<string, number> | null, rooms: readonly Pick<Room, 'id' | 'last_id'>[]): Map<string, number> {
+  const next = new Map<string, number>();
+  for (const r of rooms) next.set(r.id, Math.max(r.last_id, known?.get(r.id) ?? 0));
+  return next;
+}
+
+/** From a room that is not open: a note for each message that someone else addressed to you. */
+export function addressedCues(messages: readonly Message[], me: Sender | null, roster: readonly Participant[]): Cue[] {
+  if (!me) return [];
+  const notes = chordNotes(roster);
+  const cues: Cue[] = [];
+  for (const m of messages) {
+    const freq = m.recipient === me && m.sender !== me ? notes.get(m.sender) : undefined;
+    if (freq) cues.push({ kind: 'note', freq, addressed: true });
   }
   return cues;
 }
@@ -322,7 +361,38 @@ export function useSoundMode({ messages, me, participants, primed, newVersion }:
     player.current!.offer({ kind: 'sent', freq: (me && notes.get(me)) || ROOT_HZ });
   }, [me, notes]);
 
-  return { on, toggle, sent };
+  /** Messages from a room that is not open: only those addressed to you ring. */
+  const elsewhere = useCallback((list: readonly Message[]) => {
+    for (const cue of addressedCues(list, me, participants)) player.current!.offer(cue);
+  }, [me, participants]);
+
+  return { on, toggle, sent, elsewhere };
+}
+
+/**
+ * Listens beyond the open rooms. When a room that is not open grows, its new messages are read and
+ * handed to `heard`. Only while sound mode is on: otherwise nothing is fetched.
+ */
+export function useRoomsElsewhere({ on, rooms, open, me, api, heard }: {
+  on: boolean;
+  rooms: readonly Room[];
+  open: readonly string[];
+  me: Sender | null;
+  api: (path: string) => Promise<Response>;
+  heard: (messages: readonly Message[]) => void;
+}) {
+  const known = useRef<Map<string, number> | null>(null);
+  useEffect(() => {
+    if (!me) { known.current = null; return; }
+    const before = known.current;
+    known.current = knownAfter(before, rooms);
+    if (!before || !on) return;
+    for (const { room, since } of roomsWithNews(before, rooms, open)) {
+      void api(`/api/messages?${new URLSearchParams({ room, since: String(since), limit: '50' })}`)
+        .then((res) => (res.ok ? (res.json() as Promise<{ messages: Message[] }>) : null))
+        .then((data) => { if (data) heard(data.messages); }, () => { /* the next message tries again */ });
+    }
+  }, [on, rooms, open, me, api, heard]);
 }
 
 export const SOUND_ON_HINT = 'Sound mode is on: each voice has its own note. Click to switch it off.';
