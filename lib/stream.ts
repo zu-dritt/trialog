@@ -20,6 +20,8 @@ export interface StreamOptions {
   /** Last message id the client has. null: send the latest messages first, like GET /api/messages. */
   since: number | null;
   signal?: AbortSignal;
+  /** The id of the build this server runs, for the page to compare with its own. Left out of the event when not given. */
+  build?: string;
   intervalMs?: number;
   heartbeatMs?: number;
   maxMs?: number;
@@ -28,14 +30,14 @@ export interface StreamOptions {
 
 /**
  * Events, each with JSON data:
- *   hello     {"me": "david"}        once, first
+ *   hello     {"me": "david", "build": "…"}   once, first; "build" is the server's build id (lib/build.ts)
  *   messages  [Message, …]           new messages, oldest first
  *   pins      [Message, …]           the full list of pinned messages, at the start and on every change
  *   bye       {"reason": "…"}        the server is ending the stream; reconnect with ?since=<last id>
  *   error     {"message": "…"}       something failed; the stream ends
  */
 export function createEventStream(options: StreamOptions): ReadableStream<Uint8Array> {
-  const { store, me, since, signal } = options;
+  const { store, me, since, signal, build } = options;
   const intervalMs = options.intervalMs ?? INTERVAL_MS;
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const maxMs = options.maxMs ?? MAX_STREAM_MS;
@@ -79,7 +81,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       };
 
       try {
-        send('hello', { me });
+        send('hello', build === undefined ? { me } : { me, build });
         // Read the fingerprint before the lists: a change in between is then picked up by the first tick.
         const version = await store.version();
         pins = version.pins;

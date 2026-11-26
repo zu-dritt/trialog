@@ -4,8 +4,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Author, Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, SENDERS, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
+import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
@@ -16,6 +17,8 @@ import {
 } from './quote';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { StatusBar } from './status';
+import { NewVersionPill, useWaitingLong } from './version';
+import { BUILD_ID, isOtherBuild } from '../lib/build';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -82,6 +85,10 @@ export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
   const [status, setStatus] = useState('connecting…');
+  const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  // The server runs another build than this page was loaded with. The page says so and waits for a click.
+  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
+  const newVersionWaitsLong = useWaitingLong(newVersion);
   const [draft, setDraft] = useState('');
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
@@ -140,7 +147,7 @@ export default function Page() {
    * Adds images to the composer: from the clipboard, a drop or the file picker. Each one gets a
    * preview chip at once and is uploaded in the background (shrunk first when it is over 4 MB).
    */
-  const addImages = useCallback((files: File[]) => {
+  const addImages = useCallback((files: File[], pasted = false) => {
     const images = files.filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
     const accepted = images.filter((f) => ACCEPT.split(',').includes(f.type));
@@ -158,8 +165,7 @@ export default function Page() {
     added.forEach((d, i) => {
       void (async () => {
         try {
-          const blob = await prepareForUpload(taken[i]);
-          const res = await api('/api/attachments', { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+          const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
           update(d.key, { state: 'ready', attachment: (await res.json()) as Attachment });
         } catch (e) {
           update(d.key, { state: 'failed', error: errorMessage(e) === 'unauthorized' ? 'not signed in' : errorMessage(e) });
@@ -230,7 +236,13 @@ export default function Page() {
       let goodbye = false;
       const parser = createSseParser((event: SseEvent) => {
         if (stopped) return;
-        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
+        if (event.event === 'hello') {
+          // Every (re)connect of the stream says who we are and which build the server runs.
+          const hello = JSON.parse(event.data) as { me: Sender; build?: unknown };
+          setMe(hello.me);
+          if (typeof hello.build === 'string') setServerBuild(hello.build);
+          setStatus('live');
+        }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
         else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
         else if (event.event === 'bye') goodbye = true;
@@ -519,13 +531,20 @@ export default function Page() {
   const pinnedIds = new Set(pinned.map((m) => m.id));
   const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
+  const reload = () => window.location.reload();
 
   return (
     <div className="mx-auto flex h-screen max-w-[1000px] flex-col" {...dropHandlers}>
-      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+      {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
+      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        <span className="flex-1" />
+        {/* The free space of the header starts with the "New version available" pill, directly after
+            the status, so the state of the page reads in one spot and nothing else moves when it
+            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
+        <span role="status" className="flex flex-1">
+          {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
+        </span>
         {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
@@ -533,11 +552,13 @@ export default function Page() {
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">Decisions</h2>
+          {/* Every pinned message is listed here. A decision carries its badge; a message pinned by hand does not. */}
+          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned)}</h2>
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
                 <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
+                {isDecision(m.text) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -574,6 +595,8 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
+                    {isDecision(m.text) && <DecisionBadge className="max-sm:hidden" />}
                     <ReplyButton
                       messageId={m.id}
                       onReply={() => startReply(m)}
@@ -587,10 +610,14 @@ export default function Page() {
                     />
                     <button
                       className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
-                      title={isPinned ? 'Unpin decision' : 'Pin as decision'}
+                      // The pin only pins. Whether a message is a decision is told by its badge, not by this button.
+                      title={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
+                      aria-pressed={isPinned}
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
+                  {isDecision(m.text) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
                   {m.reply_to != null && (() => {
                     const parent = byId.get(m.reply_to);
                     return (
@@ -657,7 +684,7 @@ export default function Page() {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
               if (!files.length) return; // plain text: paste as usual
               e.preventDefault();
-              addImages(files);
+              addImages(files, true); // from the clipboard: see uploadRequest
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
             // The height is set from the text (see useBoxHeight), so the browser's own resize

@@ -136,7 +136,7 @@ test('parseMessageInput: attachments are optional, at most 4, and make the text 
 });
 
 test('toMarkdown names each image, and an image-only message has no empty text block', () => {
-  const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234 };
+  const shot = { id: 'att_0123456789abcdef01234567', content_type: 'image/png' as const, width: 1170, height: 2532, bytes: 1234, scale: 1 };
   const other = { ...shot, id: 'att_89abcdef0123456789abcdef', width: 40, height: 20 };
   const messages: Message[] = [
     { id: 3, sender: 'david', recipient: null, text: 'DECISION: this one', created_at: '2026-11-25T13:00:00Z', pinned_at: '2026-11-25T13:00:00Z', attachments: [shot], reply_to: null },

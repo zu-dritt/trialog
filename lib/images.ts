@@ -5,8 +5,13 @@
 //   3. The pixels are written out again with no metadata: no location, no device, no time.
 //
 // Only the result of step 3 is ever stored, so the original bytes never reach the database.
+//
+// One thing is read from the original on the way: its density, which says whether it is a
+// screenshot from a high-density screen. That becomes the image's `scale`, a number from 1 to 4
+// that only decides how large the page shows it.
 import sharp from 'sharp';
 import { MAX_ATTACHMENT_BYTES, type ImageType } from './core';
+import { scaleFromDensity, validScale } from './shared';
 
 /** Decoded size limit. A small file can unpack into a huge picture; this stops that before it costs memory. */
 export const MAX_PIXELS = 40_000_000;
@@ -16,6 +21,8 @@ export interface CleanImage {
   content_type: ImageType;
   width: number;
   height: number;
+  /** Image pixels per point on the screen it was taken on (lib/shared.ts, Attachment.scale). */
+  scale: number;
 }
 export type ImageResult = ({ ok: true } & CleanImage) | { ok: false; status: number; error: string };
 
@@ -35,8 +42,14 @@ const FORMAT: Record<ImageType, 'png' | 'jpeg' | 'webp'> = { 'image/png': 'png',
 // come out larger than a heavily compressed original), the next step down is tried.
 const QUALITY_STEPS = [90, 80, 70];
 
-/** Checks, turns and re-encodes an upload. Returns clean bytes, or the HTTP error to answer with. */
-export async function cleanImage(input: Buffer): Promise<ImageResult> {
+/**
+ * Checks, turns and re-encodes an upload. Returns clean bytes, or the HTTP error to answer with.
+ *
+ * `scaleHint` is what the client says about the screen the image was taken on (1 to 3), or null.
+ * The scale is taken from the file's own density when it records one that means something; then
+ * from the hint; otherwise it is 1.
+ */
+export async function cleanImage(input: Buffer, scaleHint: number | null = null): Promise<ImageResult> {
   if (input.length === 0) return { ok: false, status: 400, error: 'The request body is empty. Send the image bytes as the body.' };
   if (input.length > MAX_ATTACHMENT_BYTES) return { ok: false, status: 413, error: tooLargeMessage() };
   const type = sniffImageType(input);
@@ -48,6 +61,7 @@ export async function cleanImage(input: Buffer): Promise<ImageResult> {
     // The decoder must agree with the magic bytes; a file that starts like a PNG but isn't one fails here.
     const meta = await open().metadata();
     if (meta.format !== format) return { ok: false, status: 415, error: 'The image content does not match a PNG, JPEG or WebP file.' };
+    const scale = scaleFromDensity(meta.density) ?? validScale(scaleHint);
 
     const encode = (quality: number) => {
       // rotate() with no angle applies the EXIF orientation. Without keepMetadata()/withMetadata(),
@@ -60,7 +74,7 @@ export async function cleanImage(input: Buffer): Promise<ImageResult> {
     for (const quality of format === 'png' ? [100] : QUALITY_STEPS) {
       const { data, info } = await encode(quality).toBuffer({ resolveWithObject: true });
       if (data.length <= MAX_ATTACHMENT_BYTES) {
-        return { ok: true, data, content_type: type, width: info.width, height: info.height };
+        return { ok: true, data, content_type: type, width: info.width, height: info.height, scale };
       }
     }
     return { ok: false, status: 413, error: `${tooLargeMessage()} (It grew past the limit when it was re-encoded; make it smaller.)` };

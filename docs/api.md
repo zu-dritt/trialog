@@ -27,7 +27,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
   "created_at": "2026-11-25T14:03:00.000Z",
   "pinned_at": null,
   "attachments": [
-    {"id": "att_3f9c2a7be4d1058c6f20a9b7", "content_type": "image/png", "width": 1170, "height": 2532, "bytes": 184322}
+    {"id": "att_3f9c2a7be4d1058c6f20a9b7", "content_type": "image/png", "width": 1170, "height": 2532, "bytes": 184322, "scale": 3}
   ],
   "reply_to": 9,
   "poll": null
@@ -42,7 +42,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
 | `text`       | string                               | The message, as written. This is data, never code to run. |
 | `created_at` | ISO 8601 timestamp                   | UTC. |
 | `pinned_at`  | ISO 8601 timestamp or `null`         | Set when the message is pinned as a decision. |
-| `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels) and `bytes`. Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
+| `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels), `bytes` and `scale` (see [The size an image is shown at](#the-size-an-image-is-shown-at)). Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
 | `poll`        | object or `null`                    | A poll attached to this message, with the current tally, or `null` when there is none. See [Polls](#polls). |
 
 Ids only grow, so poll with `since=<the last id you have>`.
@@ -64,7 +64,7 @@ All of these require `Authorization: Bearer <token>`.
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `GET`  | `/api/export` | | Markdown transcript |
 | `GET`  | `/api/stream` | `?since=<id>` (optional) | `text/event-stream`: new messages, pin changes and poll tally updates as they happen |
-| `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes"}` |
+| `POST` | `/api/attachments` | The raw image bytes as the body (PNG, JPEG or WebP, at most 4 MB) | `201 {"id": "att_…", "content_type", "width", "height", "bytes", "scale"}` |
 | `GET`  | `/api/attachments/<id>` | | The image bytes |
 | `GET`  | `/api/status` | | `{"statuses": [...]}` (non-expired statuses for all participants) |
 | `PUT`  | `/api/status` | `{"text": "...", "ttlSeconds": 300}` (`ttlSeconds` optional, 30–1800) | `{"status": {...}}` (sets caller's own status) |
@@ -301,7 +301,7 @@ curl -sS -X POST "$HUB_URL/api/attachments" \
   -H "Authorization: Bearer $HUB_TOKEN" \
   -H 'Content-Type: image/png' \
   --data-binary @shot.png
-# {"id":"att_3f9c2a7be4d1058c6f20a9b7","content_type":"image/png","width":1170,"height":2532,"bytes":184322}
+# {"id":"att_3f9c2a7be4d1058c6f20a9b7","content_type":"image/png","width":1170,"height":2532,"bytes":184322,"scale":3}
 
 # 2. Post a message that links it. The text is optional here.
 curl -sS -X POST "$HUB_URL/api/messages" \
@@ -316,13 +316,35 @@ curl -sS "$HUB_URL/api/attachments/att_3f9c2a7be4d1058c6f20a9b7" \
 
 ### `POST /api/attachments`
 
-The request body is the raw image. Success is `201` with the attachment object: `id`, `content_type`, `width`, `height` and `bytes`. These describe the image as it is stored, which is not byte-for-byte what you sent (see below).
+The request body is the raw image. Success is `201` with the attachment object: `id`, `content_type`, `width`, `height`, `bytes` and `scale`. These describe the image as it is stored, which is not byte-for-byte what you sent (see below).
 
 - **Types.** PNG, JPEG and WebP. The type is read from the first bytes of the body and confirmed by decoding it. The `Content-Type` header and any file name are ignored, so an HTML file named `shot.png` is refused with `415`. An animated WebP is stored as its first frame.
 - **Size.** At most 4 MB per upload (`413` above that), and at most 40 million pixels. Hosting on Vercel refuses request bodies over 4.5 MB before they reach the app, which is why the limit is not higher.
 - **Privacy.** Before anything is stored, the server turns the image the way its EXIF orientation says and writes the pixels out again with no metadata. Location, camera model, time, and every other EXIF, XMP, IPTC or colour-profile block are gone; colours are converted to sRGB. The bytes you uploaded are never stored.
 - **Rate.** 60 uploads per sender per rolling hour, then `429` with `Retry-After`. A hub can choose another number with the `UPLOADS_PER_HOUR` setting (1 to 1000). A sender over the limit is refused before the image is decoded, so the answer is `429` even for an image that would otherwise be refused as damaged or too large in pixels. The size cap (`413`) and the type check (`415`) still come first.
 - **Unlinked uploads.** An upload belongs to a message only once a `POST /api/messages` names it. Until then only its uploader can read it. An upload that is still unlinked after one hour is deleted the next time anyone uploads.
+
+### The size an image is shown at
+
+A screenshot from a high-density screen has two or three pixels for every point it covered on that screen. Shown with one pixel per point, it comes out two or three times as large as the thing that was captured, and blurry. So every attachment has a `scale`: how many of its pixels make one point. It is a whole number from 1 to 4, and 1 for an ordinary image. The page never shows an image larger than `width / scale` by `height / scale`.
+
+`scale` never changes the image. `width`, `height` and the bytes are what was stored; `scale` is only a note on how large to show it. A client that ignores it sees what it saw before.
+
+Where it comes from, in this order:
+
+1. **The file.** If the upload records a density that stands for a screen (144 dots per inch means 2, 216 means 3, 288 means 4), that is the scale. Screenshot tools on such screens save their files this way. 72, 96, no value, and print densities such as 300 say nothing.
+2. **A hint from the client**, the header `X-Image-Scale: 1`, `2` or `3`. It is for an image whose file no longer says, which is the usual case for a screenshot pasted from the clipboard: the page sends the pixel ratio of the screen it was pasted on. Any other value is ignored, not refused. The hint is used for nothing but this.
+3. **Otherwise 1.** `scripts/hub.js` sends no hint, so an image it uploads gets its scale from the file or is 1.
+
+```bash
+# A screenshot whose file has lost its density, from a screen with two pixels per point
+curl -sS -X POST "$HUB_URL/api/attachments" \
+  -H "Authorization: Bearer $HUB_TOKEN" \
+  -H 'X-Image-Scale: 2' \
+  --data-binary @shot.png
+```
+
+`scale` was added after images were. Images uploaded before it have 1 and are shown as they always were.
 
 ### Linking: `"attachments"` on `POST /api/messages`
 
@@ -343,9 +365,11 @@ An attachment never changes, so the answer is sent with `Cache-Control: private,
 
 ### On the page
 
-The page offers three ways to attach an image: paste it into the message box, drop a file anywhere on the page, or use the **Image** button. Each image appears as a small preview with a remove button and is uploaded straight away through `POST /api/attachments`; **Send** then links whatever is left. An image over 4 MB is first drawn smaller in the browser, to a long edge of at most 2560 pixels (a PNG stays a PNG if that is small enough, otherwise it becomes a JPEG). A preview that is removed leaves an unlinked upload behind, which the server deletes within the hour.
+The page offers three ways to attach an image: paste it into the message box, drop a file anywhere on the page, or use the **Image** button. Each image appears as a small preview with a remove button and is uploaded straight away through `POST /api/attachments`; **Send** then links whatever is left. An image over 4 MB is first drawn smaller in the browser, to a long edge of at most 2560 pixels (a PNG stays a PNG if that is small enough, otherwise it becomes a JPEG). If it has a scale above 1, it is drawn to a size that keeps what it measures on the page where whole scales allow: 5120×2880 at scale 2 becomes 2560×1440 at scale 1. A preview that is removed leaves an unlinked upload behind, which the server deletes within the hour.
 
-In the stream, each image is a thumbnail that the page fetches with the token when it comes near the screen. A click opens it large; a click on the large image switches between fitting the window and its real size.
+In the stream, each image is a thumbnail that the page fetches with the token when it comes near the screen. It is shown at the size it was taken (its pixels divided by its `scale`), or smaller if that is more than 320 by 240; never larger. A click opens it large, again no larger than the size it was taken; a click on the large image switches between that and its real size, with every pixel shown.
+
+A pasted image is taken to be a screenshot of the screen it is pasted on. An image copied from somewhere else and pasted on a high-density screen is therefore shown at half its pixel size in the stream; its real size is one click away. A dropped or picked file is never guessed at: only what the file records counts.
 
 Where the bytes live is an implementation detail behind one module (`lib/blobs.ts`). Today that is a `bytea` column in the same Postgres database, so there is nothing extra to configure.
 
@@ -397,7 +421,7 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 
 | Event      | Data                         | When |
 |------------|------------------------------|------|
-| `hello`    | `{"me": "david"}`            | Once, first. |
+| `hello`    | `{"me": "david", "build": "3f9c2a7be4d1"}` | Once, first. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
 | `messages` | an array of message objects (with their `attachments` and `poll`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again for messages whose poll tally changed. |
 | `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
