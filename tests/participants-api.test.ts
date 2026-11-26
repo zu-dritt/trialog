@@ -1,7 +1,7 @@
 // The real route handlers with four made-up participants (memory store, throwaway tokens).
 import { beforeAll, test } from 'vitest';
 import assert from 'node:assert/strict';
-import type { Attachment, Message, ParticipantStatus } from '../lib/core';
+import type { Attachment, Message, ParticipantStatus, Poll } from '../lib/core';
 import { png } from './fixtures';
 
 // Two people and two agents. None of them is one of the three names the project started with.
@@ -24,6 +24,10 @@ let status: { GET: Handler; PUT: Handler; DELETE: Handler };
 let stream: { GET: Handler };
 let uploads: { POST: Handler };
 let image: { GET: Handler };
+let polls: { POST: Handler };
+let poll: { GET: Handler };
+let vote: { POST: Handler; DELETE: Handler };
+let close: { POST: Handler };
 
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
@@ -43,6 +47,10 @@ beforeAll(async () => {
   stream = (await import('../app/api/stream/route')) as unknown as typeof stream;
   uploads = (await import('../app/api/attachments/route')) as unknown as typeof uploads;
   image = (await import('../app/api/attachments/[id]/route')) as unknown as typeof image;
+  polls = (await import('../app/api/polls/route')) as unknown as typeof polls;
+  poll = (await import('../app/api/polls/[id]/route')) as unknown as typeof poll;
+  vote = (await import('../app/api/polls/[id]/vote/route')) as unknown as typeof vote;
+  close = (await import('../app/api/polls/[id]/close/route')) as unknown as typeof close;
 });
 
 const URL_BASE = 'http://hub.test';
@@ -64,6 +72,7 @@ const exported = async (as: string) => (await exportRoute.GET(new Request(`${URL
 function everyEndpoint(as?: string): [string, Promise<Response>][] {
   const json = { 'Content-Type': 'application/json', ...auth(as) };
   const id = 'att_0123456789abcdef01234567';
+  const pollId = 'poll_0123456789abcdef01234567';
   return [
     ['GET /api/participants', who(as)],
     ['GET /api/messages', get('/api/messages', as)],
@@ -76,6 +85,11 @@ function everyEndpoint(as?: string): [string, Promise<Response>][] {
     ['GET /api/stream', stream.GET(new Request(`${URL_BASE}/api/stream`, { headers: auth(as) }))],
     ['POST /api/attachments', uploads.POST(new Request(`${URL_BASE}/api/attachments`, { method: 'POST', headers: auth(as), body: 'x' }))],
     ['GET /api/attachments/<id>', image.GET(new Request(`${URL_BASE}/api/attachments/${id}`, { headers: auth(as) }), { params: Promise.resolve({ id }) })],
+    ['POST /api/polls', polls.POST(new Request(`${URL_BASE}/api/polls`, { method: 'POST', headers: json, body: '{"question":"must not be stored","options":["a","b"]}' }))],
+    ['GET /api/polls/<id>', poll.GET(new Request(`${URL_BASE}/api/polls/${pollId}`, { headers: auth(as) }), { params: Promise.resolve({ id: pollId }) })],
+    ['POST /api/polls/<id>/vote', vote.POST(new Request(`${URL_BASE}/api/polls/${pollId}/vote`, { method: 'POST', headers: json, body: '{"option":1}' }), { params: Promise.resolve({ id: pollId }) })],
+    ['DELETE /api/polls/<id>/vote', vote.DELETE(new Request(`${URL_BASE}/api/polls/${pollId}/vote`, { method: 'DELETE', headers: auth(as) }), { params: Promise.resolve({ id: pollId }) })],
+    ['POST /api/polls/<id>/close', close.POST(new Request(`${URL_BASE}/api/polls/${pollId}/close`, { method: 'POST', headers: auth(as) }), { params: Promise.resolve({ id: pollId }) })],
   ];
 }
 
@@ -172,6 +186,38 @@ test('status and images work for any configured participant', async () => {
   const withImage = await posted({ text: '@scout see this', attachments: [attachment.id] }, 'ana-maria');
   assert.deepEqual(withImage.attachments.map((x) => x.id), [attachment.id]);
   assert.equal((await download('scout')).status, 200);
+});
+
+test('a poll among the four: a fourth participant creates it, votes are named, and closing it posts the result', async () => {
+  const jsonAs = (as: string) => ({ 'Content-Type': 'application/json', ...auth(as) });
+  const created = await polls.POST(new Request(`${URL_BASE}/api/polls`, { method: 'POST', headers: jsonAs('quill-2'), body: JSON.stringify({ question: 'Ship on Friday?', options: ['Yes', 'No'], to: 'ana-maria' }) }));
+  assert.equal(created.status, 201, await created.clone().text());
+  const made = (await created.json()) as { message: Message; poll: Poll };
+  assert.deepEqual([made.message.sender, made.message.recipient, made.poll.creator], ['quill-2', 'ana-maria', 'quill-2']);
+  const at = { params: Promise.resolve({ id: made.poll.id }) };
+  const cast = (as: string, option: number) => vote.POST(new Request(`${URL_BASE}/api/polls/${made.poll.id}/vote`, { method: 'POST', headers: jsonAs(as), body: JSON.stringify({ option }) }), at);
+  assert.equal((await cast('scout', 1)).status, 200);
+  assert.equal((await cast('ana-maria', 1)).status, 200);
+  assert.equal((await cast('ben', 2)).status, 200);
+  // A name that is not a participant can't be asked, as with a message.
+  const stranger = await polls.POST(new Request(`${URL_BASE}/api/polls`, { method: 'POST', headers: jsonAs('ben'), body: JSON.stringify({ question: 'Q?', options: ['A', 'B'], to: 'grok' }) }));
+  assert.equal(stranger.status, 400);
+  assert.match(((await stranger.json()) as { error: string }).error, /"to" must be one of ana-maria, ben, scout, quill-2/);
+
+  // Only the creator closes it. Closing posts the result as a reply, written by the closer, with the voters' names.
+  assert.notEqual((await close.POST(new Request(`${URL_BASE}/api/polls/${made.poll.id}/close`, { method: 'POST', headers: auth('ben') }), at)).status, 200);
+  const closed = await close.POST(new Request(`${URL_BASE}/api/polls/${made.poll.id}/close`, { method: 'POST', headers: auth('quill-2') }), at);
+  assert.equal(closed.status, 200, await closed.clone().text());
+  const result = (await closed.json()) as { poll: Poll; message: Message };
+  assert.ok(result.poll.closed_at);
+  // Two votes in the same millisecond may come back in either order, so the order is not checked.
+  assert.deepEqual(result.poll.options.map((o) => [...o.voters].sort()), [['ana-maria', 'scout'], ['ben']]);
+  assert.deepEqual([result.message.sender, result.message.reply_to], ['quill-2', made.message.id]);
+  assert.match(result.message.text, /Yes — 2 votes \((Scout, Ana-Maria|Ana-Maria, Scout)\)/);
+  assert.match(result.message.text, /No — 1 vote \(Ben\)/);
+  assert.doesNotMatch(result.message.text, /grok|claude|david/i);
+  const md = await exported('ben');
+  assert.match(md, /- 1\. Yes \(2 — (Scout, Ana-Maria|Ana-Maria, Scout)\)/);
 });
 
 test('messages of someone who is no longer a participant stay readable', async () => {

@@ -159,6 +159,11 @@ test('SQL: the checks that listed three names are replaced by checks on the shap
   assert.ok(created);
   await assert.rejects(store.vote(created.poll.id, 'NOPE', 1), /poll_votes_participant_shape/);
   assert.deepEqual((await store.vote(created.poll.id, 'ana-maria', 2)).options[1].voters, ['ana-maria']);
+  // Closing it posts the result under the closer's name, with the voter named as the page names them.
+  const closed = await store.closePoll(created.poll.id, 'quill-2');
+  assert.equal(closed?.message?.sender, 'quill-2');
+  assert.equal(closed?.message?.reply_to, created.message.id);
+  assert.match(closed?.message?.text ?? '', /B — 1 vote \(Ana-Maria\)/);
 });
 
 const BASE = 'http://hub.test';
