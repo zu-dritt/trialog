@@ -6,7 +6,7 @@ import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
 import { RoomPane, RoomPicker } from './pane';
 import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
-import { SoundToggle, useSoundMode } from './sound';
+import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
@@ -199,6 +199,8 @@ export default function Page() {
     () => (splitVisible ? [room, secondRoom] : [room]),
     [splitVisible, room, secondRoom],
   );
+  // A message addressed to you rings from any room, even one that is not open.
+  useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
