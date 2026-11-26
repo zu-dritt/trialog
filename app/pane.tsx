@@ -1,4 +1,4 @@
-// One room in the hub UI: its live messages, its composer, and (in split view) its room picker.
+// One room in the hub UI: its live messages, its composer, and (in split view) its room bar.
 // The page can show one pane or two side by side; each pane talks to the server for its own room.
 
 'use client';
@@ -993,30 +993,6 @@ export function RoomPane({
           />
         </form>
       </footer>
-    </div>
-  );
-}
-
-export function RoomPicker({ rooms, current, onPick }: {
-  rooms: readonly Room[];
-  current: string;
-  onPick: (id: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
-      <label className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-        <span className="shrink-0 text-muted">Room</span>
-        <select
-          className={`${FIELD} min-w-0 flex-1 py-1`}
-          value={current}
-          aria-label="Room in this pane"
-          onChange={(e) => onPick(e.target.value)}
-        >
-          {rooms.map((r) => (
-            <option key={r.id} value={r.id}>{r.name}{r.unread ? ` (${r.unread > 99 ? '99+' : r.unread})` : ''}</option>
-          ))}
-        </select>
-      </label>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
-import { RoomPane, RoomPicker } from './pane';
+import { RoomPane } from './pane';
 import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
@@ -12,7 +12,7 @@ import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
-import { SplitToggle, useSplitFits } from './split-ui';
+import { PaneRoomBar, SplitToggle, useSplitFits } from './split-ui';
 import { TourButton, TourPanel, useTour } from './tour';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -151,12 +151,13 @@ export default function Page() {
   }, [token, forgetToken]);
 
   /** Creates a room and opens it in the leading pane. Resolves to '' when that worked, or to what went wrong. */
-  const createRoom = async (name: string): Promise<string> => {
+  /** Makes a room and opens it: in the leading pane, or with `open` where the + was pressed. */
+  const createRoom = async (name: string, open: (id: string) => void = openRoom): Promise<string> => {
     try {
       const res = await api('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
       const created = ((await res.json()) as { room: Room }).room;
       setRooms((list) => (list.some((r) => r.id === created.id) ? list : [...list, created]));
-      openRoom(created.id);
+      open(created.id);
       return '';
     } catch (e) {
       return errorMessage(e) === 'unauthorized' ? 'Not signed in.' : errorMessage(e);
@@ -252,7 +253,8 @@ export default function Page() {
           {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
         {/* The rooms come after the state of the page: the open one marked, the others with what is new there. */}
-        {tabs('hidden lg:flex lg:max-w-[42%]')}
+        {/* With two panes, each pane has its own room bar instead, so both rooms start on one line. */}
+        {!splitVisible && tabs('hidden lg:flex lg:max-w-[42%]')}
         <SplitToggle on={splitOn} onToggle={toggleSplit} disabled={!fits} />
         {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
         <SearchBox
@@ -266,7 +268,7 @@ export default function Page() {
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
-      <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden">
+      <div className={`flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden ${splitVisible ? 'hidden' : ''}`}>
         {tabs('flex min-w-0 flex-1')}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
       </div>
@@ -290,6 +292,7 @@ export default function Page() {
             seek={seek}
             onJumped={() => setSeek(null)}
             onHeard={onLeadHeard}
+            picker={<PaneRoomBar side="lead" rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} />}
           />
           <div className="w-px shrink-0 bg-line" aria-hidden="true" />
           <RoomPane
@@ -299,10 +302,10 @@ export default function Page() {
             onMissingRoom={onMissingSecond}
             onHeard={onSideHeard}
             picker={
-              <RoomPicker
-                rooms={shownRooms}
-                current={secondRoom}
+              <PaneRoomBar
+                side="side" rooms={shownRooms} current={secondRoom} canCreate={rooms.length < MAX_ROOMS}
                 onPick={(id) => { setSecondRoom(id); noteTour({ kind: 'room' }); }}
+                onCreate={(name) => createRoom(name, setSecondRoom)}
               />
             }
           />
