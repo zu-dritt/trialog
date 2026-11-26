@@ -26,8 +26,8 @@ test('myVote and withPolls identify the caller and update an existing message', 
   assert.equal(myVote(poll, null), null);
 
   const messages: Message[] = [
-    { id: 12, sender: 'david', recipient: null, text: 'Lunch?', created_at: poll.created_at, pinned_at: null, attachments: [], poll: null },
-    { id: 13, sender: 'grok', recipient: null, text: 'hi', created_at: poll.created_at, pinned_at: null, attachments: [] },
+    { id: 12, sender: 'david', recipient: null, text: 'Lunch?', created_at: poll.created_at, pinned_at: null, attachments: [], reply_to: null, poll: null },
+    { id: 13, sender: 'grok', recipient: null, text: 'hi', created_at: poll.created_at, pinned_at: null, attachments: [], reply_to: null },
   ];
   const [updated, other] = withPolls(messages, [poll]);
   assert.equal(updated.poll?.id, poll.id);

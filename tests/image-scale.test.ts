@@ -217,7 +217,7 @@ test('sql: a database from before the scale gains the column on first request; i
   await createSqlStore(pgliteDb(pg)).ensure();
   await Promise.all([createSqlStore(pgliteDb(pg)).ensure(), createSqlStore(pgliteDb(pg)).ensure()]);
   const { readFile } = await import('node:fs/promises');
-  const migration = await readFile(new URL('../migrations/005-attachment-scale.sql', import.meta.url), 'utf8');
+  const migration = await readFile(new URL('../migrations/006-attachment-scale.sql', import.meta.url), 'utf8');
   await pg.exec(migration);
   await pg.exec(migration);
   await pg.exec(SCHEMA_SQL);

@@ -27,6 +27,8 @@ export interface Message {
   pinned_at: string | null;
   /** Always present; empty when the message has no images. */
   attachments: Attachment[];
+  /** The id of the message this one answers. Always present; null when it is not a reply. */
+  reply_to: number | null;
   /** Present when a poll is attached to this message; otherwise omitted or null. */
   poll?: Poll | null;
 }
@@ -38,7 +40,19 @@ export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
 export const MIN_TOKEN_LENGTH = 16;
 
-export const UPLOADS_PER_HOUR = 20; // image uploads per sender per rolling hour
+/** Image uploads per sender per rolling hour, unless the UPLOADS_PER_HOUR setting says otherwise. */
+export const UPLOADS_PER_HOUR = 60;
+export const MAX_UPLOADS_PER_HOUR = 1000;
+/**
+ * The hourly upload limit for this hub: the UPLOADS_PER_HOUR setting if it is a whole number
+ * from 1 to 1000, otherwise the default. A value that can't be used is ignored, never read as "no limit".
+ */
+export function uploadsPerHour(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.UPLOADS_PER_HOUR?.trim();
+  if (!raw || !/^\d{1,4}$/.test(raw)) return UPLOADS_PER_HOUR;
+  const n = Number(raw);
+  return n >= 1 && n <= MAX_UPLOADS_PER_HOUR ? n : UPLOADS_PER_HOUR;
+}
 export const ORPHAN_MAX_AGE_MS = 60 * 60 * 1000; // an upload that no message links within this time is deleted
 /** Ids look like att_3f9c… (24 hex digits). The pattern is a little wider so the format can grow. */
 export const ATTACHMENT_ID = /^att_[a-z0-9]{8,48}$/;
@@ -89,8 +103,19 @@ const MENTION = /^\s*@(grok|claude|david)\b/i;
 const DECISION = /^\s*(?:@(?:grok|claude|david)\b[\s,:]*)?DECISION:/;
 
 export type ParsedInput =
-  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[] }
+  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[]; replyTo: number | null }
   | { ok: false; status: number; error: string };
+
+/**
+ * Reads the optional "reply_to" of a POST body: the id of the message that is answered.
+ * Returns the id, null when there is none, or undefined when it is not a message id.
+ * Whether a message with that id exists is for the store to say.
+ */
+export function parseReplyTo(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) return null;
+  const id = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id >= 1 ? id : undefined;
+}
 
 /** Validates the optional "attachments" list of a POST body. Returns the ids, or an error text. */
 function parseAttachmentIds(value: unknown): string[] | string {
@@ -115,6 +140,8 @@ export function parseMessageInput(body: unknown): ParsedInput {
   const { to, attachments: ids } = body as { to?: unknown; attachments?: unknown };
   const attachments = parseAttachmentIds(ids);
   if (typeof attachments === 'string') return { ok: false, status: 400, error: attachments };
+  const replyTo = parseReplyTo((body as { reply_to?: unknown }).reply_to);
+  if (replyTo === undefined) return { ok: false, status: 400, error: '"reply_to" must be the id of a message (a whole number).' };
   // With an image the text is optional, so a client may leave it out or send null.
   const given = (body as { text?: unknown }).text;
   const text = attachments.length && (given === undefined || given === null) ? '' : given;
@@ -132,7 +159,7 @@ export function parseMessageInput(body: unknown): ParsedInput {
     const m = MENTION.exec(text);
     if (m) recipient = m[1].toLowerCase() as Sender;
   }
-  return { ok: true, text, recipient, pinned: DECISION.test(text), attachments };
+  return { ok: true, text, recipient, pinned: DECISION.test(text), attachments, replyTo };
 }
 
 
@@ -266,7 +293,9 @@ export function formatTime(iso: string): string {
 
 function heading(m: Message): string {
   const to = m.recipient ? ` → ${NAMES[m.recipient] ?? m.recipient}` : '';
-  return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}`;
+  // A reply names the message it answers, the same way the command-line client shows it.
+  const reply = m.reply_to ? ` · ↳ #${m.reply_to}` : '';
+  return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}${reply}`;
 }
 
 /** Builds the Markdown transcript: pinned decisions first, then every message in order. */

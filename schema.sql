@@ -85,6 +85,19 @@ DO $$
    BEGIN
      IF NOT EXISTS (
        SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'messages' AND column_name = 'reply_to'
+     ) THEN
+       ALTER TABLE messages ADD COLUMN reply_to BIGINT REFERENCES messages (id) ON DELETE SET NULL;
+     END IF;
+   END
+   $$;
+
+CREATE INDEX IF NOT EXISTS messages_reply_to ON messages (reply_to) WHERE reply_to IS NOT NULL;
+
+DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
        WHERE table_schema = current_schema() AND table_name = 'attachments' AND column_name = 'scale'
      ) THEN
        ALTER TABLE attachments ADD COLUMN scale SMALLINT NOT NULL DEFAULT 1
