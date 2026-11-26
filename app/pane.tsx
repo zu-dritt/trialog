@@ -12,7 +12,8 @@ import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageL
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { insertAtCursor } from './emoji';
-import { MessageBody } from './markdown';
+import { MentionColors, MessageBody } from './markdown';
+import { leadingHandle } from './mentions';
 import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { DecisionCardView, DecisionComposer, withDecisions } from './decisions';
@@ -789,6 +790,8 @@ export function RoomPane({
   const byId = new Map(messages.map((m) => [m.id, m]));
   let lastDay = '';
   const color = (name: string) => colorOf(name, participants);
+  // The «to» picker wins over an @name, as in the API; without it the @name at the start addresses.
+  const handle = to ? { kind: 'none' as const } : leadingHandle(draft, names);
   const shown = (name: string) => labelOf(name, participants);
   const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
   const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
@@ -825,6 +828,7 @@ export function RoomPane({
         />
       )}
 
+      <MentionColors.Provider value={color}>
       <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 && roomInfo && roomInfo.id !== MAIN_ROOM && roomInfo.last_id === 0 && (
           <p className="mt-[18vh] text-center text-sm text-muted">Nothing in {roomInfo.name} yet. The first message is yours.</p>
@@ -896,7 +900,7 @@ export function RoomPane({
                   })()}
                   {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
                     <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
-                      <MessageBody text={m.text} />
+                      <MessageBody text={m.text} names={names} />
                     </div>
                   )}
                   {m.poll && (
@@ -926,6 +930,7 @@ export function RoomPane({
           );
         })}
       </main>
+      </MentionColors.Provider>
 
       {statusBar}
 
@@ -975,8 +980,31 @@ export function RoomPane({
               addImages(files, true);
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            className={`${FIELD} block min-h-[60px] w-full resize-none`}
+            className={`${FIELD} block min-h-[60px] w-full resize-none ${handle.kind === 'unknown' ? 'border-bad' : ''}`}
+            aria-describedby={handle.kind === 'none' ? undefined : `handle-${room}`}
           />
+          {/* What the @name at the start does, before Send: who it goes to, or that no one has that name. */}
+          {handle.kind === 'known' && (
+            <p id={`handle-${room}`} className="-mt-1 text-xs text-muted">
+              <span className="font-semibold" style={{ color: color(handle.name) }}>→ {shown(handle.name)}</span>{' '}
+              {participants.find((p) => p.name === handle.name)?.kind === 'agent' ? 'will be woken' : 'is addressed'}
+            </p>
+          )}
+          {handle.kind === 'unknown' && (
+            <p id={`handle-${room}`} role="status" className="-mt-1 text-xs text-bad">
+              @{handle.typed}: no such participant.
+              {handle.suggestion && (
+                <>
+                  {' '}Did you mean{' '}
+                  <button
+                    type="button" className="cursor-pointer border-none bg-transparent p-0 font-semibold underline"
+                    style={{ color: color(handle.suggestion) }}
+                    onClick={() => { setDraft((d) => d.replace(/^(\s*)@[A-Za-z0-9][A-Za-z0-9_-]*/, `$1@${handle.suggestion}`)); boxRef.current?.focus(); }}
+                  >@{handle.suggestion}</button>?
+                </>
+              )}
+            </p>
+          )}
           <input
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
