@@ -203,7 +203,7 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
         title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
       >Image</button>
       <button
-        type="button" className={toolClassName} onClick={decision.onToggle}
+        type="button" data-tour="decision" className={toolClassName} onClick={decision.onToggle}
         aria-pressed={decision.open} aria-expanded={decision.open} aria-controls={decision.open ? 'decision-composer' : undefined}
       >Decision</button>
       <button

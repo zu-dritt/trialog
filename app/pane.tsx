@@ -25,6 +25,7 @@ import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { heldBack, markSeen, readSeen, seenElsewhere, seenKey, settled } from './rooms';
 import type { ParticipantWithWake } from './wakes';
+import { agreedBy, type TourEvent } from './tour';
 
 const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
@@ -90,6 +91,7 @@ export function RoomPane({
   onUnauthorized,
   onHeard,
   soundSent,
+  onTour,
 }: {
   room: string;
   token: string;
@@ -117,6 +119,8 @@ export function RoomPane({
   onHeard?: (messages: Message[], primed: boolean) => void;
   /** Your own message went out: the page plays the confirmation when sound mode is on. */
   soundSent?: () => void;
+  /** Learn by doing: an action of the person, reported once the server has taken it (app/tour.tsx). From either pane. */
+  onTour?: (event: TourEvent) => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinned, setPinned] = useState<Message[]>([]);
@@ -512,6 +516,7 @@ export function RoomPane({
       setNotice(quoteNotice(result.refused));
       quotesRef.current = result.quotes;
       setQuotes(result.quotes);
+      if (!result.refused) onTour?.({ kind: 'quoted' });
     } else {
       const next = quotesRef.current.map((q) => (q.key === open.key ? withComment(q, comment) : q));
       quotesRef.current = next;
@@ -562,6 +567,7 @@ export function RoomPane({
       });
       let { message } = (await res.json()) as { message: Message };
       soundSent?.();
+      onTour?.({ kind: 'sent', message });
       if (typed.decision && !message.pinned_at) {
         try {
           const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
@@ -662,6 +668,7 @@ export function RoomPane({
       const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
       const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
       const data = (await res.json()) as { message: Message };
+      if (on) onTour?.({ kind: 'reacted' });
       if (data.message.room !== roomRef.current) return;
       setMessages((list) => merge(list, [data.message]));
       setPinned((list) => replaceMatching(list, [data.message]));
@@ -739,8 +746,10 @@ export function RoomPane({
       if (to) body.to = to;
       if (room !== MAIN_ROOM) body.room = room;
       const res = await api('/api/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = (await res.json()) as { message: Message };
+      const data = (await res.json()) as { message: Message; decision: DecisionCard };
       soundSent?.();
+      // A card the human creates holds their Agree already: that is the tour's step too.
+      if (agreedBy(data.decision, data.message.sender)) onTour?.({ kind: 'agreed' });
       if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
       setDecisionOpen(false);
     } catch (e) {
@@ -756,6 +765,7 @@ export function RoomPane({
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stance, note }),
       })).json()) as { decision: DecisionCard; message: Message; reply: Message | null };
       applyDecision(data.decision, data.message);
+      if (me && agreedBy(data.decision, me)) onTour?.({ kind: 'agreed' });
       if (data.reply) setMessages((list) => merge(list, [data.reply!]));
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
@@ -786,7 +796,8 @@ export function RoomPane({
   const actionClass = 'cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100';
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" {...dropHandlers}>
+    // The tour points at the controls of the leading pane only (data-tour-pane).
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-tour-pane={lead ? 'lead' : 'side'} {...dropHandlers}>
       {picker}
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
@@ -956,6 +967,7 @@ export function RoomPane({
             onChange={(e) => setDraft(e.target.value)}
             placeholder={addressHint}
             aria-label={`Message in this room${me ? ` as ${shown(me)}` : ''}`}
+            data-tour="box"
             onPaste={(e) => {
               const files = Array.from(e.clipboardData.files);
               if (!files.length) return;

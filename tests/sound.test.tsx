@@ -7,8 +7,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Message } from '../lib/core';
 import type { DecisionCard, Participant } from '../lib/shared';
 import {
-  GATHER_MS, MASTER_GAIN, MIN_GAP_MS, SOUND_KEY, SOUND_OFF_HINT, SOUND_ON_HINT, SoundToggle, audible, chordNotes, createSoundEngine,
-  createSoundPlayer, readSoundOn, snapshotOf, soundCues, writeSoundOn, type AudioContextLike, type Cue,
+  GATHER_MS, MASTER_GAIN, MIN_GAP_MS, SOUND_KEY, SOUND_OFF_HINT, SOUND_ON_HINT, SoundToggle, addressedCues, audible, chordNotes,
+  createSoundEngine, createSoundPlayer, knownAfter, readSoundOn, roomsWithNews, snapshotOf, soundCues, writeSoundOn,
+  type AudioContextLike, type Cue,
 } from '../app/sound';
 
 afterEach(() => { vi.useRealTimers(); });
@@ -295,4 +296,40 @@ test('the switch is one labelled button that says whether it is on', () => {
   }
   assert.ok(off.includes('aria-pressed="false"') && off.includes(`title="${SOUND_OFF_HINT}"`), off);
   assert.ok(on.includes('aria-pressed="true"') && on.includes(`title="${SOUND_ON_HINT}"`), on);
+});
+
+// --- rooms that are not open ---
+
+test('a room that is not open and has grown is read from where it was; open rooms are not', () => {
+  const known = new Map([['main', 10], ['workshop', 4], ['side', 7]]);
+  const rooms = [{ id: 'main', last_id: 12 }, { id: 'workshop', last_id: 9 }, { id: 'side', last_id: 7 }];
+  assert.deepEqual(roomsWithNews(known, rooms, ['main']), [{ room: 'workshop', since: 4 }]);
+  assert.deepEqual(roomsWithNews(known, rooms, ['main', 'workshop']), [], 'both panes open: nothing elsewhere');
+  assert.deepEqual(roomsWithNews(known, rooms, ['workshop']), [{ room: 'main', since: 10 }]);
+});
+
+test('a room seen for the first time, or known as empty, is only noted: the first list is history', () => {
+  // The page shows an empty Main until the server's list comes; that jump is not a new message.
+  assert.deepEqual(roomsWithNews(new Map([['main', 0]]), [{ id: 'main', last_id: 240 }, { id: 'new', last_id: 3 }], ['workshop']), []);
+});
+
+test('what is known only goes forward, and a room that is gone is dropped', () => {
+  const known = knownAfter(new Map([['main', 12], ['gone', 5]]), [{ id: 'main', last_id: 0 }, { id: 'workshop', last_id: 4 }]);
+  assert.deepEqual([...known], [['main', 12], ['workshop', 4]]);
+  assert.deepEqual([...knownAfter(null, [{ id: 'main', last_id: 3 }])], [['main', 3]]);
+});
+
+test('from a room that is not open, only a message someone else addressed to you rings', () => {
+  const notes = chordNotes(ROSTER);
+  const cues = addressedCues([
+    msg('claude', { recipient: 'david', room: 'workshop' }), // to you: rings
+    msg('grok', { room: 'workshop' }), // to everyone: quiet
+    msg('grok', { recipient: 'claude', room: 'workshop' }), // to someone else: quiet
+    msg('david', { recipient: 'david', room: 'workshop' }), // from you: quiet
+    msg('hub', { recipient: 'david', room: 'workshop' }), // not on the roster: quiet
+  ], 'david', ROSTER);
+  assert.deepEqual(cues, [{ kind: 'note', freq: notes.get('claude')!, addressed: true }]);
+  assert.deepEqual(addressedCues([msg('claude', { recipient: 'david' })], null, ROSTER), [], 'no one signed in: nothing');
+  // It is addressed, so it is heard even while the tab is hidden.
+  assert.equal(audible(cues[0], true), true);
 });

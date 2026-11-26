@@ -70,3 +70,23 @@
     opacity: 0.75;
   }
 }
+
+/* Learn by doing (app/tour.tsx): the ring around the control a step points at, and the recap's
+   moving message path. Both stand still for someone who asks for less motion. */
+[data-tour-target] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+  opacity: 1 !important;
+}
+@keyframes tour-ring {
+  0%, 100% { outline-color: var(--color-accent); }
+  50% { outline-color: transparent; }
+}
+@keyframes tour-flow {
+  to { stroke-dashoffset: -16; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-tour-target] { animation: tour-ring 1.6s ease-in-out infinite; }
+  .tour-path { stroke-dasharray: 10 6; animation: tour-flow 0.9s linear infinite; }
+}

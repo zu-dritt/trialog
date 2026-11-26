@@ -14,7 +14,7 @@ import { promises as dns } from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import type { Message, Sender } from './core';
 import { loadRoster } from './participants';
-import { MAIN_ROOM, type Participant } from './shared';
+import { MAIN_ROOM, whoToWake, type Participant } from './shared';
 import type { PendingWake, Store, WakeDelivery } from './store';
 
 export const SIGNATURE_HEADER = 'X-Hub-Signature';
@@ -263,21 +263,8 @@ export function messagePreview(text: string, max = PREVIEW_CHARS): string {
   return `${flat.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/**
- * Who a message should wake, by the rule above. `roster` is GET /api/participants. The hub itself
- * never wakes anyone. A sender who is not on the roster wakes no one.
- */
-export function whoToWake(message: Pick<Message, 'sender' | 'recipient'>, roster: readonly Participant[]): Sender[] {
-  if (message.sender === 'hub') return [];
-  const agents = roster.filter((p) => p.kind === 'agent').map((p) => p.name);
-  const sender = roster.find((p) => p.name === message.sender);
-  if (!sender) return [];
-  if (sender.kind === 'human') return agents;
-  if (sender.kind !== 'agent') return [];
-  if (message.recipient === null) return agents.filter((name) => name !== message.sender);
-  if (message.recipient === message.sender) return [];
-  return agents.includes(message.recipient) ? [message.recipient] : [];
-}
+// Who a message wakes lives in lib/shared.ts, so the page can show it with the same rule.
+export { whoToWake };
 
 /** Recipients field of the payload: every name on the roster when the message is for everyone. */
 export function payloadRecipients(message: Pick<Message, 'recipient'>, names: readonly string[]): string[] {

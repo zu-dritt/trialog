@@ -150,7 +150,7 @@ test('a name for a new room is checked before anything is sent', () => {
 
 test('the tabs: the open room is marked and has no count, the others show what is new', () => {
   const html = renderToStaticMarkup(<RoomTabs rooms={ROOMS} current="main" onPick={noop} onCreate={never} className="flex" />);
-  assert.match(html, /^<div class="relative[^"]* flex"><nav aria-label="Rooms"/);
+  assert.match(html, /^<div data-tour="rooms" class="relative[^"]* flex"><nav aria-label="Rooms"/);
   assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
   assert.match(html, /<button type="button" aria-current="page" aria-label="Main, the room that is open"/);
   // Main has 3 unread in the data, but it is the room that is open: no count on it.
