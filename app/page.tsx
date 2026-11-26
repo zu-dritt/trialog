@@ -8,6 +8,7 @@ import { RoomTabs, addressForRoom, roomFromSearch, readSeen, tabTitle, withSeenA
 import { SearchBox } from './search';
 import { DemoBanner, DemoSignIn } from './demo';
 import { DEMO_BUILD } from '../lib/demo';
+import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
@@ -26,24 +27,6 @@ const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 p
 const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-function TokenForm({ onSave }: { onSave: (token: string) => void }) {
-  const [value, setValue] = useState('');
-  return (
-    <main className="mx-auto mt-[18vh] max-w-[420px] px-4">
-      <h1 className="my-[0.67em] text-[2em] font-bold">Trialog</h1>
-      <p className="my-4 text-muted">Paste your token once. It stays in this browser (localStorage) and is only sent to this site.</p>
-      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSave(value.trim()); }}>
-        <input
-          type="password" autoFocus autoComplete="off" placeholder="Token" value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="flex-1 rounded-md border border-line bg-panel px-2.5 py-[7px]"
-        />
-        <button type="submit" className={BUTTON}>Open hub</button>
-      </form>
-    </main>
-  );
-}
 
 export default function Page() {
   const [token, setToken] = useState<string | null>(null); // null: not read yet; '': none saved
@@ -138,8 +121,13 @@ export default function Page() {
     noteTour({ kind: 'room' });
   }, [noteTour]);
 
-  const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
+  // A token the hub turned down: the form says so, instead of silently asking again.
+  const [refused, setRefused] = useState(false);
+  const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setRefused(false); setToken(t); };
+  /** «Switch token»: back to the form, nothing wrong. */
   const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
+  /** The hub answered 401: back to the form, with a message. */
+  const refuseToken = useCallback(() => { forgetToken(); setRefused(true); }, [forgetToken]);
 
   const api = useCallback(async (path: string, options: RequestInit = {}) => {
     const res = await fetch(path, {
@@ -147,10 +135,10 @@ export default function Page() {
       cache: 'no-store',
       headers: { ...(options.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
     });
-    if (res.status === 401) { forgetToken(); throw new Error('unauthorized'); }
+    if (res.status === 401) { refuseToken(); throw new Error('unauthorized'); }
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
     return res;
-  }, [token, forgetToken]);
+  }, [token, refuseToken]);
 
   /** Creates a room and opens it in the leading pane. Resolves to '' when that worked, or to what went wrong. */
   /** Makes a room and opens it: in the leading pane, or with `open` where the + was pressed. */
@@ -221,7 +209,7 @@ export default function Page() {
   useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
   if (token === null) return null;
-  if (!token) return <>{DEMO_BUILD && <DemoSignIn onPick={saveToken} />}<TokenForm onSave={saveToken} /></>;
+  if (!token) return <>{DEMO_BUILD && <DemoSignIn onPick={saveToken} />}<TokenForm onSave={saveToken} refused={refused} /></>;
 
   const shown = (name: string) => labelOf(name, participants);
   const reload = () => window.location.reload();
@@ -230,7 +218,7 @@ export default function Page() {
     <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
   );
   const statusBar = (
-    <StatusBar participants={participants} token={token} onUnauthorized={forgetToken} />
+    <StatusBar participants={participants} token={token} onUnauthorized={refuseToken} />
   );
   const paneShared = {
     token,
@@ -242,7 +230,7 @@ export default function Page() {
     setRooms,
     setSeenChanged,
     openRooms,
-    onUnauthorized: forgetToken,
+    onUnauthorized: refuseToken,
     soundSent: sound.sent,
     onTour: noteTour,
   };

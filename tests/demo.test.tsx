@@ -38,3 +38,9 @@ test('a demo hub refuses to start with a database', async () => {
   const { getStore } = await import('../lib/store');
   await assert.rejects(getStore(), /TRIALOG_DEMO is set together with DATABASE_URL/);
 });
+
+test('the build writes TRIALOG_DEMO into the page, so the banner and buttons can show', () => {
+  // Found in review: without this, the page never knows it is the demo.
+  const config = readFileSync(new URL('../next.config.ts', import.meta.url), 'utf8');
+  assert.match(config, /TRIALOG_DEMO: process\.env\.TRIALOG_DEMO === '1' \? '1' : ''/);
+});

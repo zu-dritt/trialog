@@ -199,13 +199,13 @@ test('the keys of the comment line', () => {
 
 test('the box opens where the quote was picked, and stays inside the window', () => {
   const window = { width: 1280, height: 800 };
-  assert.deepEqual(placeCommentBox({ top: 300, left: 400 }, window), { top: 300, left: 400, width: 352 });
+  assert.deepEqual(placeCommentBox({ top: 300, left: 400 }, window), { top: 300, left: 400, width: 560 });
   // Too far right, too far down, or off to the left: moved in.
-  assert.deepEqual(placeCommentBox({ top: 790, left: 1200 }, window), { top: 660, left: 920, width: 352 });
-  assert.deepEqual(placeCommentBox({ top: -20, left: -100 }, window), { top: 8, left: 8, width: 352 });
+  assert.deepEqual(placeCommentBox({ top: 790, left: 1200 }, window), { top: 532, left: 712, width: 560 });
+  assert.deepEqual(placeCommentBox({ top: -20, left: -100 }, window), { top: 8, left: 8, width: 560 });
   // A phone: the box takes the width there is.
-  assert.deepEqual(placeCommentBox({ top: 400, left: 200 }, { width: 375, height: 700 }), { top: 400, left: 15, width: 352 });
-  assert.deepEqual(placeCommentBox({ top: 400, left: 200 }, { width: 320, height: 500 }), { top: 360, left: 8, width: 304 });
+  assert.deepEqual(placeCommentBox({ top: 400, left: 200 }, { width: 375, height: 700 }), { top: 400, left: 8, width: 359 });
+  assert.deepEqual(placeCommentBox({ top: 400, left: 200 }, { width: 320, height: 500 }), { top: 232, left: 8, width: 304 });
 });
 
 test('a chip says when it carries a comment, and opens it', () => {
