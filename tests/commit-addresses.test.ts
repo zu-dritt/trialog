@@ -97,6 +97,15 @@ test('an address mentioned in ordinary message text is not a trailer and is igno
   assert.equal(check(`${base}..HEAD`).status, 0);
 });
 
+test('a single commit instead of a range checks that commit and what came before it', () => {
+  // CI passes a bare commit for the very first commit of a repository, which has no parent to start a range from.
+  const root = git(['rev-list', '--max-parents=0', 'HEAD']);
+  const r = check(root);
+  assert.equal(r.status, 0, r.text);
+  assert.match(r.text, /1 commit checked/);
+  assert.equal(check('HEAD').status, 1, 'the history above contains bad addresses');
+});
+
 test('a missing or broken range is a usage error, not a pass', () => {
   assert.equal(spawnSync(process.execPath, [script], { cwd: repo, encoding: 'utf8' }).status, 2);
   assert.equal(check('no-such-branch..HEAD').status, 2);
