@@ -177,13 +177,16 @@ export function setWakeDnsForTests(fn: DnsLookup | null) {
 }
 
 const INTERNAL_V4 = new BlockList();
-INTERNAL_V4.addSubnet('127.0.0.0', 8, 'ipv4');
+INTERNAL_V4.addSubnet('0.0.0.0', 8, 'ipv4');
 INTERNAL_V4.addSubnet('10.0.0.0', 8, 'ipv4');
+INTERNAL_V4.addSubnet('100.64.0.0', 10, 'ipv4');
+INTERNAL_V4.addSubnet('127.0.0.0', 8, 'ipv4');
 INTERNAL_V4.addSubnet('172.16.0.0', 12, 'ipv4');
 INTERNAL_V4.addSubnet('192.168.0.0', 16, 'ipv4');
 INTERNAL_V4.addSubnet('169.254.0.0', 16, 'ipv4');
 
 const INTERNAL_V6 = new BlockList();
+INTERNAL_V6.addSubnet('::', 128, 'ipv6');
 INTERNAL_V6.addSubnet('::1', 128, 'ipv6');
 INTERNAL_V6.addSubnet('fc00::', 7, 'ipv6');
 INTERNAL_V6.addSubnet('fe80::', 10, 'ipv6');
@@ -213,7 +216,8 @@ export function isInternalIp(address: string): boolean {
 
 /**
  * True for localhost, names ending in .localhost / .local / .internal (a trailing dot is
- * ignored), and IP literals in loopback, private, link-local or unique-local ranges.
+ * ignored), and IP literals in loopback, unspecified (0.0.0.0/8, ::), private, CGNAT
+ * (100.64.0.0/10), link-local or unique-local ranges.
  */
 export function isInternalHostname(host: string): boolean {
   const name = host.trim().toLowerCase().replace(/\.+$/, '');
@@ -226,8 +230,9 @@ export function isInternalHostname(host: string): boolean {
 
 /**
  * Resolves the URL's host and rejects if any address is internal. IP literals and reserved
- * names are rejected without a lookup. Called at registration and again at delivery, so a
- * name that later starts pointing at an internal address is not contacted (DNS rebinding).
+ * names are rejected without a lookup. Called at registration and again at delivery, which
+ * narrows DNS rebinding: a name that resolves to an internal address at either check is
+ * refused. The request that follows resolves the name again, so this does not pin the address.
  */
 export async function assertPublicWakeUrl(url: string, lookup: DnsLookup = dnsLookup): Promise<{ ok: true } | { ok: false; error: string }> {
   let hostname: string;

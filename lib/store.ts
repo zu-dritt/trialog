@@ -1297,7 +1297,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     async listWakeTargets() {
       await ensure();
       const rows = await db.query(`SELECT participant, url, updated_at FROM wake_targets ORDER BY participant`, []);
-      return rows.map((r) => ({ participant: String(r.participant), url: String(r.url), updated_at: String(r.updated_at) }));
+      return rows.map((r) => ({ participant: String(r.participant) as Sender, url: String(r.url), updated_at: iso(r.updated_at)! }));
     },
     async takeWakeTestSlot(participant, limitPerMin = WAKE_TEST_PER_MIN) {
       await ensure();

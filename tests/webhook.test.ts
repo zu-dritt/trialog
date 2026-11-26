@@ -295,6 +295,15 @@ for (const [name, make] of STORES) {
     assert.deepEqual(await store.claimWakeup(), second, 'the released range can be claimed again');
   });
 
+  test(`${name}: listWakeTargets returns updated_at as ISO 8601`, async () => {
+    const store = await make();
+    await store.setWakeTarget('grok', CONFIG.url, CONFIG.secret);
+    const [row] = await store.listWakeTargets();
+    assert.equal(row.participant, 'grok');
+    assert.equal(row.url, CONFIG.url);
+    assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
   test(`${name}: two delivery jobs never send the same wake twice`, async () => {
     const store = await make();
     const message = await store.add({ sender: 'david', recipient: 'grok', text: 'only once' });
