@@ -6,7 +6,8 @@
 import { useState } from 'react';
 import type { Message } from '../lib/core';
 import type { DecisionCard, DecisionStance, Participant, Sender } from '../lib/shared';
-import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, labelOf } from '../lib/shared';
+import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, labelOf } from '../lib/shared';
+import { cardIsAgreed } from './pinned-bar';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 const ANSWER = 'cursor-pointer rounded-md border px-2.5 py-1 text-[13px] font-semibold disabled:opacity-50';
@@ -75,7 +76,7 @@ export function DecisionCardView({
   onPosition?: (cardId: string, stance: DecisionStance, note: string | null) => void;
 }) {
   const roster = participants.map((p) => p.name);
-  const agreed = Boolean(card.agreed_at) || decisionIsAgreed(card, roster);
+  const agreed = cardIsAgreed(card, roster);
   const byName = new Map(card.positions.map((p) => [p.participant, p]));
   const mine = me ? byName.get(me) : undefined;
   const [note, setNote] = useState(mine?.note ?? '');

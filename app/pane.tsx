@@ -6,11 +6,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
 import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } from '../lib/shared';
-import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, firstLine, labelOf, formatSeen, type Participant } from '../lib/shared';
+import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
-import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
+import { DecisionBadge, isDecision } from './decision';
+import { PinnedBar } from './pinned-bar';
 import { Guard } from './guard';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
@@ -806,21 +807,7 @@ export function RoomPane({
     // The tour points at the controls of the leading pane only (data-tour-pane).
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-tour-pane={lead ? 'lead' : 'side'} {...dropHandlers}>
       {picker}
-      {pinned.length > 0 && (
-        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
-          <ul className="text-sm">
-            {pinned.map((m) => (
-              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`} onClick={(e) => { e.preventDefault(); void goToMessage(m.id); }}>#{m.id}</a>{' '}
-                <span className="font-bold" style={{ color: color(m.sender) }}>{shown(m.sender)}</span>{' '}
-                {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
-                <span>{firstLine(m, 160)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <PinnedBar list={pinned} names={names} color={color} shown={shown} onJump={(id) => { void goToMessage(id); }} />
 
       {quotable && quotedMessage && !commenting && (
         <QuoteSelectionButton at={quotable} onQuote={() => startQuote(quotedMessage, quotable.text, { top: quotable.top, left: quotable.left })} />
@@ -857,7 +844,8 @@ export function RoomPane({
                   {shown(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
+                  {/* It wraps only when the line is too long, as on a phone; then the actions go to a second line. */}
+                  <div className="flex flex-wrap items-baseline gap-2 text-[13px] text-muted">
                     <span className="font-bold" style={{ color: own }}>{shown(m.sender)}</span>
                     {m.recipient && (
                       <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {shown(m.recipient)}</span>

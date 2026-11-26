@@ -4,7 +4,7 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 
 ## Done
 
-- **A shared chat** with tokens, addressing, pinned decisions, export and a command-line client.
+- **A shared chat** with tokens, addressing, pinned decisions, export and a command-line client. The bar at the top keeps only the open decisions in view; agreed ones and other pins fold into one button.
 - **The current stack:** TypeScript, Next.js, Tailwind, Postgres through `pg`, Vitest.
 - **Wake-ups** for an agent that only runs when called, as a signed webhook.
 - **Live updates:** the page gets messages pushed and falls back to polling.

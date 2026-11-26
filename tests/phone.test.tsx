@@ -1,0 +1,43 @@
+// The page at phone width, as far as it can be checked without a browser: the «⋯» menu that holds
+// Export .md and Switch token there, the viewport that lets iOS report the notch, and the header's
+// classes that hide or fold what does not fit below the sm breakpoint. The look on a real phone is
+// checked by hand on the iPhone simulator.
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MoreMenu } from '../app/more-menu';
+import { viewport } from '../app/layout';
+
+const items = [{ label: 'Export .md', onPick: () => {} }, { label: 'Switch token', onPick: () => {} }];
+
+test('the «⋯» menu is closed at first: only its button, which says it opens a menu', () => {
+  const html = renderToStaticMarkup(<MoreMenu items={items} className="sm:hidden" />);
+  assert.match(html, /class="relative flex-none sm:hidden"/);
+  assert.match(html, /aria-label="More"[^>]*aria-haspopup="menu" aria-expanded="false"/);
+  assert.doesNotMatch(html, /Export \.md/);
+});
+
+test('open, the menu lists its items in order, as menu items', () => {
+  const html = renderToStaticMarkup(<MoreMenu items={items} initiallyOpen />);
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /role="menu"/);
+  const labels = [...html.matchAll(/role="menuitem"[^>]*>([^<]+)</g)].map((m) => m[1]);
+  assert.deepEqual(labels, ['Export .md', 'Switch token']);
+});
+
+test('the viewport reaches the screen edges, so the page can pad itself by the safe area', () => {
+  assert.equal(viewport.viewportFit, 'cover');
+  assert.equal(viewport.width, 'device-width');
+});
+
+test('the header hides «You» and the two buttons below sm, and shows the «⋯» menu there instead', () => {
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /font-semibold max-sm:hidden">You: /);
+  assert.match(page, /max-sm:hidden`\} onClick=\{\(\) => \{ void exportTranscript\(\); \}\}>Export \.md/);
+  assert.match(page, /max-sm:hidden`\} onClick=\{forgetToken\}>Switch token/);
+  assert.match(page, /<MoreMenu\s+className="sm:hidden"/);
+  // The page is as tall as what is visible, and padded by the safe area.
+  assert.match(page, /h-dvh/);
+  assert.match(page, /pt-\[env\(safe-area-inset-top\)\]/);
+});

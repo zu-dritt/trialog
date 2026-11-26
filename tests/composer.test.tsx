@@ -185,9 +185,9 @@ test('the row under the message box: recipient, then emoji, image, decision, pol
   assert.ok(!/\border-(first|last|\d+|\[)/.test(row), row);
   assert.ok(!row.includes('flex-row-reverse'), row);
   // The picker offers everyone and each participant; Send is the only button that sends.
-  assert.match(row, /<select aria-label="Recipient" class="f"><option value="" selected="">to everyone<\/option><option value="ana">to Ana<\/option><option value="quill-2">to Quill-2<\/option><\/select>/);
+  assert.match(row, /<select aria-label="Recipient" class="f min-w-0 max-w-full"><option value="" selected="">to everyone<\/option><option value="ana">to Ana<\/option><option value="quill-2">to Quill-2<\/option><\/select>/);
   assert.deepEqual([...row.matchAll(/<button type="(\w+)"/g)].map((m) => m[1]), ['button', 'button', 'button', 'button', 'button', 'submit']);
-  assert.match(row, /<button type="submit" class="t ml-auto md:ml-0" disabled="">Send<\/button>/);
+  assert.match(row, /<button type="submit" class="t ml-auto flex-none md:ml-0" disabled="">Send<\/button>/);
   // The keyboard hint stands between the actions and Send.
   assert.ok(row.indexOf('Enter sends') > row.indexOf('Enlarge the message box') && row.indexOf('Enter sends') < row.indexOf('>Send<'));
   // Decision and Poll say whether their form is open, and which form that is.
