@@ -1,10 +1,10 @@
-// The "a newer version is available" note: when it shows, what it looks like, and how the page
-// learns which build the server runs. Reloading itself needs a browser and two builds, and is
-// checked by hand (see the pull request).
+// The "New version available" pill: when the page knows of another build, what the pill looks
+// like, and how the page learns which build the server runs. Reloading itself needs a browser and
+// two builds, and is checked by hand (see the pull request).
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { NewVersionNotice, showNewVersion } from '../app/version';
+import { NEW_VERSION_HINT, NewVersionPill } from '../app/version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { createMemoryStore } from '../lib/store';
@@ -20,25 +20,36 @@ test('another build is one whose id differs; a missing id never counts', () => {
   assert.equal(BUILD_ID, 'dev', 'where no build set an id, as in these tests');
 });
 
-test('the note shows for another build until it is put away, and again for the next one', () => {
-  const show = (server: string | null, dismissed: string | null) => showNewVersion('build-1', server, dismissed, isOtherBuild);
-  assert.equal(show(null, null), false, 'before the server has said anything');
-  assert.equal(show('build-1', null), false, 'the same build');
-  assert.equal(show('build-2', null), true, 'a newer one was deployed');
-  assert.equal(show('build-2', 'build-2'), false, 'put away by the reader');
-  assert.equal(show('build-3', 'build-2'), true, 'yet another build: it comes back');
-  assert.equal(show('build-1', 'build-2'), false, 'back on the page\'s own build: nothing to say');
+test('the pill is one button that says "New version available" and what a click does', () => {
+  const out = renderToStaticMarkup(<NewVersionPill onReload={() => {}} />);
+  // One real button and nothing else: reachable with Tab, pressed with Enter or Space.
+  assert.match(out, /^<button type="button"[^>]*>.*<\/button>$/);
+  assert.equal(out.match(/<button/g)?.length, 1);
+  // The words are there as text.
+  assert.equal(out.replace(/<[^>]+>/g, ''), 'New version available');
+  // The tooltip says what the click does, and the name a screen reader reads starts with the visible words.
+  assert.equal(NEW_VERSION_HINT, 'Reload to get the newest version. Your unsent message is kept.');
+  assert.ok(out.includes(`title="${NEW_VERSION_HINT}"`), out);
+  assert.ok(out.includes(`aria-label="New version available. ${NEW_VERSION_HINT}"`), out);
+  // The dot in front is decoration.
+  assert.match(out, /<span aria-hidden="true"[^>]*><\/span>/);
+  // Quiet: shaped as a pill, and nothing in it moves.
+  assert.match(out, /class="[^"]*\brounded-full\b/);
+  assert.ok(!/animate|transition|blink|pulse/.test(out), out);
+  // No link, no script, no timer in the markup, and nothing about where the page is hosted.
+  assert.ok(!/<a |<script|http|refresh/i.test(out), out);
 });
 
-test('the note says what happened and offers Reload and a way to put it away, nothing more', () => {
-  const out = renderToStaticMarkup(<NewVersionNotice onReload={() => {}} onDismiss={() => {}} />);
-  assert.match(out, /^<div role="status" aria-live="polite"/, 'announced quietly, not as an alert');
-  assert.match(out, /A newer version of Trialog is available\./);
-  const buttons = [...out.matchAll(/<button type="button"([^>]*)>([^<]*)<\/button>/g)].map((m) => [m[2], /aria-label="([^"]*)"/.exec(m[1])?.[1] ?? null]);
-  assert.deepEqual(buttons, [['Reload', null], ['×', 'Dismiss this note']]);
-  assert.match(out, /title="Load the newer version\. The text of an unsent message is kept\."/);
-  // It is a note with two buttons: no link, no script, no timer in the markup, and nothing about where the page is hosted.
-  assert.ok(!/<a |<script|http|refresh/i.test(out), out);
+test('the pill takes a class from the page, which places it', () => {
+  assert.match(renderToStaticMarkup(<NewVersionPill onReload={() => {}} className="max-md:hidden" />), /class="[^"]* max-md:hidden"/);
+});
+
+test('a click on the pill asks for the reload; rendering it does not', () => {
+  let reloads = 0;
+  const pill = NewVersionPill({ onReload: () => { reloads += 1; } });
+  assert.equal(reloads, 0, 'the page never reloads by itself');
+  pill.props.onClick();
+  assert.equal(reloads, 1);
 });
 
 /** Reads a stream to its end and returns its events. */
