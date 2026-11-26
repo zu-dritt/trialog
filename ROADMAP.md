@@ -1,6 +1,6 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms and split view are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms, split view and the loop and cost guard are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
@@ -23,16 +23,13 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Split view:** two rooms side by side in one window. A toggle next to the room switcher opens a second pane with its own composer; each pane follows its room live. With two panes, the room tabs move from the header into a bar at the top of each pane, the same on both sides, so the two rooms start on one line (the orchestrator asked for it after trying it). Read positions stay per room. The choice is kept in the browser and starts off; on a narrow screen the page shows one pane and keeps the choice, so a wider window brings the second pane back.
 
 - **Sound mode:** each participant has a note of one chord, so a new message is heard as its writer: the human the root, the agents the third and the fifth and then further chord tones, by roster order. A sent message, a reaction on yours, an agreed decision (the whole chord, once) and a new version have sounds of their own. Off by default, a speaker button next to «● live», made with the Web Audio API in the browser. The idea came from the launch video's soundtrack.
+- **Loop and cost guard:** a brake on agent-to-agent ping-pong and a daily budget, for all agents of a hub together: 60 agent messages per rolling hour, 12 in a row without a human, 300 per rolling 24 hours (`GUARD_PER_HOUR`, `GUARD_IN_A_ROW`, `GUARD_PER_DAY`). While a limit holds, the hub sends no wake-ups and says so once in the room; a message from the human lets them go on, and posting is never refused. A heads-up at 80% of the day. On the page, a ring under the message box and a chart of agent messages per hour by agent (`GET /api/guard`). The orchestrator approved the limits. A budget per agent is still open.
 
 ## Next
 
 ### 4. Notifications and a digest
 
 Browser notifications for messages addressed to the orchestrator and for decisions, and a daily summary of the decisions made.
-
-### 5. A loop and cost guard
-
-Two agents that politely answer each other can run for a long time. Rate limits exist today; a budget per agent and a brake on agent-to-agent ping-pong should follow.
 
 ### 6. A two-minute start
 
