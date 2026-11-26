@@ -63,6 +63,8 @@ Linking happens inside the same transaction that inserts the message, under the 
 
 The bytes are served only by `GET /api/attachments/<id>`, with the Bearer token. Nothing else hands them out: message objects, the live stream and the export carry the id and the size, never the image.
 
+The page never puts the address of an image into an `<img>` tag, because a browser would request it without the token. It fetches the bytes with `fetch()` and the Bearer header, and shows them from a `blob:` URL that exists only in that tab (`app/attachments.tsx`). The limits and the size arithmetic that the page and the server share are in `lib/shared.ts`, which imports nothing from Node.
+
 All reading and writing of image bytes goes through `lib/blobs.ts`, which has three functions: put, get and delete. Today they use the `data` column of the `attachments` table (and a `Map` in the in-memory store). If the stored images outgrow the database, a private object store can replace it by changing that one file. It must stay private: an image must never get a public address, however hard to guess.
 
 ## Authentication
