@@ -16,6 +16,7 @@ import {
   DOWNSIZE_LONG_EDGE, IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_SCALE_HINT, SCALE_HINT_HEADER,
   downsizePlan, fitWithin, ownSize, pngDensity, scaleFromDensity, validScale, type Attachment,
 } from '../lib/shared';
+import { Chip } from './chips';
 
 export const ACCEPT = IMAGE_TYPES.join(',');
 const THUMB_MAX = { width: 320, height: 240 };
@@ -193,23 +194,22 @@ export function withoutSent(drafts: Draft[], sent: Draft[]): Draft[] {
   return drafts.filter((d) => !gone.has(d.key));
 }
 
+/** The images above the message box, as chips. The page puts them into its one row of chips. */
 export function DraftChips({ drafts, onRemove }: { drafts: Draft[]; onRemove: (key: number) => void }) {
-  if (!drafts.length) return null;
   return (
-    <ul className="mb-2 flex flex-wrap gap-2" aria-label="Images to send">
+    <>
       {drafts.map((d) => (
-        <li key={d.key} className={`flex items-center gap-2 rounded-md border bg-panel py-1 pl-1 pr-1.5 text-[13px] ${d.state === 'failed' ? 'border-bad' : 'border-line'}`}>
-          <img src={d.preview} alt="" className={`h-10 w-10 rounded object-cover ${d.state === 'uploading' ? 'opacity-50' : ''}`} />
-          <span className="max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap">
-            {d.state === 'uploading' && <span className="text-muted">uploading…</span>}
-            {d.state === 'ready' && d.attachment && <span className="text-muted">{sizeLabel(d.attachment)}</span>}
-            {d.state === 'failed' && <span className="text-bad" title={d.error}>{d.error}</span>}
-          </span>
-          <button type="button" onClick={() => onRemove(d.key)} aria-label={`Remove image ${d.name}`} title="Remove"
-            className="cursor-pointer rounded border-none bg-transparent px-1 text-base leading-none text-muted hover:text-fg">×</button>
-        </li>
+        <Chip
+          key={d.key} tone={d.state === 'failed' ? 'bad' : 'plain'} title={d.state === 'failed' ? d.error : d.name}
+          visual={<img src={d.preview} alt="" className={`h-7 w-7 rounded object-cover ${d.state === 'uploading' ? 'opacity-50' : ''}`} />}
+          onRemove={() => onRemove(d.key)} removeLabel={`Remove image ${d.name}`}
+        >
+          {d.state === 'uploading' && <span className="text-muted">uploading…</span>}
+          {d.state === 'ready' && d.attachment && <span className="text-muted">{sizeLabel(d.attachment)}</span>}
+          {d.state === 'failed' && <span className="text-bad">{d.error}</span>}
+        </Chip>
       ))}
-    </ul>
+    </>
   );
 }
 
