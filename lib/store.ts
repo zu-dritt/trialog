@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import {
   MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
-  type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Sender,
+  type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
 } from './core';
 
 export type Row = Record<string, unknown>;
@@ -52,6 +52,24 @@ export class AttachmentLinkError extends Error {
     this.name = 'AttachmentLinkError';
   }
 }
+/** Thrown by poll vote, unvote and close when the action is not allowed. */
+export class PollError extends Error {
+  constructor(readonly reason: 'not found' | 'closed' | 'not the creator' | 'bad option') {
+    super({
+      'not found': 'Poll not found.',
+      closed: 'This poll is closed.',
+      'not the creator': 'Only the creator can close this poll.',
+      'bad option': 'That option is not on this poll.',
+    }[reason]);
+    this.name = 'PollError';
+  }
+}
+export interface NewPoll {
+  creator: Sender;
+  question: string;
+  options: string[];
+  recipient?: Sender | null;
+}
 export interface ListOptions {
   since?: number | null;
   to?: Sender | null;
@@ -73,6 +91,8 @@ export interface SetStatusInput {
 export interface StreamVersion {
   last_id: number;
   pins: string;
+  /** Fingerprint of poll rows and votes, so the live stream can push tally changes. */
+  polls: string;
 }
 export interface Store {
   ensure(): Promise<void>;
@@ -115,6 +135,21 @@ export interface Store {
   clearStatus(participant: Sender): Promise<boolean>;
   /** Active (non-expired) statuses for all participants; lazily drops expired rows. */
   listStatuses(): Promise<ParticipantStatus[]>;
+  /**
+   * Creates a message and an attached poll in one transaction.
+   * Returns null when the sender is over the message rate limit.
+   */
+  createPoll(input: NewPoll, limitPerMin?: number): Promise<{ message: Message; poll: Poll } | null>;
+  getPoll(id: string): Promise<Poll | null>;
+  listPolls(): Promise<Poll[]>;
+  /** Every message that has a poll, with the current tally, oldest first. */
+  listPollMessages(): Promise<Message[]>;
+  /** Records or changes the caller's vote. */
+  vote(pollId: string, participant: Sender, option: number): Promise<Poll>;
+  /** Withdraws the caller's vote. `withdrawn` is false when they had no vote. */
+  unvote(pollId: string, participant: Sender): Promise<{ poll: Poll; withdrawn: boolean }>;
+  /** Closes the poll. Only the creator may do this. Idempotent if already closed. */
+  closePoll(pollId: string, participant: Sender): Promise<Poll>;
 }
 
 const SCHEMA = [
@@ -162,16 +197,71 @@ const SCHEMA = [
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS participant_status_expires_at ON participant_status (expires_at)`,
+  // Polls and votes (migrations/004-polls.sql).
+  // polls_creator_is_participant and poll_votes_participant_is_participant
+  // are named so they can be dropped when participants become configurable.
+  `CREATE TABLE IF NOT EXISTS polls (
+  id          TEXT PRIMARY KEY CHECK (id ~ '^poll_[a-z0-9]+$'),
+  message_id  BIGINT NOT NULL UNIQUE REFERENCES messages (id) ON DELETE CASCADE,
+  creator     TEXT NOT NULL,
+  question    TEXT NOT NULL CHECK (char_length(question) BETWEEN 1 AND 200),
+  options     TEXT[] NOT NULL,
+  closed_at   TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT polls_creator_is_participant CHECK (creator IN ('grok', 'claude', 'david')),
+  CONSTRAINT polls_options_shape CHECK (
+    cardinality(options) BETWEEN 2 AND 10
+    AND array_position(options, NULL) IS NULL
+    AND char_length(options[1]) BETWEEN 1 AND 80
+    AND char_length(options[2]) BETWEEN 1 AND 80
+    AND char_length(options[3]) BETWEEN 1 AND 80
+    AND char_length(options[4]) BETWEEN 1 AND 80
+    AND char_length(options[5]) BETWEEN 1 AND 80
+    AND char_length(options[6]) BETWEEN 1 AND 80
+    AND char_length(options[7]) BETWEEN 1 AND 80
+    AND char_length(options[8]) BETWEEN 1 AND 80
+    AND char_length(options[9]) BETWEEN 1 AND 80
+    AND char_length(options[10]) BETWEEN 1 AND 80
+  )
+)`,
+  `CREATE TABLE IF NOT EXISTS poll_votes (
+  poll_id      TEXT NOT NULL REFERENCES polls (id) ON DELETE CASCADE,
+  participant  TEXT NOT NULL,
+  option_index SMALLINT NOT NULL CHECK (option_index >= 1 AND option_index <= 10),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (poll_id, participant),
+  CONSTRAINT poll_votes_participant_is_participant CHECK (participant IN ('grok', 'claude', 'david'))
+)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
 const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at';
 const ATTACHMENT_COLS = 'id, content_type, width, height, bytes';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
+const POLL_JSON = `json_build_object(
+  'id', p.id,
+  'message_id', p.message_id,
+  'creator', p.creator,
+  'question', p.question,
+  'closed_at', p.closed_at,
+  'created_at', p.created_at,
+  'options', (
+    SELECT coalesce(json_agg(json_build_object(
+      'index', i,
+      'text', p.options[i],
+      'votes', (SELECT count(*)::int FROM poll_votes v WHERE v.poll_id = p.id AND v.option_index = i),
+      'voters', (SELECT coalesce(json_agg(v.participant ORDER BY v.updated_at, v.participant), '[]'::json)
+                 FROM poll_votes v WHERE v.poll_id = p.id AND v.option_index = i)
+    ) ORDER BY i), '[]'::json)
+    FROM generate_subscripts(p.options, 1) AS i
+  )
+)`;
 const COLS = `${BASE_COLS},
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
             'width', a.width, 'height', a.height, 'bytes', a.bytes) ORDER BY a.position, a.id), '[]'::json)
-     FROM attachments a WHERE a.message_id = messages.id) AS attachments`;
+     FROM attachments a WHERE a.message_id = messages.id) AS attachments,
+  (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll`;
 // Inserts take a transaction-level advisory lock so ids are committed in order: a poller asking
 // for "since=<id>" can never skip a message that committed late with a lower id. Transaction-level
 // locks work behind Neon's pooler (PgBouncer in transaction mode).
@@ -181,6 +271,11 @@ const LOCK_ID = 7230418;
 const UPLOAD_LOCK_ID = 7230419;
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
+const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
+const POLLS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM polls) || ':' ||
+  (SELECT count(*)::text FROM poll_votes) || ':' ||
+  (SELECT coalesce(max(updated_at)::text, '') FROM poll_votes) || ':' ||
+  (SELECT coalesce(max(closed_at)::text, '') FROM polls)`;
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
@@ -205,6 +300,30 @@ const toStatus = (r: Row): ParticipantStatus => ({
   expires_at: iso(r.expires_at) as string,
   updated_at: iso(r.updated_at) as string,
 });
+const toPoll = (v: unknown): Poll | null => {
+  const raw = typeof v === 'string' ? JSON.parse(v) as unknown : v;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Row;
+  if (r.id == null) return null;
+  const optionsRaw = typeof r.options === 'string' ? JSON.parse(r.options as string) as unknown : r.options;
+  const options = Array.isArray(optionsRaw) ? optionsRaw.map((item) => {
+    const o = item as Row;
+    const votersRaw = o.voters;
+    const voters = Array.isArray(votersRaw)
+      ? votersRaw.filter((name): name is Sender => typeof name === 'string')
+      : [];
+    return { index: Number(o.index), text: String(o.text), votes: Number(o.votes), voters };
+  }) : [];
+  return {
+    id: String(r.id),
+    message_id: Number(r.message_id),
+    creator: r.creator as Sender,
+    question: String(r.question),
+    options,
+    closed_at: iso(r.closed_at),
+    created_at: iso(r.created_at) as string,
+  };
+};
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -213,6 +332,7 @@ const toMessage = (r: Row): Message => ({
   created_at: iso(r.created_at) as string,
   pinned_at: iso(r.pinned_at),
   attachments: toAttachments(r.attachments),
+  poll: toPoll(r.poll),
 });
 
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
@@ -364,10 +484,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       await ensure();
       const [row] = await db.query(
         `SELECT (SELECT coalesce(max(id), 0) FROM messages) AS last_id,
-                (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages WHERE pinned_at IS NOT NULL) AS pins`,
+                (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages WHERE pinned_at IS NOT NULL) AS pins,
+                ${POLLS_FINGERPRINT_SQL} AS polls`,
         [],
       );
-      return { last_id: Number(row.last_id), pins: String(row.pins) };
+      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls) };
     },
     async claimWakeup() {
       await ensure();
@@ -428,6 +549,104 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       );
       return rows.map(toStatus);
     },
+    async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+      await ensure();
+      const id = newPollId();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
+        const [{ n }] = await tx.query(
+          `SELECT count(*)::int AS n FROM messages WHERE sender = $1::text AND created_at > now() - interval '60 seconds'`,
+          [creator],
+        );
+        if ((n as number) >= limitPerMin) return null;
+        const rows = await tx.query(
+          `INSERT INTO messages (sender, recipient, text)
+           VALUES ($1::text, $2::text, $3::text)
+           RETURNING ${BASE_COLS}`,
+          [creator, recipient, question],
+        );
+        await tx.query(
+          `INSERT INTO polls (id, message_id, creator, question, options)
+           VALUES ($1::text, $2::bigint, $3::text, $4::text, $5::text[])`,
+          [id, rows[0].id, creator, question, options],
+        );
+        const [pollRow] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [id]);
+        const poll = toPoll(pollRow.poll);
+        if (!poll) throw new Error('poll was not stored');
+        return { message: { ...toMessage(rows[0]), attachments: [], poll }, poll };
+      });
+    },
+    async getPoll(id) {
+      await ensure();
+      const [row] = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [id]);
+      return row ? toPoll(row.poll) : null;
+    },
+    async listPolls() {
+      await ensure();
+      const rows = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p ORDER BY p.created_at, p.id`, []);
+      return rows.map((r) => toPoll(r.poll)).filter((p): p is Poll => p !== null);
+    },
+    async listPollMessages() {
+      await ensure();
+      const rows = await db.query(
+        `SELECT ${COLS} FROM messages WHERE id IN (SELECT message_id FROM polls) ORDER BY id`,
+        [],
+      );
+      return rows.map(toMessage);
+    },
+    async vote(pollId, participant, option) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        const [poll] = await tx.query(
+          `SELECT id, closed_at, cardinality(options) AS n FROM polls WHERE id = $1::text FOR UPDATE`,
+          [pollId],
+        );
+        if (!poll) throw new PollError('not found');
+        if (poll.closed_at) throw new PollError('closed');
+        if (option < 1 || option > Number(poll.n)) throw new PollError('bad option');
+        await tx.query(
+          `INSERT INTO poll_votes (poll_id, participant, option_index)
+           VALUES ($1::text, $2::text, $3::int)
+           ON CONFLICT (poll_id, participant) DO UPDATE
+             SET option_index = EXCLUDED.option_index, updated_at = now()`,
+          [pollId, participant, option],
+        );
+        const [row] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
+        const result = toPoll(row.poll);
+        if (!result) throw new PollError('not found');
+        return result;
+      });
+    },
+    async unvote(pollId, participant) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        const [poll] = await tx.query(`SELECT id, closed_at FROM polls WHERE id = $1::text FOR UPDATE`, [pollId]);
+        if (!poll) throw new PollError('not found');
+        if (poll.closed_at) throw new PollError('closed');
+        const gone = await tx.query(
+          `DELETE FROM poll_votes WHERE poll_id = $1::text AND participant = $2::text RETURNING participant`,
+          [pollId, participant],
+        );
+        const [row] = await tx.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
+        const result = toPoll(row.poll);
+        if (!result) throw new PollError('not found');
+        return { poll: result, withdrawn: gone.length > 0 };
+      });
+    },
+    async closePoll(pollId, participant) {
+      await ensure();
+      const [existing] = await db.query(`SELECT creator, closed_at FROM polls WHERE id = $1::text`, [pollId]);
+      if (!existing) throw new PollError('not found');
+      if (existing.creator !== participant) throw new PollError('not the creator');
+      await db.query(
+        `UPDATE polls SET closed_at = coalesce(closed_at, now()) WHERE id = $1::text`,
+        [pollId],
+      );
+      const [row] = await db.query(`SELECT ${POLL_JSON} AS poll FROM polls p WHERE p.id = $1::text`, [pollId]);
+      const result = toPoll(row.poll);
+      if (!result) throw new PollError('not found');
+      return result;
+    },
   };
 }
 
@@ -443,12 +662,56 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], poll: null, ...r };
     rows.push(m);
     return m;
   };
   push({ sender: 'hub', text: WELCOME_TEXT });
-  const copy = (m: Message): Message => ({ ...m, attachments: m.attachments.map((a) => ({ ...a })) });
+  type PollRow = { id: string; message_id: number; creator: Sender; question: string; options: string[]; closed_at: string | null; created_at: string };
+  type VoteRow = { poll_id: string; participant: Sender; option_index: number; created_at: string; updated_at: string };
+  const pollRows = new Map<string, PollRow>();
+  const voteRows = new Map<string, VoteRow>();
+  const voteKey = (pollId: string, participant: Sender) => `${pollId}\0${participant}`;
+  const assemblePoll = (row: PollRow): Poll => ({
+    id: row.id,
+    message_id: row.message_id,
+    creator: row.creator,
+    question: row.question,
+    closed_at: row.closed_at,
+    created_at: row.created_at,
+    options: row.options.map((optText, i) => {
+      const index = i + 1;
+      const voters = [...voteRows.values()]
+        .filter((v) => v.poll_id === row.id && v.option_index === index)
+        .sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.participant.localeCompare(b.participant))
+        .map((v) => v.participant);
+      return { index, text: optText, votes: voters.length, voters };
+    }),
+  });
+  const pollForMessage = (messageId: number): Poll | null => {
+    const row = [...pollRows.values()].find((p) => p.message_id === messageId);
+    return row ? assemblePoll(row) : null;
+  };
+  const pollsFingerprint = (): string => {
+    const voteList = [...voteRows.values()];
+    const maxVote = voteList.reduce((latest, v) => (latest === '' || v.updated_at > latest ? v.updated_at : latest), '');
+    const maxClosed = [...pollRows.values()].reduce((latest, p) => {
+      if (!p.closed_at) return latest;
+      return latest === '' || p.closed_at > latest ? p.closed_at : latest;
+    }, '');
+    return `${pollRows.size}:${voteRows.size}:${maxVote}:${maxClosed}`;
+  };
+  const requireOpenPoll = (pollId: string): PollRow => {
+    const row = pollRows.get(pollId);
+    if (!row) throw new PollError('not found');
+    if (row.closed_at) throw new PollError('closed');
+    return row;
+  };
+  const copy = (m: Message): Message => ({
+    ...m,
+    attachments: m.attachments.map((a) => ({ ...a })),
+    poll: pollForMessage(m.id),
+  });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
@@ -504,7 +767,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
     },
     async all() { return rows.map(copy); },
     async version() {
-      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(',') };
+      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint() };
     },
     async claimWakeup() {
       const fresh = rows.filter((m) => m.id > lastNotifiedId && wakesGrok(m));
@@ -540,6 +803,65 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       return [...statuses.values()]
         .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || a.participant.localeCompare(b.participant))
         .map((s) => ({ ...s }));
+    },
+    async createPoll({ creator, question, options, recipient = null }, limitPerMin = RATE_LIMIT_PER_MIN) {
+      const cutoff = now() - 60_000;
+      const recent = rows.filter((m) => m.sender === creator && Date.parse(m.created_at) > cutoff).length;
+      if (recent >= limitPerMin) return null;
+      const m = push({ sender: creator, recipient: recipient ?? null, text: question });
+      const row: PollRow = {
+        id: newPollId(),
+        message_id: m.id,
+        creator,
+        question,
+        options: [...options],
+        closed_at: null,
+        created_at: m.created_at,
+      };
+      pollRows.set(row.id, row);
+      const poll = assemblePoll(row);
+      return { message: copy(m), poll };
+    },
+    async getPoll(id) {
+      const row = pollRows.get(id);
+      return row ? assemblePoll(row) : null;
+    },
+    async listPolls() {
+      return [...pollRows.values()]
+        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
+        .map(assemblePoll);
+    },
+    async listPollMessages() {
+      return rows.filter((m) => pollForMessage(m.id)).map(copy);
+    },
+    async vote(pollId, participant, option) {
+      const row = requireOpenPoll(pollId);
+      if (option < 1 || option > row.options.length) throw new PollError('bad option');
+      const current = timestamp();
+      const key = voteKey(pollId, participant);
+      const existing = voteRows.get(key);
+      voteRows.set(key, {
+        poll_id: pollId,
+        participant,
+        option_index: option,
+        created_at: existing?.created_at ?? current,
+        updated_at: current,
+      });
+      return assemblePoll(row);
+    },
+    async unvote(pollId, participant) {
+      requireOpenPoll(pollId);
+      const withdrawn = voteRows.delete(voteKey(pollId, participant));
+      const row = pollRows.get(pollId);
+      if (!row) throw new PollError('not found');
+      return { poll: assemblePoll(row), withdrawn };
+    },
+    async closePoll(pollId, participant) {
+      const row = pollRows.get(pollId);
+      if (!row) throw new PollError('not found');
+      if (row.creator !== participant) throw new PollError('not the creator');
+      row.closed_at = row.closed_at ?? timestamp();
+      return assemblePoll(row);
     },
   };
 }

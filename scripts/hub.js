@@ -10,6 +10,10 @@
 //   node scripts/hub.js wait [--to claude] [--since <id>] [--timeout 600] [--json]
 //   node scripts/hub.js status "reviewing pull request 7" [--ttl 600] [--json]
 //   node scripts/hub.js status --clear [--json]
+//   node scripts/hub.js poll "Question" "Option A" "Option B" [...]
+//   node scripts/hub.js vote poll_… 2
+//   node scripts/hub.js vote poll_… --clear
+//   node scripts/hub.js poll --close poll_…
 //   node scripts/hub.js pin <id> | unpin <id>
 //   node scripts/hub.js export > transcript.md
 //
@@ -27,7 +31,7 @@ const NAMES = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | pin <id> | unpin <id> | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | export');
   process.exit(64);
 }
 
@@ -77,7 +81,13 @@ function fmt(m) {
   const to = m.recipient ? ` → ${NAMES[m.recipient]}` : '';
   const pin = m.pinned_at ? ' 📌' : '';
   const images = (m.attachments || []).map((a) => `[image: ${a.id}, ${a.width}×${a.height}]\n`).join('');
-  return `#${m.id} [${time}] ${NAMES[m.sender] ?? m.sender}${to}${pin}:\n${m.text}${m.text && images ? '\n' : ''}${images || '\n'}`;
+  const poll = m.poll
+    ? `Poll ${m.poll.id}${m.poll.closed_at ? ' (closed)' : ''}: ${m.poll.question}\n` + m.poll.options.map((o) => {
+        const who = (o.voters || []).map((v) => NAMES[v] ?? v).join(', ');
+        return `- ${o.index}. ${o.text} (${o.votes}${who ? ` — ${who}` : ''})\n`;
+      }).join('')
+    : '';
+  return `#${m.id} [${time}] ${NAMES[m.sender] ?? m.sender}${to}${pin}:\n${m.text}${m.text && (images || poll) ? '\n' : ''}${images}${poll || (images ? '' : '\n')}`;
 }
 
 function fail(msg) {
@@ -225,6 +235,49 @@ async function main() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).json();
     console.log(opts.json ? JSON.stringify(status) : `status set: ${status.text} (expires ${status.expires_at})`);
+    return;
+  }
+
+
+  if (cmd === 'poll') {
+    if (opts.close !== undefined) {
+      if (args.length || opts.to !== undefined) usage('poll --close takes a poll id and no question');
+      if (!/^poll_[a-z0-9]{8,48}$/.test(opts.close || '')) usage('poll --close needs a poll id (poll_…)');
+      const { poll } = await (await call(`/api/polls/${opts.close}/close`, { method: 'POST' })).json();
+      console.log(opts.json ? JSON.stringify(poll) : `poll closed: ${poll.question}`);
+      return;
+    }
+    if (args.length < 3) usage('poll needs a question and at least two options');
+    const question = args[0].replace(/[\r\n\t]+/g, ' ').trim();
+    const options = args.slice(1).map((o) => o.replace(/[\r\n\t]+/g, ' ').trim());
+    if (!question) usage('poll needs a non-empty question');
+    if ([...question].length > 200) fail(`poll question must be at most 200 characters (got ${[...question].length})`);
+    if (options.some((o) => !o)) usage('poll options must be non-empty');
+    if (options.some((o) => [...o].length > 80)) fail('each poll option must be at most 80 characters');
+    if (new Set(options).size !== options.length) fail('each poll option must be different');
+    const body = { question, options };
+    if (opts.to) body.to = opts.to;
+    const { message, poll } = await (await call('/api/polls', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    console.log(opts.json ? JSON.stringify({ message, poll }) : `poll ${poll.id} on #${message.id}: ${poll.question}`);
+    return;
+  }
+
+  if (cmd === 'vote') {
+    if (!/^poll_[a-z0-9]{8,48}$/.test(args[0] || '')) usage('vote needs a poll id (poll_…)');
+    if (opts.clear) {
+      if (args.length !== 1) usage('vote --clear takes a poll id and no option number');
+      const data = await (await call(`/api/polls/${args[0]}/vote`, { method: 'DELETE' })).json();
+      console.log(opts.json ? JSON.stringify(data) : (data.withdrawn ? 'vote withdrawn' : 'no vote to withdraw'));
+      return;
+    }
+    if (!/^[1-9]\d*$/.test(args[1] || '') || args.length !== 2) usage('vote needs a poll id and a 1-based option number');
+    const { poll } = await (await call(`/api/polls/${args[0]}/vote`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ option: Number(args[1]) }),
+    })).json();
+    const picked = poll.options.find((o) => o.index === Number(args[1]));
+    console.log(opts.json ? JSON.stringify(poll) : `voted ${args[1]}: ${picked ? picked.text : args[1]}`);
     return;
   }
 

@@ -23,8 +23,8 @@ export const GET = safe(async (request: Request) => {
   const limit = parseLimit(params.get('limit'));
   if (limit === undefined) return error(400, '"limit" must be a whole number.');
   const store = await getStore();
-  const [messages, pinned] = await Promise.all([store.list({ since, to, limit }), store.pinned()]);
-  return json({ me, messages, pinned });
+  const [messages, pinned, polls] = await Promise.all([store.list({ since, to, limit }), store.pinned(), store.listPolls()]);
+  return json({ me, messages, pinned, polls });
 });
 
 // POST /api/messages {"text": "...", "to": "claude", "attachments": ["att_…"]}
