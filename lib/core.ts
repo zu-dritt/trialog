@@ -2,7 +2,7 @@
 // No Next.js imports here, so Vitest can load it directly.
 import { timingSafeEqual } from 'node:crypto';
 import {
-  MAX_ATTACHMENTS_PER_MESSAGE, NAMES, POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS,
+  MAX_ATTACHMENTS_PER_MESSAGE, MAX_TEXT_BYTES, NAMES, POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS,
   POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, SENDERS,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, firstLine,
@@ -11,6 +11,7 @@ import {
 
 // The image limits, participant names and status limits live in lib/shared.ts, which the page can load too.
 export {
+  MAX_TEXT_BYTES,
   IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, NAMES,
   POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, SENDERS,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
@@ -35,7 +36,6 @@ export interface Message {
 
 export const TOKEN_ENV: Record<Sender, string> = { grok: 'GROK_TOKEN', claude: 'CLAUDE_TOKEN', david: 'DAVID_TOKEN' };
 
-export const MAX_TEXT_BYTES = 20 * 1024; // 20 KB per message
 export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
 export const MIN_TOKEN_LENGTH = 16;

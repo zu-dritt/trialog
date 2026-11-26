@@ -103,6 +103,8 @@ test('preview chips show the state of each upload and have a remove button', () 
   for (const name of ['a.png', 'b.png', 'c.gif']) assert.ok(out.includes(`aria-label="Remove image ${name}"`));
   assert.deepEqual(out.match(/src="[^"]*"/g), ['src="blob:local-1"', 'src="blob:local-2"', 'src="blob:local-3"'], 'previews are local blob: URLs');
   assert.equal(renderToStaticMarkup(<DraftChips drafts={[]} onRemove={() => {}} />), '');
+  // A failed upload is marked, so it is clear that it will not be sent.
+  assert.equal((out.match(/border-bad/g) ?? []).length, 1);
 });
 
 test('fitWithin keeps the shape, never enlarges, and brings the long edge to the limit', () => {
@@ -118,6 +120,9 @@ test('firstLine names the images of a message that has no text', () => {
   assert.equal(firstLine({ text: '  DECISION: go\nmore', attachments: [shot] }, 160), 'DECISION: go');
   assert.equal(firstLine({ text: '', attachments: [shot] }, 160), '[image: att_0123456789abcdef01234567, 1170×2532]');
   assert.equal(firstLine({ text: '' }, 160), '', 'a message from a server that does not send the field yet');
+  // A message that opens with quotes is named by what its writer wrote.
+  assert.equal(firstLine({ text: '> **Grok** in #2:\n>\n> the plan\n\n@claude DECISION: go with the database\nmore' }, 160), '@claude DECISION: go with the database');
+  assert.equal(firstLine({ text: '> **Grok** in #2:\n>\n> only a quote' }, 160), '> **Grok** in #2:');
 });
 
 test('an image request that answers 401 sends the reader back to the token prompt', async () => {
