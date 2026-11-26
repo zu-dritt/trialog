@@ -10,6 +10,8 @@
 // The signature contract (header names, HMAC, skew) is the one published in docs/api.md. The
 // combined header is still called X-Hub-Grok-Signature so existing receivers keep working.
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { promises as dns } from 'node:dns';
+import { BlockList, isIP } from 'node:net';
 import type { Message, Sender } from './core';
 import { loadRoster } from './participants';
 import type { Participant } from './shared';
@@ -143,7 +145,108 @@ export function parseWakeTarget(input: { url?: unknown; secret?: unknown }): Wak
   if (secret.length < MIN_SECRET_LENGTH || secret.length > MAX_SECRET_LENGTH) {
     return { ok: false, error: `The secret must be between ${MIN_SECRET_LENGTH} and ${MAX_SECRET_LENGTH} characters.` };
   }
+  if (isInternalHostname(parsed.hostname)) {
+    return { ok: false, error: 'The URL must not point at an internal host.' };
+  }
   return { ok: true, target: { url: parsed.toString(), secret } };
+}
+
+/** The host of a stored target URL, for public answers. Never a path, query, secret or full URL. */
+export function wakeTargetHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+export type DnsLookup = (hostname: string) => Promise<readonly { address: string; family: 4 | 6 }[]>;
+
+const defaultDnsLookup: DnsLookup = async (hostname) => {
+  const rows = await dns.lookup(hostname, { all: true, verbatim: true });
+  return rows.map((r) => ({ address: r.address, family: (r.family === 6 ? 6 : 4) as 4 | 6 }));
+};
+
+let dnsLookup: DnsLookup = defaultDnsLookup;
+
+/** For tests: control what a hostname resolves to. Pass null to restore the real resolver. */
+export function setWakeDnsForTests(fn: DnsLookup | null) {
+  dnsLookup = fn ?? defaultDnsLookup;
+}
+
+const INTERNAL_V4 = new BlockList();
+INTERNAL_V4.addSubnet('127.0.0.0', 8, 'ipv4');
+INTERNAL_V4.addSubnet('10.0.0.0', 8, 'ipv4');
+INTERNAL_V4.addSubnet('172.16.0.0', 12, 'ipv4');
+INTERNAL_V4.addSubnet('192.168.0.0', 16, 'ipv4');
+INTERNAL_V4.addSubnet('169.254.0.0', 16, 'ipv4');
+
+const INTERNAL_V6 = new BlockList();
+INTERNAL_V6.addSubnet('::1', 128, 'ipv6');
+INTERNAL_V6.addSubnet('fc00::', 7, 'ipv6');
+INTERNAL_V6.addSubnet('fe80::', 10, 'ipv6');
+
+/** Unwrap IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) so it is checked as IPv4. */
+export function canonicalIp(address: string): { ip: string; family: 4 | 6 } | null {
+  const raw = address.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const mappedDotted = raw.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mappedDotted) return { ip: mappedDotted[1], family: 4 };
+  const mappedHex = raw.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    return { ip: `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`, family: 4 };
+  }
+  const kind = isIP(raw);
+  if (kind === 4) return { ip: raw, family: 4 };
+  if (kind === 6) return { ip: raw, family: 6 };
+  return null;
+}
+
+export function isInternalIp(address: string): boolean {
+  const parsed = canonicalIp(address);
+  if (!parsed) return false;
+  return parsed.family === 4 ? INTERNAL_V4.check(parsed.ip, 'ipv4') : INTERNAL_V6.check(parsed.ip, 'ipv6');
+}
+
+/**
+ * True for localhost, names ending in .localhost / .local / .internal (a trailing dot is
+ * ignored), and IP literals in loopback, private, link-local or unique-local ranges.
+ */
+export function isInternalHostname(host: string): boolean {
+  const name = host.trim().toLowerCase().replace(/\.+$/, '');
+  if (!name) return true;
+  if (name === 'localhost' || name.endsWith('.localhost')) return true;
+  if (name === 'local' || name.endsWith('.local')) return true;
+  if (name === 'internal' || name.endsWith('.internal')) return true;
+  return isInternalIp(name);
+}
+
+/**
+ * Resolves the URL's host and rejects if any address is internal. IP literals and reserved
+ * names are rejected without a lookup. Called at registration and again at delivery, so a
+ * name that later starts pointing at an internal address is not contacted (DNS rebinding).
+ */
+export async function assertPublicWakeUrl(url: string, lookup: DnsLookup = dnsLookup): Promise<{ ok: true } | { ok: false; error: string }> {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return { ok: false, error: 'The URL is not a valid URL.' };
+  }
+  if (isInternalHostname(hostname)) return { ok: false, error: 'The URL must not point at an internal host.' };
+  if (isIP(hostname) || canonicalIp(hostname)) return { ok: true };
+  let addresses: readonly { address: string; family: 4 | 6 }[];
+  try {
+    addresses = await lookup(hostname);
+  } catch {
+    return { ok: false, error: 'The host could not be resolved.' };
+  }
+  if (!addresses.length) return { ok: false, error: 'The host could not be resolved.' };
+  if (addresses.some((row) => isInternalIp(row.address))) {
+    return { ok: false, error: 'The URL must not resolve to an internal address.' };
+  }
+  return { ok: true };
 }
 
 /** A short single-line excerpt of a message, for the wake-up payload. */
@@ -204,6 +307,10 @@ export interface WakeupOptions {
   debounceMs?: number;
   timeoutMs?: number;
   retryDelaysMs?: number[];
+  /** DNS lookup for the public-host check at delivery. Tests inject one. */
+  lookup?: DnsLookup;
+  /** When false, skip the public-host check. Only the real-HTTP loopback test uses this. */
+  enforcePublicTarget?: boolean;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -228,7 +335,9 @@ export function publicDeliveryError(error: string, targets: readonly WebhookConf
  * Each job waits for the debounce, then delivers every pending wake-up. A burst of messages
  * shares one debounce, then goes out as one signed POST per (message, participant). A message
  * that arrives after a job has already claimed its rows gets its own job, so nothing is dropped.
- * Delivery is at least once. Status is stored per message and participant.
+ * A delivery row is claimed atomically before it is sent, so two processes never send the
+ * same wake twice. A claim left in "sending" is taken again after a minute. Status is stored
+ * per message and participant.
  */
 export function createWakeup(options: WakeupOptions) {
   const { store } = options;
@@ -238,6 +347,8 @@ export function createWakeup(options: WakeupOptions) {
   const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
   const retryDelaysMs = options.retryDelaysMs ?? RETRY_DELAYS_MS;
+  const lookup = options.lookup ?? dnsLookup;
+  const enforcePublicTarget = options.enforcePublicTarget !== false;
 
   const rosterOf = () => options.roster ?? loadRoster().participants;
 
@@ -258,6 +369,15 @@ export function createWakeup(options: WakeupOptions) {
       [SIGNATURE_HEADER]: sign(target.secret, timestamp, body),
       [COMBINED_HEADER]: combinedSignature(target.secret, timestamp, body),
     };
+
+    if (enforcePublicTarget) {
+      const allowed = await assertPublicWakeUrl(target.url, lookup);
+      if (!allowed.ok) {
+        const safe = publicDeliveryError(allowed.error, [target]);
+        console.error(`[trialog] wake-up webhook refused for message #${row.message_id} to ${row.participant}: ${safe}`);
+        return store.saveWakeDelivery(row.message_id, row.participant, 'failed', 0, safe);
+      }
+    }
 
     let error = '';
     const attempts = retryDelaysMs.length + 1;
@@ -296,7 +416,7 @@ export function createWakeup(options: WakeupOptions) {
   async function runDeliveries(): Promise<DeliveryResult> {
     const roster = rosterOf();
     const names = roster.map((p) => p.name);
-    const pending = await store.listPendingWakes();
+    const pending = await store.claimPendingWakes();
     if (!pending.length) return { status: 'idle' };
 
     const deliveries: WakeDelivery[] = [];
@@ -358,6 +478,10 @@ export function createWakeup(options: WakeupOptions) {
         [SIGNATURE_HEADER]: sign(target.secret, timestamp, body),
         [COMBINED_HEADER]: combinedSignature(target.secret, timestamp, body),
       };
+      if (enforcePublicTarget) {
+        const allowed = await assertPublicWakeUrl(target.url, lookup);
+        if (!allowed.ok) return { ok: false, error: publicDeliveryError(allowed.error, [target]) };
+      }
       try {
         const res = await doFetch(target.url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
         await res.body?.cancel().catch(() => {});

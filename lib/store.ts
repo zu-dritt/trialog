@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
 import { MAX_SCALE, validScale } from './shared';
 import {
-  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, welcomeText,
+  MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WAKE_TEST_PER_MIN, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Sender,
 } from './core';
@@ -140,7 +140,9 @@ export interface WakeTargetInfo {
   url: string;
   updated_at: string;
 }
-export type WakeStatus = 'pending' | 'delivered' | 'failed';
+export type WakeStatus = 'pending' | 'sending' | 'delivered' | 'failed';
+/** A 'sending' claim that is older than this is treated as pending again. */
+export const WAKE_SENDING_STALE_MS = 60_000;
 /** Delivery of one wake-up, for one message and one participant. */
 export interface WakeDelivery {
   message_id: number;
@@ -241,6 +243,19 @@ export interface Store {
   enqueueWakes(messageId: number, participants: readonly string[]): Promise<void>;
   /** Pending deliveries, oldest message first, with the text the payload needs. */
   listPendingWakes(): Promise<PendingWake[]>;
+  /**
+   * Atomically claims due wake-ups (pending, or sending older than a minute) and marks them
+   * sending. Two callers never receive the same row. SKIP LOCKED, so concurrent jobs take
+   * different rows rather than waiting.
+   */
+  claimPendingWakes(): Promise<PendingWake[]>;
+  /** Registered targets, for a human to list who has one. Includes the URL for host extraction; never the secret. */
+  listWakeTargets(): Promise<{ participant: Sender; url: string; updated_at: string }[]>;
+  /**
+   * Records one wake-test attempt and returns true when this participant is still under the
+   * per-minute limit. False means the call must be refused with 429.
+   */
+  takeWakeTestSlot(participant: Sender, limitPerMin?: number): Promise<boolean>;
   /** Records the outcome of one delivery attempt. */
   saveWakeDelivery(messageId: number, participant: string, status: WakeStatus, attempts: number, error: string | null): Promise<WakeDelivery>;
   /** Delivery rows for these messages, in message-id then participant order. */
@@ -536,15 +551,22 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS wake_deliveries (
      message_id  BIGINT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
      participant TEXT NOT NULL,
-     status      TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+     status      TEXT NOT NULL,
      attempts    INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
      error       TEXT,
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
      PRIMARY KEY (message_id, participant),
-     CONSTRAINT wake_deliveries_participant_shape CHECK (participant ~ ${NAME_SHAPE})
+     CONSTRAINT wake_deliveries_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     CONSTRAINT wake_deliveries_status_check CHECK (status IN ('pending', 'sending', 'delivered', 'failed'))
    )`,
   `CREATE INDEX IF NOT EXISTS wake_deliveries_participant_message ON wake_deliveries (participant, message_id)`,
-  `CREATE INDEX IF NOT EXISTS wake_deliveries_pending ON wake_deliveries (message_id) WHERE status = 'pending'`,
+  `CREATE INDEX IF NOT EXISTS wake_deliveries_pending ON wake_deliveries (message_id) WHERE status IN ('pending', 'sending')`,
+  `CREATE TABLE IF NOT EXISTS wake_test_events (
+     participant TEXT NOT NULL,
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     CONSTRAINT wake_test_events_participant_shape CHECK (participant ~ ${NAME_SHAPE})
+   )`,
+  `CREATE INDEX IF NOT EXISTS wake_test_events_participant_created ON wake_test_events (participant, created_at)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -609,6 +631,7 @@ const LOCK_ID = 7230418;
 // exact when one sender uploads several images at once.
 const UPLOAD_LOCK_ID = 7230419;
 const REACTION_LOCK_ID = 7230420;
+const WAKE_TEST_LOCK_ID = 7230422;
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
@@ -1049,6 +1072,55 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         recipient: (r.recipient as Sender | null) ?? null,
         text: String(r.text),
       }));
+    },
+    async claimPendingWakes() {
+      await ensure();
+      return db.transaction(async (tx) => {
+        const rows = await tx.query(
+          `UPDATE wake_deliveries d
+           SET status = 'sending', updated_at = now()
+           FROM (
+             SELECT message_id, participant
+             FROM wake_deliveries
+             WHERE status = 'pending'
+                OR (status = 'sending' AND updated_at < now() - interval '1 minute')
+             ORDER BY message_id, participant
+             FOR UPDATE SKIP LOCKED
+           ) due
+           JOIN messages m ON m.id = due.message_id
+           WHERE d.message_id = due.message_id AND d.participant = due.participant
+           RETURNING d.message_id, d.participant, m.sender, m.recipient, m.text`,
+          [],
+        );
+        return rows
+          .map((r) => ({
+            message_id: Number(r.message_id),
+            participant: String(r.participant),
+            sender: r.sender as Sender,
+            recipient: (r.recipient as Sender | null) ?? null,
+            text: String(r.text),
+          }))
+          .sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant));
+      });
+    },
+    async listWakeTargets() {
+      await ensure();
+      const rows = await db.query(`SELECT participant, url, updated_at FROM wake_targets ORDER BY participant`, []);
+      return rows.map((r) => ({ participant: String(r.participant), url: String(r.url), updated_at: String(r.updated_at) }));
+    },
+    async takeWakeTestSlot(participant, limitPerMin = WAKE_TEST_PER_MIN) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${WAKE_TEST_LOCK_ID})`, []);
+        await tx.query(`DELETE FROM wake_test_events WHERE created_at <= now() - interval '60 seconds'`, []);
+        const [{ n }] = await tx.query(
+          `SELECT count(*)::int AS n FROM wake_test_events WHERE participant = $1::text AND created_at > now() - interval '60 seconds'`,
+          [participant],
+        );
+        if ((n as number) >= limitPerMin) return false;
+        await tx.query(`INSERT INTO wake_test_events (participant) VALUES ($1::text)`, [participant]);
+        return true;
+      });
     },
     async saveWakeDelivery(messageId, participant, status, attempts, error) {
       await ensure();
@@ -1635,6 +1707,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const wakeTargets = new Map<string, { url: string; secret: string; updated_at: string }>();
   const wakeDeliveries = new Map<string, WakeDelivery>();
+  let wakeTestEvents: { participant: string; at: number }[] = [];
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
@@ -1747,6 +1820,33 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text });
       }
       return out;
+    },
+    async claimPendingWakes() {
+      const staleBefore = now() - WAKE_SENDING_STALE_MS;
+      const out: PendingWake[] = [];
+      for (const d of [...wakeDeliveries.values()].sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant))) {
+        const stale = d.status === 'sending' && Date.parse(d.updated_at) < staleBefore;
+        if (d.status !== 'pending' && !stale) continue;
+        const m = rows.find((r) => r.id === d.message_id);
+        if (!m) continue;
+        d.status = 'sending';
+        d.updated_at = timestamp();
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text });
+      }
+      return out;
+    },
+    async listWakeTargets() {
+      return [...wakeTargets.entries()]
+        .map(([participant, row]) => ({ participant, url: row.url, updated_at: row.updated_at }))
+        .sort((a, b) => a.participant.localeCompare(b.participant));
+    },
+    async takeWakeTestSlot(participant, limitPerMin = WAKE_TEST_PER_MIN) {
+      const cutoff = now() - 60_000;
+      const recent = wakeTestEvents.filter((e) => e.participant === participant && e.at > cutoff);
+      wakeTestEvents = wakeTestEvents.filter((e) => e.at > cutoff);
+      if (recent.length >= limitPerMin) return false;
+      wakeTestEvents.push({ participant, at: now() });
+      return true;
     },
     async saveWakeDelivery(messageId, participant, status, attempts, error) {
       const row: WakeDelivery = { message_id: messageId, participant, status, attempts, error, updated_at: timestamp() };

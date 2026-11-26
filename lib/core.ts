@@ -56,6 +56,7 @@ export const REACTION_HINT = 'Reactions are feedback. To ask for something, writ
 
 export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
+export const WAKE_TEST_PER_MIN = 3; // signed wake-up tests per participant per rolling minute
 
 /** Image uploads per sender per rolling hour, unless the UPLOADS_PER_HOUR setting says otherwise. */
 export const UPLOADS_PER_HOUR = 60;

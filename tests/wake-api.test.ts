@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, test } from 'vitest';
 import assert from 'node:assert/strict';
 import type { Message } from '../lib/core';
-import { resetWakeupForTests } from '../lib/webhook';
+import { resetWakeupForTests, setWakeDnsForTests } from '../lib/webhook';
 
 const TOKENS = {
   ana: 'ana-test-token-0123456789abcd',
@@ -32,6 +32,7 @@ beforeAll(async () => {
   delete process.env.GROK_WEBHOOK_URL;
   delete process.env.GROK_WEBHOOK_SECRET;
   resetWakeupForTests();
+  setWakeDnsForTests(async () => [{ address: '93.184.216.34', family: 4 }]);
   globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
     fetchCalls.push({
       url: String(url),
@@ -50,6 +51,7 @@ afterAll(() => {
   delete process.env.PARTICIPANTS;
   for (const name of ['ANA_TOKEN', 'SCOUT_TOKEN', 'QUILL_TOKEN']) delete process.env[name];
   resetWakeupForTests();
+  setWakeDnsForTests(null);
 });
 
 const auth = (who: keyof typeof TOKENS) => ({ Authorization: `Bearer ${TOKENS[who]}` });
@@ -72,15 +74,17 @@ test('a participant can set, read, test and clear their own target; the secret i
   }));
   assert.equal(put.status, 200);
   const putBody = await bodyOf(put);
-  const target = putBody.target as { url: string; updated_at: string };
-  assert.equal(target.url, 'https://scout.example/wake');
+  const target = putBody.target as { host: string; updated_at: string; url?: string };
+  assert.equal(target.host, 'scout.example');
+  assert.equal(target.url, undefined, 'the full URL is never returned');
   assert.ok(target.updated_at);
   noSecret(putBody, secret, 'PUT');
 
   const got = await targetGet(new Request(`${BASE}/api/wake/target`, { headers: auth('scout') }));
   assert.equal(got.status, 200);
   const gotBody = await bodyOf(got);
-  assert.equal((gotBody.target as { url: string }).url, 'https://scout.example/wake');
+  assert.equal((gotBody.target as { host: string; url?: string }).host, 'scout.example');
+  assert.equal((gotBody.target as { url?: string }).url, undefined, 'the full URL is never returned');
   noSecret(gotBody, secret, 'GET');
 
   fetchCalls.length = 0;
@@ -180,4 +184,79 @@ test('GET /api/wake rejects a bad since or wait, and requires a token', async ()
   assert.equal(badWait.status, 400);
   const unauth = await wakeGet(new Request(`${BASE}/api/wake?since=0`));
   assert.equal(unauth.status, 401);
+});
+
+test('registration refuses an internal host, without sending anything', async () => {
+  const secret = 'internal-wake-secret-0123';
+  const put = await targetPut(new Request(`${BASE}/api/wake/target`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('scout') },
+    body: JSON.stringify({ url: 'https://127.0.0.1/wake', secret }),
+  }));
+  assert.equal(put.status, 400);
+  const body = await bodyOf(put);
+  assert.match(String(body.error), /internal host/);
+  noSecret(body, secret, 'internal PUT');
+  const missing = await targetGet(new Request(`${BASE}/api/wake/target`, { headers: auth('scout') }));
+  assert.equal(missing.status, 404);
+});
+
+test('a human can list who has a target (host only) and clear someone else\'s', async () => {
+  const { GET: participantsGet } = (await import('../app/api/participants/route')) as unknown as { GET: Handler };
+  const secret = 'scout-wake-secret-for-list-01';
+  const put = await targetPut(new Request(`${BASE}/api/wake/target`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('scout') },
+    body: JSON.stringify({ url: 'https://scout.example/hooks/secret-path', secret }),
+  }));
+  assert.equal(put.status, 200);
+
+  const asAgent = await participantsGet(new Request(`${BASE}/api/participants`, { headers: auth('quill') }));
+  const agentBody = await bodyOf(asAgent);
+  const agentRow = (agentBody.participants as { name: string; wake_target_host?: string }[]).find((p) => p.name === 'scout');
+  assert.equal(agentRow && 'wake_target_host' in agentRow, false, 'an agent does not see who has a target');
+
+  const asHuman = await participantsGet(new Request(`${BASE}/api/participants`, { headers: auth('ana') }));
+  assert.equal(asHuman.status, 200);
+  const humanBody = await bodyOf(asHuman);
+  noSecret(humanBody, secret, 'participants');
+  const dumped = JSON.stringify(humanBody);
+  assert.ok(!dumped.includes('hooks/secret-path'), 'the path is not returned');
+  assert.ok(!dumped.includes('https://'), 'the full URL is not returned');
+  const scout = (humanBody.participants as { name: string; wake_target_host: string | null; wake_target_set_at: string | null }[]).find((p) => p.name === 'scout');
+  assert.ok(scout);
+  assert.equal(scout.wake_target_host, 'scout.example');
+  assert.ok(scout.wake_target_set_at);
+
+  const forbidden = await targetDelete(new Request(`${BASE}/api/wake/target?participant=scout`, { method: 'DELETE', headers: auth('quill') }));
+  assert.equal(forbidden.status, 403);
+
+  const cleared = await targetDelete(new Request(`${BASE}/api/wake/target?participant=scout`, { method: 'DELETE', headers: auth('ana') }));
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(await bodyOf(cleared), { cleared: true });
+  const after = await targetGet(new Request(`${BASE}/api/wake/target`, { headers: auth('scout') }));
+  assert.equal(after.status, 404);
+});
+
+test('the wake test endpoint is limited to 3 calls per participant per minute', async () => {
+  const secret = 'rate-limit-secret-012345';
+  const put = await targetPut(new Request(`${BASE}/api/wake/target`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('quill') },
+    body: JSON.stringify({ url: 'https://quill.example/wake', secret }),
+  }));
+  assert.equal(put.status, 200);
+  fetchCalls.length = 0;
+  for (let i = 0; i < 3; i++) {
+    const res = await targetTest(new Request(`${BASE}/api/wake/target/test`, { method: 'POST', headers: auth('quill') }));
+    assert.equal(res.status, 200, `test ${i + 1}`);
+  }
+  const limited = await targetTest(new Request(`${BASE}/api/wake/target/test`, { method: 'POST', headers: auth('quill') }));
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('Retry-After'), '60');
+  assert.equal(fetchCalls.length, 3, 'the fourth call does not send');
+  // A different participant still has their own budget.
+  const other = await targetTest(new Request(`${BASE}/api/wake/target/test`, { method: 'POST', headers: auth('scout') }));
+  // scout has no target in this test (cleared above) or may 404; the point is not 429
+  assert.notEqual(other.status, 429);
 });

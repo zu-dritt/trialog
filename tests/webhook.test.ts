@@ -4,9 +4,9 @@ import { afterEach, beforeEach, test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import type { Sender } from '../lib/core';
-import { createMemoryStore, createSqlStore, wakesGrok, type Db, type Row, type Store } from '../lib/store';
+import { createMemoryStore, createSqlStore, WAKE_SENDING_STALE_MS, wakesGrok, type Db, type Row, type Store } from '../lib/store';
 import {
-  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, sign, verify, webhookConfig,
+  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, setWakeDnsForTests, sign, verify, webhookConfig,
   type DeliveryResult, type WakeupPayload,
 } from '../lib/webhook';
 
@@ -140,8 +140,8 @@ const settle = (jobs: (Promise<DeliveryResult> | null)[]) => Promise.all(jobs.fi
 
 let errorLog: unknown[][] = [];
 const realError = console.error;
-beforeEach(() => { errorLog = []; console.error = (...args: unknown[]) => { errorLog.push(args); }; });
-afterEach(() => { console.error = realError; vi.restoreAllMocks(); });
+beforeEach(() => { errorLog = []; console.error = (...args: unknown[]) => { errorLog.push(args); }; setWakeDnsForTests(async () => [{ address: '93.184.216.34', family: 4 }]); });
+afterEach(() => { console.error = realError; setWakeDnsForTests(null); vi.restoreAllMocks(); });
 
 const STORES: [string, () => Promise<Store>][] = [
   ['sql (PGlite)', async () => createSqlStore(pgliteDb(new PGlite()))],
@@ -294,6 +294,36 @@ for (const [name, make] of STORES) {
     assert.equal(await store.releaseWakeup(second), true);
     assert.deepEqual(await store.claimWakeup(), second, 'the released range can be claimed again');
   });
+
+  test(`${name}: two delivery jobs never send the same wake twice`, async () => {
+    const store = await make();
+    const message = await store.add({ sender: 'david', recipient: 'grok', text: 'only once' });
+    assert.ok(message);
+    await store.enqueueWakes(message.id, ['grok']);
+    const a = setup(store);
+    const b = setup(store);
+    // onMessage enqueues again (no-op) and both run deliver; only one should claim the row.
+    await settle([a.wakeup.onMessage(message), b.wakeup.onMessage(message)]);
+    const sent = [...a.calls, ...b.calls];
+    assert.equal(sent.length, 1, 'exactly one signed POST');
+    assert.equal(JSON.parse(sent[0].body).id, message.id);
+    const [row] = await store.listWakes([message.id]);
+    assert.equal(row.status, 'delivered');
+  });
+
+  test(`${name}: a name that rebinds to an internal address is not contacted`, async () => {
+    const store = await make();
+    setWakeDnsForTests(async () => [{ address: '10.0.0.9', family: 4 }]);
+    const { calls, post } = setup(store);
+    const sent = await post('david', 'grok', 'should not leave the hub');
+    const [result] = await settle([sent.job]);
+    assert.equal(result.status, 'failed');
+    assert.equal(calls.length, 0, 'no request is sent');
+    const [row] = await store.listWakes([sent.message.id]);
+    assert.equal(row.status, 'failed');
+    assert.match(String(row.error), /internal address/);
+    assert.ok(!String(row.error).includes('10.0.0.9'));
+  });
 }
 
 test('history from before the webhook existed never triggers a wake-up', async () => {
@@ -318,6 +348,24 @@ test('a job never rejects, even when the store fails', async () => {
   assert.deepEqual(await job, { status: 'error', error: 'Error: database is down' });
 });
 
+test('a sending claim is taken again after a minute, and not before', async () => {
+  let now = 1_000_000;
+  const store = createMemoryStore({ now: () => now });
+  const message = await store.add({ sender: 'david', recipient: 'grok', text: 'claim me' });
+  assert.ok(message);
+  await store.enqueueWakes(message.id, ['grok']);
+  const first = await store.claimPendingWakes();
+  assert.equal(first.length, 1);
+  assert.equal(first[0].message_id, message.id);
+  assert.deepEqual(await store.claimPendingWakes(), [], 'still sending, not yet stale');
+  now += WAKE_SENDING_STALE_MS - 1;
+  assert.deepEqual(await store.claimPendingWakes(), [], 'just under a minute');
+  now += 2;
+  const again = await store.claimPendingWakes();
+  assert.equal(again.length, 1);
+  assert.equal(again[0].message_id, message.id);
+});
+
 test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 is retried', async (ctx) => {
   const { createServer } = await import('node:http');
   const { createHmac } = await import('node:crypto');
@@ -340,7 +388,7 @@ test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 i
     const { port } = server.address() as { port: number };
     const store = createMemoryStore();
     const fallbackTargets = { grok: { url: `http://127.0.0.1:${port}/wake`, secret: CONFIG.secret } }; // bypasses https on purpose
-    const wakeup = createWakeup({ store, fallbackTargets, debounceMs: 10, timeoutMs: 2000, retryDelaysMs: [10] });
+    const wakeup = createWakeup({ store, fallbackTargets, debounceMs: 10, timeoutMs: 2000, retryDelaysMs: [10], enforcePublicTarget: false });
     const message = await store.add({ sender: 'david', recipient: 'grok', text: 'over the wire' });
     assert.ok(message);
     const result = await wakeup.onMessage(message);

@@ -208,14 +208,23 @@ CREATE TABLE IF NOT EXISTS wake_targets (
 CREATE TABLE IF NOT EXISTS wake_deliveries (
      message_id  BIGINT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
      participant TEXT NOT NULL,
-     status      TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+     status      TEXT NOT NULL,
      attempts    INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
      error       TEXT,
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
      PRIMARY KEY (message_id, participant),
-     CONSTRAINT wake_deliveries_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$')
+     CONSTRAINT wake_deliveries_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     CONSTRAINT wake_deliveries_status_check CHECK (status IN ('pending', 'sending', 'delivered', 'failed'))
    );
 
 CREATE INDEX IF NOT EXISTS wake_deliveries_participant_message ON wake_deliveries (participant, message_id);
 
-CREATE INDEX IF NOT EXISTS wake_deliveries_pending ON wake_deliveries (message_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS wake_deliveries_pending ON wake_deliveries (message_id) WHERE status IN ('pending', 'sending');
+
+CREATE TABLE IF NOT EXISTS wake_test_events (
+     participant TEXT NOT NULL,
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     CONSTRAINT wake_test_events_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$')
+   );
+
+CREATE INDEX IF NOT EXISTS wake_test_events_participant_created ON wake_test_events (participant, created_at);

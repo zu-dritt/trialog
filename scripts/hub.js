@@ -22,7 +22,7 @@
 //   node scripts/hub.js decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js wake set <https-url> [secret]     (register your wake-up target; secret from WAKE_SECRET if omitted, never printed)
-//   node scripts/hub.js wake show | wake test | wake clear
+//   node scripts/hub.js wake show | wake test | wake clear [name] | wake list
 //   node scripts/hub.js wake [--since id] [--wait s] [--limit n] [--json]  (messages that should wake you)
 //   node scripts/hub.js export > transcript.md
 //
@@ -46,7 +46,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear | wake [--since id] [--wait s] [--limit n] [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--wait s] [--limit n] [--json] | export');
   process.exit(64);
 }
 
@@ -418,15 +418,33 @@ async function main() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, secret }),
       })).json();
-      // Never print a secret. The server also returns only the URL.
-      if (opts.json) console.log(JSON.stringify({ url: data.target?.url, updated_at: data.target?.updated_at }));
-      else console.log(`wake-up target set: ${data.target.url}`);
+      // Never print a secret or the full URL; the server returns only the host.
+      if (opts.json) console.log(JSON.stringify({ host: data.target?.host, updated_at: data.target?.updated_at }));
+      else console.log(`wake-up target set: ${data.target.host}`);
       return;
     }
     if (sub === 'show') {
       const data = await (await call('/api/wake/target')).json();
-      if (opts.json) console.log(JSON.stringify({ url: data.target?.url, updated_at: data.target?.updated_at }));
-      else console.log(data.target.url);
+      if (opts.json) console.log(JSON.stringify({ host: data.target?.host, updated_at: data.target?.updated_at }));
+      else console.log(data.target.host);
+      return;
+    }
+    if (sub === 'list') {
+      const data = await (await call('/api/participants')).json();
+      const list = data.participants || [];
+      if (list.length && !('wake_target_host' in (list[0] || {}))) {
+        console.error('hub: only a human can list wake-up targets');
+        process.exit(1);
+      }
+      const rows = list
+        .filter((p) => p.wake_target_host)
+        .map((p) => ({ name: p.name, host: p.wake_target_host, set_at: p.wake_target_set_at }));
+      if (opts.json) console.log(JSON.stringify(rows));
+      else if (!rows.length) console.log('no wake-up targets are set');
+      else for (const r of rows) {
+        const when = r.set_at ? ` (set ${r.set_at})` : ' (from the environment)';
+        console.log(`${label(r.name)}: ${r.host}${when}`);
+      }
       return;
     }
     if (sub === 'test') {
@@ -436,8 +454,11 @@ async function main() {
       return;
     }
     if (sub === 'clear') {
-      const data = await (await call('/api/wake/target', { method: 'DELETE' })).json();
+      const who = args[1];
+      const path = who ? `/api/wake/target?participant=${encodeURIComponent(who.replace(/^@/, ''))}` : '/api/wake/target';
+      const data = await (await call(path, { method: 'DELETE' })).json();
       if (opts.json) console.log(JSON.stringify(data));
+      else if (who) console.log(data.cleared ? `wake-up target for ${label(who.replace(/^@/, ''))} cleared` : `no wake-up target was set for ${label(who.replace(/^@/, ''))}`);
       else console.log(data.cleared ? 'wake-up target cleared' : 'no wake-up target was set');
       return;
     }
