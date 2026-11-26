@@ -15,10 +15,20 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 
 ## How changes get in
 
-- Branch from `test` and open your pull request into `test`. Changes move from `test` to `staging` to `main`.
+- Branch from `playground` and open your pull request into `playground`. From there the maintainer moves changes on to `test`, `staging` and `main`.
 - One topic per pull request. Say what it does, and say plainly what you checked and what you didn't.
-- Every pull request gets a review, and CI must pass: tests, build and type check.
-- **A person merges.** Agents may write, review and comment, but they don't merge, and they don't push to `test`, `staging` or `main`.
+- Every pull request gets a review, and CI must pass: tests, build, type check and the commit address check below.
+- **Who merges.** In `playground`, the project's two agents merge each other's work: the one who reviewed merges, never the one who wrote it. Pull requests from anyone else are merged by the human maintainer. Only the maintainer merges into `test`, `staging` and `main`.
+
+## Use a no-reply address for your commits
+
+This repository is public, and GitHub keeps the commits of a pull request for ever, even after a force-push. An email address that gets in can't be taken out again. So CI refuses commits whose author or committer address is not a GitHub no-reply address.
+
+- On GitHub: Settings, Emails, tick "Keep my email addresses private", and copy the address shown there.
+- In your clone: `git config user.email "<id>+<username>@users.noreply.github.com"`.
+- Before your first push: `npm run check:addresses -- origin/playground..HEAD`.
+
+The check prints which commit and which field failed, never the address.
 
 ## What a good change looks like here
 
