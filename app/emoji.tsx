@@ -6,7 +6,7 @@
 // An emoji is plain Unicode text. Picking one inserts that text into the message box; nothing
 // about a message changes on the server. The glyphs come from the reader's own system font, so
 // nothing is fetched. The only thing stored is the list of recently used emojis, in this browser.
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { ALL_EMOJIS, EMOJI_GROUPS, type Emoji } from './emoji-data';
 
 export const RECENT_KEY = 'trialogRecentEmoji';
@@ -65,8 +65,15 @@ function saveRecent(recent: string[]): void {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)); } catch { /* storage is full or off: the picker works without it */ }
 }
 
+/** The panel is never taller than this, and never squeezed below PANEL_MIN_HEIGHT. */
+const PANEL_MAX_HEIGHT = 352;
+const PANEL_MIN_HEIGHT = 160;
+
 interface PanelProps {
   id?: string;
+  panelRef?: RefObject<HTMLDivElement | null>;
+  /** The room above the composer, in pixels. The panel is kept inside it when it is known. */
+  maxHeight?: number;
   /** Emojis to show in the "Recently used" row. */
   recent: string[];
   /** `viaPointer` is true for a mouse or touch pick, false for one made with the keyboard. */
@@ -77,7 +84,7 @@ interface PanelProps {
  * The panel itself. The emojis are real buttons, named for screen readers. The whole grid is one
  * stop for the Tab key; inside it the arrow keys, Home and End move, and Enter or Space picks.
  */
-export function EmojiPanel({ id, recent, onPick }: PanelProps) {
+export function EmojiPanel({ id, panelRef, maxHeight, recent, onPick }: PanelProps) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(''); // the button the Tab key lands on
   const gridRef = useRef<HTMLDivElement>(null);
@@ -118,8 +125,10 @@ export function EmojiPanel({ id, recent, onPick }: PanelProps) {
 
   return (
     <div
-      id={id} role="dialog" aria-label="Emoji"
-      className="absolute bottom-full right-2 z-40 mb-1 flex max-h-[min(22rem,60vh)] w-[min(22rem,calc(100%-1rem))] flex-col rounded-lg border border-line bg-panel shadow-xl shadow-black/50"
+      id={id} ref={panelRef} role="dialog" aria-label="Emoji"
+      // It sits above the composer, which can be tall. So its height follows the room that is left.
+      style={{ maxHeight: maxHeight === undefined ? `min(${PANEL_MAX_HEIGHT}px, 50vh)` : Math.min(PANEL_MAX_HEIGHT, Math.max(PANEL_MIN_HEIGHT, maxHeight)) }}
+      className="absolute bottom-full left-2 z-40 mb-1 flex w-[min(22rem,calc(100%-1rem))] flex-col rounded-lg border border-line bg-panel shadow-xl shadow-black/50"
     >
       <div className="border-b border-line p-2">
         <input
@@ -188,6 +197,24 @@ export function EmojiPicker({ open, onOpenChange, onInsert, boxRef, buttonClassN
   const [recent, setRecent] = useState<string[]>([]);
   useEffect(() => { if (open) setRecent(loadRecent()); }, [open]);
 
+  // How much room there is above the composer. It changes when the message box grows or the
+  // window is resized, so it is measured again whenever either happens.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const anchor = open ? panelRef.current?.offsetParent : null;
+    if (!anchor) return undefined;
+    const measure = () => setRoom(Math.floor(anchor.getBoundingClientRect().top) - 8);
+    measure();
+    window.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(anchor);
+    return () => {
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e: KeyboardEvent) => {
@@ -226,7 +253,7 @@ export function EmojiPicker({ open, onOpenChange, onInsert, boxRef, buttonClassN
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => onOpenChange(!open)}
       ><span aria-hidden="true" style={{ fontFamily: EMOJI_FONT }}>🙂</span></button>
-      {open && <EmojiPanel id={panelId} recent={recent} onPick={pick} />}
+      {open && <EmojiPanel id={panelId} panelRef={panelRef} maxHeight={room} recent={recent} onPick={pick} />}
     </span>
   );
 }
