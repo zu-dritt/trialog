@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
+import type { DecisionCard, DecisionStance } from '../lib/shared';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
@@ -11,6 +12,7 @@ import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
+import { DecisionCardView, DecisionComposer, withDecisions } from './decisions';
 import {
   MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage, quoteNotice,
   pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
@@ -48,6 +50,7 @@ interface MessagesResponse {
   pinned: Message[];
   polls?: Poll[];
   reactions?: { message_id: number; reactions: Message['reactions'] }[];
+  decisions?: DecisionCard[];
 }
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
@@ -113,6 +116,9 @@ export default function Page() {
   const [pollOpen, setPollOpen] = useState(false);
   const [pollBusy, setPollBusy] = useState(false);
   const [pollError, setPollError] = useState('');
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionError, setDecisionError] = useState('');
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
   const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -250,7 +256,7 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1', reactions: '1' });
+      const params = new URLSearchParams({ polls: '1', reactions: '1', decisions: '1' });
       if (lastId.current) params.set('since', String(lastId.current));
       const data = (await (await api(`/api/messages?${params}`, { signal: abort.signal })).json()) as MessagesResponse;
       if (stopped) return;
@@ -261,6 +267,10 @@ export default function Page() {
       if (data.reactions) {
         setMessages((list) => applyReactionList(list, data.reactions ?? []));
         setPinned((list) => applyReactionList(list, data.reactions ?? []));
+      }
+      if (data.decisions) {
+        setMessages((list) => withDecisions(list, data.decisions ?? []));
+        setPinned((list) => withDecisions(list, data.decisions ?? []));
       }
     };
 
@@ -620,6 +630,47 @@ export default function Page() {
     }
   };
 
+  const applyDecision = (card: DecisionCard, message?: Message) => {
+    setMessages((list) => {
+      const next = message ? merge(list, [message]) : list;
+      return withDecisions(next, [card]);
+    });
+    setPinned((list) => {
+      const next = message ? (message.pinned_at ? merge(list, [message]) : list.filter((m) => m.id !== message.id)) : list;
+      return withDecisions(next, [card]);
+    });
+  };
+
+  const createDecision = async (prompt: string) => {
+    setDecisionBusy(true);
+    setDecisionError('');
+    try {
+      const body: { prompt: string; to?: string } = { prompt };
+      if (to) body.to = to;
+      const res = await api('/api/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = (await res.json()) as { message: Message; decision: DecisionCard };
+      setMessages((list) => merge(list, [data.message]));
+      setDecisionOpen(false);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setDecisionError(errorMessage(e));
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+
+  const recordDecisionPosition = async (cardId: string, stance: DecisionStance, note: string | null) => {
+    try {
+      const data = (await (await api(`/api/decisions/${cardId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stance, note }),
+      })).json()) as { decision: DecisionCard; message: Message; reply: Message | null };
+      applyDecision(data.decision, data.message);
+      if (data.reply) setMessages((list) => merge(list, [data.reply!]));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+
 
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
@@ -660,7 +711,7 @@ export default function Page() {
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
                 <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{displayName(m.sender)}</span>{' '}
-                {isDecision(m.text, names) && <><DecisionBadge />{' '}</>}
+                {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -699,7 +750,7 @@ export default function Page() {
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
                     {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
-                    {isDecision(m.text, names) && <DecisionBadge className="max-sm:hidden" />}
+                    {isDecision(m.text, names, m.decision) && <DecisionBadge className="max-sm:hidden" />}
                     <ReplyButton
                       messageId={m.id}
                       onReply={() => startReply(m)}
@@ -720,7 +771,7 @@ export default function Page() {
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
-                  {isDecision(m.text, names) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
+                  {isDecision(m.text, names, m.decision) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
                   {m.reply_to != null && (() => {
                     const parent = byId.get(m.reply_to);
                     return (
@@ -743,6 +794,14 @@ export default function Page() {
                       participants={participants}
                       onVote={(pollId, option) => { void voteOnPoll(pollId, option); }}
                       onClose={(pollId) => { void closePoll(pollId); }}
+                    />
+                  )}
+                  {m.decision && (
+                    <DecisionCardView
+                      card={m.decision}
+                      me={me}
+                      participants={participants}
+                      onPosition={(cardId, stance, note) => { void recordDecisionPosition(cardId, stance, note); }}
                     />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
@@ -775,6 +834,14 @@ export default function Page() {
             error={pollError}
             onCancel={() => { setPollOpen(false); setPollError(''); }}
             onCreate={(question, options) => { void createPoll(question, options); }}
+          />
+        )}
+        {decisionOpen && (
+          <DecisionComposer
+            busy={decisionBusy}
+            error={decisionError}
+            onCancel={() => { setDecisionOpen(false); setDecisionError(''); }}
+            onCreate={(prompt) => { void createDecision(prompt); }}
           />
         )}
         {/* The message box has the full width on every screen. The controls sit in one row below it. */}
@@ -817,8 +884,16 @@ export default function Page() {
               aria-pressed={pollOpen}
               aria-expanded={pollOpen}
               aria-controls={pollOpen ? 'poll-composer' : undefined}
-              onClick={() => { setPollOpen((v) => !v); setPollError(''); }}
+              onClick={() => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); }}
             >Poll</button>
+            <button
+              type="button"
+              className={TOOL}
+              aria-pressed={decisionOpen}
+              aria-expanded={decisionOpen}
+              aria-controls={decisionOpen ? 'decision-composer' : undefined}
+              onClick={() => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); }}
+            >Decision</button>
             <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={TOOL} />
             <ExpandButton expanded={expanded} onToggle={() => { setExpanded((v) => !v); boxRef.current?.focus(); }} className={TOOL} />
             <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>

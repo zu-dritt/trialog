@@ -148,6 +148,16 @@ for (const [name, make] of [
     assert.ok(found.size >= 10 && found.size <= cases.length - 10, String(found.size));
   });
 
+  test(`${name}: an agreed card is found as a decision even without DECISION: in the text`, async () => {
+    const store = await make();
+    const created = must(await store.createDecision({ creator: 'david', prompt: 'Ship the card itself?' }, NAMES));
+    assert.equal((await store.search({ words: ['card', 'itself'], decisionsAmong: NAMES })).some((m) => m.id === created.message.id), false);
+    assert.equal((await store.recordDecisionPosition(created.decision.id, 'claude', 'agree', null, NAMES)).status, 'ok');
+    assert.equal((await store.recordDecisionPosition(created.decision.id, 'grok', 'agree', null, NAMES)).status, 'ok');
+    const found = await store.search({ words: ['card', 'itself'], decisionsAmong: NAMES });
+    assert.ok(found.some((m) => m.id === created.message.id && m.decision?.agreed_at), JSON.stringify(found));
+  });
+
   test(`${name}: with other participants, their names are the ones that may stand before DECISION:`, async () => {
     const store = await make();
     // A hub with made-up participants. "ana" is also the start of "ana-maria".
@@ -288,7 +298,7 @@ test('GET /api/messages?q= finds messages, newest first, with their usual shape'
   // A search answers with the matches and who you are; the pinned list and the polls are not repeated.
   assert.deepEqual(Object.keys(all.body).sort(), ['me', 'messages']);
   const answer = must(all.body.messages?.[0] ?? null);
-  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'sender', 'text']);
+  assert.deepEqual(Object.keys(answer).sort(), ['attachments', 'created_at', 'decision', 'id', 'pinned_at', 'poll', 'reactions', 'recipient', 'reply_to', 'sender', 'text']);
   assert.equal(answer.reply_to, a.id);
 
   assert.deepEqual((await search('q=melon+route')).body.messages?.map((m) => m.id), [c.id, a.id]);

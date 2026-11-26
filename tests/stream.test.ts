@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
 import { SSE_PING, createSseParser, sseEvent, type SseEvent } from '../lib/sse';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { createEventStream, pollMessageIdsChanged, reactionMessageIdsChanged } from '../lib/stream';
+import { createEventStream, decisionMessageIdsChanged, pollMessageIdsChanged, reactionMessageIdsChanged } from '../lib/stream';
 
 // --- encoder and parser ---------------------------------------------------------------------------
 
@@ -61,14 +61,14 @@ for (const [name, make] of STORES) {
   test(`${name}: version changes with new messages and with pins`, async () => {
     const store = await make();
     await store.ensure();
-    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||' }, 'only the welcome message');
+    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|', reactions: '0||', decisions: '0|' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|', reactions: '0||', decisions: '0|' });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|', reactions: '0||', decisions: '0|' });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|', reactions: '0||', decisions: '0|' });
   });
 }
 
@@ -344,4 +344,11 @@ test('a reaction re-sends only the message whose entry changed', async () => {
 
   abort.abort();
   await r.finished();
+});
+
+test('decisionMessageIdsChanged returns only ids whose entry changed, including a removal', () => {
+  assert.deepEqual(decisionMessageIdsChanged('0|', '0|'), []);
+  assert.deepEqual(decisionMessageIdsChanged('0|', '1|12:1:0:t0'), [12]);
+  assert.deepEqual(decisionMessageIdsChanged('2|12:1:0:t0,13:1:0:t0', '2|12:2:0:t1,13:1:0:t0'), [12]);
+  assert.deepEqual(decisionMessageIdsChanged('1|12:1:0:t0', '0|'), [12]);
 });

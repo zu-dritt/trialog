@@ -57,7 +57,7 @@ export function SearchResults({ listId, results, words, active, onPick, onPoint,
             <time dateTime={m.created_at}>{whenFmt.format(new Date(m.created_at))}</time>
             <span>#{m.id}</span>
             {/* The same two signs as in the stream: the badge for a decision, the word for a pin. */}
-            {isDecision(m.text, names) && <DecisionBadge />}
+            {isDecision(m.text, names, m.decision) && <DecisionBadge />}
             {m.pinned_at && <span>pinned</span>}
           </div>
           <div className="truncate text-[13px]">

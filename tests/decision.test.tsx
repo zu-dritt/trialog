@@ -5,6 +5,8 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DecisionBadge, isDecision, pinnedListTitle } from '../app/decision';
+import { DecisionCardView } from '../app/decisions';
+import { DECISION_HINT, HUMAN_DECISION_HINT, type DecisionCard, type Participant } from '../lib/shared';
 import { parseMessageInput } from '../lib/core';
 
 const DECISIONS = [
@@ -92,4 +94,41 @@ test('the badge is a label with the word and a drawn check mark, not an emoji', 
   assert.match(renderToStaticMarkup(<DecisionBadge className="max-sm:hidden" />), /class="[^"]* text-decision max-sm:hidden"/);
   // No emoji stands for a decision: neither a check-mark emoji nor the pin.
   for (const sign of ['✅', '✔', '☑', '✓', '📌']) assert.ok(!html.includes(sign), sign);
+});
+
+const PARTICIPANTS: Participant[] = [
+  { name: 'grok', kind: 'agent', color: 0 },
+  { name: 'claude', kind: 'agent', color: 1 },
+  { name: 'david', kind: 'human', color: 2 },
+];
+
+const openCard = (positions: DecisionCard['positions'] = []): DecisionCard => ({
+  id: 'decision_testhint',
+  message_id: 12,
+  creator: 'david',
+  prompt: 'Ship the card itself?',
+  created_at: '2026-11-26T06:00:00.000Z',
+  agreed_at: null,
+  positions,
+});
+
+test('an agreed card is a decision even without DECISION: in the text', () => {
+  const agreed: DecisionCard = { ...openCard(), agreed_at: '2026-11-26T07:00:00.000Z' };
+  assert.equal(isDecision('Ship the card itself?', THREE, agreed), true);
+  assert.equal(isDecision('Ship the card itself?', THREE, openCard()), false);
+  const byPositions = openCard(THREE.map((name) => ({ participant: name, stance: 'agree' as const, note: null, updated_at: '2026-11-26T07:00:00.000Z' })));
+  assert.equal(isDecision('Ship the card itself?', THREE, byPositions), true);
+  assert.equal(pinnedListTitle([{ text: 'Ship the card itself?', decision: agreed }], THREE), 'Decisions');
+});
+
+test('a human sees what Agree means; an agent does not', () => {
+  const card = openCard([{ participant: 'david', stance: 'agree', note: null, updated_at: '2026-11-26T06:00:00.000Z' }]);
+  const asHuman = renderToStaticMarkup(<DecisionCardView card={card} me="david" participants={PARTICIPANTS} />);
+  assert.ok(asHuman.includes(HUMAN_DECISION_HINT), asHuman);
+  assert.ok(asHuman.includes(DECISION_HINT), asHuman);
+  const asAgent = renderToStaticMarkup(<DecisionCardView card={card} me="grok" participants={PARTICIPANTS} />);
+  assert.ok(!asAgent.includes(HUMAN_DECISION_HINT), asAgent);
+  assert.ok(asAgent.includes(DECISION_HINT), asAgent);
+  // The proposer already agreed, so they are not listed as waiting.
+  assert.match(asHuman, />David<\/span> ✓/);
 });

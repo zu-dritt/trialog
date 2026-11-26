@@ -66,6 +66,8 @@ async function nameChecks(pg: PGlite): Promise<string[]> {
 }
 const SHAPE_CHECKS = [
   /^attachments\.attachments_sender_shape: CHECK \(\(sender ~ '\^\[a-z\]\[a-z0-9-\]\{0,23\}\$'::text\)\)$/,
+  /^decision_cards\.decision_cards_creator_shape: CHECK \(\(creator ~ /,
+  /^decision_positions\.decision_positions_participant_shape: CHECK \(\(participant ~ /,
   /^messages\.messages_recipient_shape: CHECK \(\(recipient ~ /,
   /^messages\.messages_sender_shape: CHECK \(\(sender ~ /,
   /^participant_status\.participant_status_participant_shape: CHECK \(\(participant ~ /,
@@ -165,7 +167,8 @@ test('an old database, a new database and the migration files by hand all end wi
   const files = (await readdir(new URL('../migrations/', import.meta.url))).filter((f) => f.endsWith('.sql')).sort();
   assert.ok(files.includes('007-any-participants.sql'), 'the migration that replaces the name lists is present');
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
-  assert.equal(files.at(-1), '008-reactions.sql', 'reactions comes after the shape checks, with the same name check');
+  assert.equal(files.at(-1), '009-decision-cards.sql', 'decision cards come after reactions, with the same name check');
+  assert.ok(files.includes('008-reactions.sql'));
   for (const name of files) await byHand.exec(await file(`../migrations/${name}`));
   assert.equal(await contents(byHand), before);
   assert.deepEqual(await nameChecks(byHand), await nameChecks(migrated));
