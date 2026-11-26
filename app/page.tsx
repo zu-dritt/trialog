@@ -662,8 +662,9 @@ export default function Page() {
     try {
       const data = (await (await api(`/api/decisions/${cardId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stance, note }),
-      })).json()) as { decision: DecisionCard; message: Message };
+      })).json()) as { decision: DecisionCard; message: Message; reply: Message | null };
       applyDecision(data.decision, data.message);
+      if (data.reply) setMessages((list) => merge(list, [data.reply!]));
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
     }

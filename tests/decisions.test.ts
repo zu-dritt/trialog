@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import {
   parseDecisionInput, parseDecisionPosition, type Message,
 } from '../lib/core';
-import { decisionIsAgreed } from '../lib/shared';
+import { decisionIsAgreed, decisionPositionText } from '../lib/shared';
 import { DecisionError, createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 import { createEventStream } from '../lib/stream';
 import { createSseParser, type SseEvent } from '../lib/sse';
@@ -86,19 +86,36 @@ function stores(): [string, () => Promise<Store>][] {
   ];
 }
 
+test('decisionPositionText names the stance, the note, and when everyone has agreed or not', () => {
+  assert.equal(decisionPositionText('agree', null), 'Agree.');
+  assert.equal(decisionPositionText('agree', 'Yes, build it.'), 'Agree: Yes, build it.');
+  assert.equal(decisionPositionText('object', 'The migration is not numbered.'), 'Object: The migration is not numbered.');
+  assert.equal(decisionPositionText('agree', 'Yes, build it.', 'agreed'), 'Agree: Yes, build it.\n\nEveryone has agreed.');
+  assert.equal(decisionPositionText('object', 'Need a number first.', 'broken'), 'Object: Need a number first.\n\nThis is no longer agreed.');
+});
+
 for (const [name, make] of stores()) {
-  test(`${name}: everyone agreeing pins the message; an object with a note unpins it`, async () => {
+  test(`${name}: the proposer counts as agreed; everyone agreeing pins the message; an object unpins it`, async () => {
     const store = await make();
-    const created = must(await store.createDecision({ creator: 'david', prompt: 'Ship the decision card?' }));
+    const created = must(await store.createDecision({ creator: 'david', prompt: 'Ship the decision card?' }, THREE));
     assert.equal(created.decision.prompt, 'Ship the decision card?');
     assert.equal(created.message.pinned_at, null);
     assert.equal(created.decision.agreed_at, null);
+    assert.deepEqual(created.decision.positions.map((p) => [p.participant, p.stance]), [['david', 'agree']]);
 
-    assert.equal((await store.recordDecisionPosition(created.decision.id, 'david', 'agree', 'Yes, build it.', THREE)).status, 'ok');
-    assert.equal((await store.recordDecisionPosition(created.decision.id, 'claude', 'agree', null, THREE)).status, 'ok');
-    const almost = await store.listDecisions();
-    assert.equal(almost[0].agreed_at, null);
-    assert.equal(decisionIsAgreed(almost[0], THREE), false);
+    const claude = await store.recordDecisionPosition(created.decision.id, 'claude', 'agree', 'Yes, build it.', THREE);
+    assert.equal(claude.status, 'ok');
+    if (claude.status === 'ok') {
+      assert.ok(claude.reply);
+      assert.equal(claude.reply.sender, 'claude');
+      assert.equal(claude.reply.reply_to, created.message.id);
+      assert.equal(claude.reply.text, 'Agree: Yes, build it.');
+      assert.equal(claude.decision.agreed_at, null);
+    }
+
+    const same = await store.recordDecisionPosition(created.decision.id, 'claude', 'agree', 'Yes, build it.', THREE);
+    assert.equal(same.status, 'ok');
+    if (same.status === 'ok') assert.equal(same.reply, null, 'a repeated identical position posts nothing');
 
     const last = await store.recordDecisionPosition(created.decision.id, 'grok', 'agree', null, THREE);
     assert.equal(last.status, 'ok');
@@ -106,6 +123,7 @@ for (const [name, make] of stores()) {
       assert.ok(last.decision.agreed_at);
       assert.ok(last.message.pinned_at);
       assert.equal(decisionIsAgreed(last.decision, THREE), true);
+      assert.equal(last.reply?.text, 'Agree.\n\nEveryone has agreed.');
     }
 
     const objected = await store.recordDecisionPosition(created.decision.id, 'claude', 'object', 'Need a migration number first.', THREE);
@@ -113,7 +131,19 @@ for (const [name, make] of stores()) {
     if (objected.status === 'ok') {
       assert.equal(objected.decision.agreed_at, null);
       assert.equal(objected.message.pinned_at, null, 'an auto-pin is taken back when consensus breaks');
+      assert.equal(objected.reply?.text, 'Object: Need a migration number first.\n\nThis is no longer agreed.');
     }
+  });
+
+  test(`${name}: an Agree is rate-limited like a post, and the position is not recorded`, async () => {
+    const store = await make();
+    const created = must(await store.createDecision({ creator: 'david', prompt: 'Q' }, THREE));
+    for (let i = 0; i < 30; i++) {
+      assert.ok(await store.add({ sender: 'claude', recipient: null, text: `fill ${i}` }));
+    }
+    const result = await store.recordDecisionPosition(created.decision.id, 'claude', 'agree', null, THREE, 30);
+    assert.equal(result.status, 'rate_limited');
+    assert.equal((await store.listDecisions())[0].positions.some((p) => p.participant === 'claude'), false);
   });
 
   test(`${name}: the database or memory store refuses an Object without a note`, async () => {
@@ -176,9 +206,10 @@ test('the API takes the participant from the token and only returns the list whe
   const headers = { 'Content-Type': 'application/json', ...auth('david') };
   const created = await createRoute.POST(req('/api/decisions', { method: 'POST', headers, body: JSON.stringify({ prompt: 'Ship it?' }) }));
   assert.equal(created.status, 201);
-  const body = await created.json() as { message: Message; decision: { id: string } };
+  const body = await created.json() as { message: Message; decision: { id: string; positions: { participant: string; stance: string }[] } };
   assert.equal(body.message.sender, 'david');
   assert.equal(body.decision.id.startsWith('decision_'), true);
+  assert.deepEqual(body.decision.positions.map((p) => [p.participant, p.stance]), [['david', 'agree']]);
 
   const spoof = await positionRoute.PUT(req(`/api/decisions/${body.decision.id}`, {
     method: 'PUT',
@@ -187,7 +218,9 @@ test('the API takes the participant from the token and only returns the list whe
   }), params(body.decision.id));
   assert.equal(spoof.status, 200);
   const put = await spoof.json() as { decision: { positions: { participant: string; stance: string; note: string | null }[] } };
-  assert.deepEqual(put.decision.positions.map((p) => [p.participant, p.stance, p.note]), [['claude', 'agree', 'Yes, build it.']]);
+  assert.deepEqual(put.decision.positions.map((p) => [p.participant, p.stance, p.note]), [['david', 'agree', null], ['claude', 'agree', 'Yes, build it.']]);
+  assert.equal((put as { reply?: { text: string; reply_to: number } }).reply?.text, 'Agree: Yes, build it.');
+  assert.equal((put as { reply?: { reply_to: number } }).reply?.reply_to, body.message.id);
 
   const missing = await positionRoute.PUT(req(`/api/decisions/${body.decision.id}`, {
     method: 'PUT',

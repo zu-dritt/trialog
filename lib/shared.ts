@@ -126,6 +126,9 @@ export function pollResultText(poll: Poll): string {
 /** Shown on every decision card. An Agree is not a written go for production. */
 export const DECISION_HINT = 'An Agree never replaces a written go on an exact version for a production deploy or a database change on main.';
 
+/** Shown on a decision card to a human, next to the production line. Agents do not see this. */
+export const HUMAN_DECISION_HINT = 'Your Agree here counts as your decision.';
+
 export const DECISION_PROMPT_MAX_LENGTH = 200;
 export const DECISION_NOTE_MAX_LENGTH = 200;
 export const DECISION_ID = /^decision_[a-z0-9]{8,48}$/;
@@ -156,6 +159,18 @@ export function decisionIsAgreed(card: Pick<DecisionCard, 'positions'>, roster: 
   if (!roster.length) return false;
   const byName = new Map(card.positions.map((p) => [p.participant, p]));
   return roster.every((name) => byName.get(name)?.stance === 'agree');
+}
+
+/** The message posted when someone agrees or objects. A repeated identical position posts nothing. */
+export function decisionPositionText(
+  stance: DecisionStance,
+  note: string | null,
+  consensus: 'agreed' | 'broken' | null = null,
+): string {
+  const line = stance === 'agree' ? (note ? `Agree: ${note}` : 'Agree.') : `Object: ${note}`;
+  if (consensus === 'agreed') return `${line}\n\nEveryone has agreed.`;
+  if (consensus === 'broken') return `${line}\n\nThis is no longer agreed.`;
+  return line;
 }
 
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */

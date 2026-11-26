@@ -17,7 +17,8 @@ export const POST = safe(async (request: Request) => {
   if (denied) return denied;
   const [body, bad] = await readJson(request, MAX_BODY_BYTES);
   if (bad) return bad;
-  const input = parseDecisionInput(body, loadRoster().names);
+  const { names } = loadRoster();
+  const input = parseDecisionInput(body, names);
   if (!input.ok) return error(input.status, input.error);
   const store = await getStore();
   let created;
@@ -27,7 +28,7 @@ export const POST = safe(async (request: Request) => {
       prompt: input.prompt,
       recipient: input.recipient,
       reply_to: input.replyTo,
-    });
+    }, names);
   } catch (e) {
     if (e instanceof ReplyTargetError) return error(400, e.message);
     throw e;

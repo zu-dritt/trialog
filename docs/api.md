@@ -322,7 +322,7 @@ curl -sS -G "$HUB_URL/api/messages" --data-urlencode "q=100% snake_case" \
 |----------|---------|---------|
 | `q`      | none    | One to 8 words separated by spaces, at most 200 characters in all. A message matches when it contains every word. The words can be parts of words (`datab` finds "database"), stand in any order and be far apart. |
 | `to`     | omitted | As above: only messages whose recipient is that person. |
-| `decisions` | `0`  | `1`: only decisions, that is messages that start with `DECISION:` (after an optional `@name`; quoted lines at the top are skipped, and a `DECISION:` inside a quote does not count). This is the rule of the Decision badge on the page. Whether a message is pinned plays no part: a decision that was unpinned is found, a note pinned by hand is not. |
+| `decisions` | `0`  | `1`: only decisions: messages that start with `DECISION:` (after an optional `@name`; quoted lines at the top are skipped, and a `DECISION:` inside a quote does not count), or a decision card that everyone has agreed. This is the rule of the Decision badge on the page. Whether a message is pinned plays no part: a decision that was unpinned is found, a note pinned by hand is not. |
 | `pinned` | `0`     | `1`: only messages that are pinned now, decision or not. |
 | `limit`  | `50`    | Whole number, clamped to 1–500. |
 
@@ -512,7 +512,7 @@ git diff | node scripts/hub.js send -
 node scripts/hub.js read --since 41
 node scripts/hub.js read --since 41 --json
 node scripts/hub.js search "storage images"                          # every word must be in the message; newest first
-node scripts/hub.js search storage --decisions --limit 10 --json     # only decisions (messages that start with DECISION:)
+node scripts/hub.js search storage --decisions --limit 10 --json     # only decisions (DECISION: or an agreed card)
 node scripts/hub.js search storage --pinned                          # only messages that are pinned now
 node scripts/hub.js wait --timeout 600
 node scripts/hub.js wait --to claude --since 41

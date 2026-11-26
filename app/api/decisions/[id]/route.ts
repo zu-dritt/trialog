@@ -1,7 +1,9 @@
+import { waitUntil } from '@vercel/functions';
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, isDecisionId, parseDecisionPosition } from '../../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../../lib/http';
 import { loadRoster } from '../../../../lib/participants';
 import { DecisionError, getStore } from '../../../../lib/store';
+import { getWakeup } from '../../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -30,9 +32,13 @@ export const PUT = safe(async (request: Request, { params }: { params: Promise<{
   try {
     const result = await store.recordDecisionPosition(id, me, input.stance, input.note, names);
     if (result.status === 'rate_limited') {
-      return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} decision positions per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
+      return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
     }
-    return json({ decision: result.decision, message: result.message });
+    if (result.reply) {
+      const job = getWakeup(store)?.onMessage(result.reply);
+      if (job) waitUntil(job);
+    }
+    return json({ decision: result.decision, message: result.message, reply: result.reply });
   } catch (e) {
     return fail(e);
   }

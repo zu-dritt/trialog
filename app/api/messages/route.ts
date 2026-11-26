@@ -23,7 +23,7 @@ function parseSwitch(value: string | null): boolean | undefined {
 //
 // GET /api/messages?q=<words>&to=<name>&decisions=1&pinned=1&limit=<n>
 // Search: the messages that contain every word, newest first, as {me, messages}.
-// decisions=1: only messages that start with DECISION: (pinned or not). pinned=1: only pinned ones.
+// decisions=1: only decisions (DECISION: or an agreed card; pinned or not). pinned=1: only pinned ones.
 export const GET = safe(async (request: Request) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;

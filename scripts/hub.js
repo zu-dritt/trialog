@@ -380,10 +380,7 @@ async function main() {
       body: JSON.stringify(body),
     })).json();
     if (opts.json) console.log(JSON.stringify({ decision, message }));
-    else {
-      const mine = (decision.positions || []).find((p) => p.participant);
-      console.log(`${cmd === 'agree' ? 'agreed' : 'objected'} on ${id}${decision.agreed_at ? ' — everyone has agreed' : ''}`);
-    }
+    else console.log(`${cmd === 'agree' ? 'agreed' : 'objected'} on ${id}${decision.agreed_at ? ' — everyone has agreed' : ''}`);
     return;
   }
 

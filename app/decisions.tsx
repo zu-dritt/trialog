@@ -2,11 +2,11 @@
 
 // A decision card: every participant is agreed or waiting. Agree is optional-note;
 // Object requires a note that says why. When everyone has agreed the card turns green
-// and the message appears in the Decisions list. David's Agree counts as his decision.
+// and the message appears in the Decisions list. The human's Agree counts as their decision.
 import { useState } from 'react';
 import type { Message } from '../lib/core';
 import type { DecisionCard, DecisionStance, Participant, Sender } from '../lib/shared';
-import { DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, displayName } from '../lib/shared';
+import { DECISION_HINT, HUMAN_DECISION_HINT, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, colorOf, decisionIsAgreed, displayName } from '../lib/shared';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 
@@ -109,6 +109,9 @@ export function DecisionCardView({
           );
         })}
       </ul>
+      {participants.some((p) => p.name === me && p.kind === 'human') && (
+        <p className="mb-0 mt-2 text-xs text-muted">{HUMAN_DECISION_HINT}</p>
+      )}
       <p className="mb-0 mt-2 text-xs text-muted">{DECISION_HINT}</p>
       {onPosition && me && !agreed && (
         <div className="mt-2 flex flex-col gap-2">
