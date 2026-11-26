@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Author, Message, Sender } from '../lib/core';
-import { MAX_ATTACHMENTS_PER_MESSAGE, firstLine, type Attachment } from '../lib/shared';
+import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
+import { MESSAGE_TEXT_ATTRIBUTE, QuoteMessageButton, QuoteSelectionButton, insertQuote, pickSelection, quoteMessage, quoteSelection, useQuotableSelection } from './quote';
 import { StatusBar } from './status';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
@@ -310,8 +311,30 @@ export default function Page() {
     const at = cursorAfterInsert.current;
     if (at === null) return;
     cursorAfterInsert.current = null;
-    boxRef.current?.setSelectionRange(at, at);
+    const box = boxRef.current;
+    if (!box) return;
+    box.setSelectionRange(at, at);
+    // Something long, like a quote, can put the cursor below what the box shows. Bring it into view.
+    if (at >= box.value.length) box.scrollTop = box.scrollHeight;
   }, [draft]);
+
+  // Quote a selection: text selected inside one message can be put into the message box as a quote.
+  const [quotable, clearQuotable] = useQuotableSelection();
+  /** Quotes `selected` from message `m`, or the whole message when `selected` is null. */
+  const addQuote = useCallback((m: Message, selected: string | null) => {
+    const box = boxRef.current;
+    if (!box) return;
+    const author = NAMES[m.sender] ?? m.sender;
+    const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
+    if (selected === null && source === '') return;
+    const quote = selected === null ? quoteMessage(author, m.id, source) : quoteSelection(author, m.id, selected);
+    const next = insertQuote(box.value, box.selectionStart, box.selectionEnd, quote);
+    cursorAfterInsert.current = next.cursor;
+    setDraft(next.text);
+    clearQuotable();
+    box.focus();
+  }, [clearQuotable]);
+  const quotedMessage = quotable ? messages.find((m) => m.id === quotable.messageId) : undefined;
 
   const uploading = drafts.some((d) => d.state === 'uploading');
   const ready = drafts.filter((d) => d.state === 'ready' && d.attachment);
@@ -409,6 +432,8 @@ export default function Page() {
         </section>
       )}
 
+      {quotable && quotedMessage && <QuoteSelectionButton at={quotable} onQuote={() => addQuote(quotedMessage, quotable.text)} />}
+
       <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.map((m) => {
           const date = new Date(m.created_at);
@@ -435,14 +460,20 @@ export default function Page() {
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
+                    <QuoteMessageButton
+                      messageId={m.id}
+                      // With text selected in this message, the button quotes that text; otherwise the whole message.
+                      onQuote={() => { const pick = pickSelection(window.getSelection()); addQuote(m, pick?.messageId === m.id ? pick.text : null); }}
+                      className="ml-auto cursor-pointer rounded border-none bg-transparent px-1.5 text-xs text-muted opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                    />
                     <button
-                      className={`ml-auto cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
+                      className={`cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
                       title={isPinned ? 'Unpin decision' : 'Pin as decision'}
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
                   {m.text.trim() !== '' && (
-                    <div className="md wrap-anywhere">
+                    <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
                       <MessageBody text={m.text} />
                     </div>
                   )}
