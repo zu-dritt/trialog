@@ -33,6 +33,30 @@ export async function readJson(request: Request, maxBytes: number): Promise<[unk
   }
 }
 
+/**
+ * Reads a raw body of at most maxBytes, and stops reading as soon as it is over.
+ * Returns [bytes, null] or [null, 413 Response].
+ */
+export async function readBytes(request: Request, maxBytes: number, tooLarge: string): Promise<[Buffer, null] | [null, Response]> {
+  // A declared length is only a first check; the bytes are counted as they arrive.
+  if (Number(request.headers.get('content-length') || 0) > maxBytes) return [null, error(413, tooLarge)];
+  if (!request.body) return [Buffer.alloc(0), null];
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return [null, error(413, tooLarge)];
+    }
+    chunks.push(value);
+  }
+  return [Buffer.concat(chunks), null];
+}
+
 /** Wraps a handler so unexpected failures return a JSON 500 instead of an HTML error page. */
 export function safe<A extends unknown[]>(handler: (...args: A) => Promise<Response>): (...args: A) => Promise<Response> {
   return async (...args: A) => {

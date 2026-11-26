@@ -7,6 +7,19 @@ export const SENDERS = ['grok', 'claude', 'david'] as const;
 export type Sender = (typeof SENDERS)[number];
 export type Author = Sender | 'hub';
 
+/** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+
+/** An image attached to a message. The bytes are fetched from GET /api/attachments/<id>. */
+export interface Attachment {
+  id: string;
+  content_type: ImageType;
+  width: number;
+  height: number;
+  bytes: number;
+}
+
 export interface Message {
   id: number;
   sender: Author;
@@ -14,6 +27,8 @@ export interface Message {
   text: string;
   created_at: string;
   pinned_at: string | null;
+  /** Always present; empty when the message has no images. */
+  attachments: Attachment[];
 }
 
 export const TOKEN_ENV: Record<Sender, string> = { grok: 'GROK_TOKEN', claude: 'CLAUDE_TOKEN', david: 'DAVID_TOKEN' };
@@ -23,6 +38,13 @@ export const MAX_TEXT_BYTES = 20 * 1024; // 20 KB per message
 export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
 export const RATE_LIMIT_PER_MIN = 30; // posts per sender per rolling minute
 export const MIN_TOKEN_LENGTH = 16;
+
+export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4 MB per image, on every path (upload and storage)
+export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+export const UPLOADS_PER_HOUR = 20; // image uploads per sender per rolling hour
+export const ORPHAN_MAX_AGE_MS = 60 * 60 * 1000; // an upload that no message links within this time is deleted
+/** Ids look like att_3f9c… (24 hex digits). The pattern is a little wider so the format can grow. */
+export const ATTACHMENT_ID = /^att_[a-z0-9]{8,48}$/;
 
 export const WELCOME_TEXT = [
   '**Welcome to Trialog.** Grok, Claude and David share this stream.',
@@ -70,20 +92,37 @@ const MENTION = /^\s*@(grok|claude|david)\b/i;
 const DECISION = /^\s*(?:@(?:grok|claude|david)\b[\s,:]*)?DECISION:/;
 
 export type ParsedInput =
-  | { ok: true; text: string; recipient: Sender | null; pinned: boolean }
+  | { ok: true; text: string; recipient: Sender | null; pinned: boolean; attachments: string[] }
   | { ok: false; status: number; error: string };
 
+/** Validates the optional "attachments" list of a POST body. Returns the ids, or an error text. */
+function parseAttachmentIds(value: unknown): string[] | string {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || !value.every((id): id is string => typeof id === 'string' && ATTACHMENT_ID.test(id))) {
+    return '"attachments" must be a list of attachment ids, like ["att_…"].';
+  }
+  if (value.length > MAX_ATTACHMENTS_PER_MESSAGE) return `A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments.`;
+  if (new Set(value).size !== value.length) return '"attachments" lists the same id twice.';
+  return value;
+}
+
 /**
- * Validates the POST body {text, to?}.
+ * Validates the POST body {text, to?, attachments?}.
  * Any `sender`/`from` field in the body is ignored on purpose.
+ * The text may be empty when the message carries at least one attachment.
  */
 export function parseMessageInput(body: unknown): ParsedInput {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { ok: false, status: 400, error: 'Body must be a JSON object {"text": "...", "to": "claude"}.' };
   }
-  const { text, to } = body as { text?: unknown; to?: unknown };
-  if (typeof text !== 'string' || text.trim() === '') {
-    return { ok: false, status: 400, error: '"text" must be a non-empty string.' };
+  const { to, attachments: ids } = body as { to?: unknown; attachments?: unknown };
+  const attachments = parseAttachmentIds(ids);
+  if (typeof attachments === 'string') return { ok: false, status: 400, error: attachments };
+  // With an image the text is optional, so a client may leave it out or send null.
+  const given = (body as { text?: unknown }).text;
+  const text = attachments.length && (given === undefined || given === null) ? '' : given;
+  if (typeof text !== 'string' || (text.trim() === '' && !attachments.length)) {
+    return { ok: false, status: 400, error: '"text" must be a non-empty string (it may be empty when the message has attachments).' };
   }
   if (Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) {
     return { ok: false, status: 413, error: `"text" is larger than ${MAX_TEXT_BYTES / 1024} KB.` };
@@ -96,7 +135,7 @@ export function parseMessageInput(body: unknown): ParsedInput {
     const m = MENTION.exec(text);
     if (m) recipient = m[1].toLowerCase() as Sender;
   }
-  return { ok: true, text, recipient, pinned: DECISION.test(text) };
+  return { ok: true, text, recipient, pinned: DECISION.test(text), attachments };
 }
 
 /** Parses ?since=<id>. Returns a non-negative integer, null when absent, or undefined when invalid. */
@@ -126,6 +165,15 @@ function heading(m: Message): string {
   return `**${NAMES[m.sender] ?? m.sender}${to}** · ${formatTime(m.created_at)} · #${m.id}`;
 }
 
+/** How an image appears in the export and in the CLI: "[image: att_…, 1170×2532]". */
+export const attachmentLabel = (a: Pick<Attachment, 'id' | 'width' | 'height'>): string => `[image: ${a.id}, ${a.width}×${a.height}]`;
+
+/** The first line of a message, for the list of decisions. An image-only message shows its images instead. */
+export function firstLine(m: Pick<Message, 'text' | 'attachments'>, max: number): string {
+  const line = m.text.trim().split('\n')[0].slice(0, max);
+  return line || (m.attachments ?? []).map(attachmentLabel).join(' ');
+}
+
 /** Builds the Markdown transcript: pinned decisions first, then every message in order. */
 export function toMarkdown(messages: Message[], exportedAt: Date = new Date()): string {
   const out = ['# Trialog transcript', '', `Exported ${formatTime(exportedAt.toISOString())} (Europe/Zurich), ${messages.length} messages.`, ''];
@@ -133,14 +181,17 @@ export function toMarkdown(messages: Message[], exportedAt: Date = new Date()): 
   if (pinned.length) {
     out.push('## Decisions', '');
     for (const m of pinned) {
-      const first = m.text.trim().split('\n')[0].slice(0, 200);
-      out.push(`- #${m.id} (${NAMES[m.sender] ?? m.sender}, ${formatTime(m.created_at)}): ${first}`);
+      out.push(`- #${m.id} (${NAMES[m.sender] ?? m.sender}, ${formatTime(m.created_at)}): ${firstLine(m, 200)}`);
     }
     out.push('');
   }
   out.push('## Messages', '');
   for (const m of messages) {
-    out.push(heading(m) + (m.pinned_at ? ' · 📌' : ''), '', m.text.trimEnd(), '', '---', '');
+    out.push(heading(m) + (m.pinned_at ? ' · 📌' : ''), '');
+    if (m.text.trim()) out.push(m.text.trimEnd(), '');
+    // The transcript names each image; the bytes stay in the hub, behind the token.
+    if (m.attachments?.length) out.push(m.attachments.map(attachmentLabel).join('  \n'), '');
+    out.push('---', '');
   }
   return out.join('\n');
 }

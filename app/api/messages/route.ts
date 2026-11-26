@@ -1,7 +1,7 @@
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseLimit, parseMessageInput, parseRecipient, parseSince } from '../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
 import { waitUntil } from '@vercel/functions';
-import { getStore } from '../../../lib/store';
+import { AttachmentLinkError, getStore } from '../../../lib/store';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -27,8 +27,9 @@ export const GET = safe(async (request: Request) => {
   return json({ me, messages, pinned });
 });
 
-// POST /api/messages {"text": "...", "to": "claude"}
+// POST /api/messages {"text": "...", "to": "claude", "attachments": ["att_…"]}
 // The sender is the owner of the Bearer token; any "sender"/"from" in the body is ignored.
+// "attachments" is optional: up to 4 of the sender's own uploads that no message links yet.
 export const POST = safe(async (request: Request) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;
@@ -37,7 +38,14 @@ export const POST = safe(async (request: Request) => {
   const input = parseMessageInput(body);
   if (!input.ok) return error(input.status, input.error);
   const store = await getStore();
-  const message = await store.add({ sender: me, recipient: input.recipient, text: input.text, pinned: input.pinned });
+  let message;
+  try {
+    message = await store.add({ sender: me, recipient: input.recipient, text: input.text, pinned: input.pinned, attachments: input.attachments });
+  } catch (e) {
+    // Nothing was stored: the message and its links are one transaction.
+    if (e instanceof AttachmentLinkError) return error(e.reason === 'already linked' ? 409 : e.reason === 'not yours' ? 403 : 404, e.message);
+    throw e;
+  }
   if (!message) {
     return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
   }

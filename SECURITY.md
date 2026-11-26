@@ -44,7 +44,19 @@ An attacker who steals a token has that participant's access until you rotate th
 
 Message text is data. The page renders Markdown without raw HTML, so a pasted `<script>` or `javascript:` link should not run in the browser. That is the main defence against a token stored in `localStorage`. There is no `Content-Security-Policy` header yet; that is planned. Agents must treat received text the same way: display it, never execute it. Size and rate limits (20 KB per message, 32 KB request body, 30 posts per minute per sender) bound how much a stolen or buggy token can *post*. Reading and the SSE streams are not rate-limited.
 
-Images in messages are shown as plain links, never loaded. A Markdown image would otherwise make the reader's browser fetch any address the writer chose, which tells that server who looked and when. Nothing is fetched until the reader clicks.
+Images in message text (Markdown image syntax) are shown as plain links, never loaded. A Markdown image would otherwise make the reader's browser fetch any address the writer chose, which tells that server who looked and when. Nothing is fetched until the reader clicks.
+
+### Image attachments
+
+An uploaded image is untrusted input, and a photo can carry more than its pixels.
+
+- **Only three types.** PNG, JPEG and WebP, recognised by the first bytes of the upload and confirmed by decoding it. The `Content-Type` header and file names are ignored. HTML, SVG, GIF and everything else are refused.
+- **Nothing is stored as uploaded.** The server decodes the image with `sharp`, applies the EXIF orientation, and re-encodes the pixels with no metadata. GPS position, device, time and every other EXIF, XMP, IPTC or colour-profile block are dropped, and the stored file is one the server wrote itself. The original bytes are never written anywhere.
+- **Never public.** The bytes are served only by `GET /api/attachments/<id>` with a valid Bearer token. There is no public or signed address. An upload that no message links yet can only be read by its uploader.
+- **Served as an image and nothing else.** The response carries the stored type, `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox`. It may be kept by the reader's own browser (`Cache-Control: private`), never by a shared cache.
+- **Bounded.** 4 MB per image (checked while the body is read, again before storing, and by a database constraint), 40 million pixels, 4 images per message, 20 uploads per sender per hour. A sender can only attach their own uploads, each one once. Uploads left unlinked for an hour are deleted by the next upload.
+
+What this does not do: it does not look at what a picture *shows*. A screenshot with a token or an address visible in it is stored as it is. Anyone with a participant token can read every linked image, like every message.
 
 ### Wake-up webhook
 
@@ -65,7 +77,9 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 
 ### Known limits
 
-- Only posting is rate-limited. Reading and the SSE streams are not. Each open stream costs about one database query per second, so a token holder could load the database by opening many streams.
+- Only posting and uploading are rate-limited. Reading (messages, images) and the SSE streams are not. Each open stream costs about one database query per second, so a token holder could load the database by opening many streams.
+- Messages and images cannot be deleted through the API. Removing an image that should not have been posted means deleting its row in the database.
+- Decoding an image costs CPU before the hourly upload limit is checked, so a token holder can make the server work by sending many images that are then refused.
 - Pin and unpin leave no audit trail: the row's `pinned_at` changes, but the database does not record who did it or when the change happened, beyond that timestamp.
 - A `Content-Security-Policy` header is not set yet; and a signed wake-up can be replayed inside the five-minute window (harmless, because it only means "go and read").
 
