@@ -5,9 +5,10 @@ import { MIN_TOKEN_LENGTH, loadRoster, tokenEnvName } from './participants';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE, MAX_TEXT_BYTES, POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS,
   POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
+  DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   addressing, attachmentLabel, displayName, firstLine,
-  type Attachment, type Author, type Participant, type Poll, type Sender,
+  type Attachment, type Author, type DecisionCard, type Participant, type Poll, type Sender,
 } from './shared';
 
 // The image limits, the shape of a name and the status limits live in lib/shared.ts, which the page can load too.
@@ -16,9 +17,10 @@ export {
   IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, NAME_PATTERN, RESERVED_NAMES,
   POLL_ID, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   RECENTLY_CLOSED_MS, VOTE_HINT,
+  DECISION_HINT, DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, decisionIsAgreed,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
   attachmentLabel, displayName, firstLine, pollResultText,
-  type Attachment, type Author, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type Sender,
 } from './shared';
 // Who the participants are is a setting: lib/participants.ts.
 export { MIN_TOKEN_LENGTH } from './participants';
@@ -36,6 +38,8 @@ export interface Message {
   reply_to: number | null;
   /** Present when a poll is attached to this message; otherwise omitted or null. */
   poll?: Poll | null;
+  /** Present when a decision card is attached to this message; otherwise omitted or null. */
+  decision?: DecisionCard | null;
   /** Always present; empty when the message has no reactions. */
   reactions: Reaction[];
 }
@@ -290,6 +294,74 @@ export function parseVoteInput(body: unknown): ParsedVoteInput {
 /** True when the string is a well-formed poll id. */
 export const isPollId = (value: unknown): value is string => typeof value === 'string' && POLL_ID.test(value);
 
+export type ParsedDecisionInput =
+  | { ok: true; prompt: string; recipient: Sender | null; replyTo: number | null }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Validates the POST /api/decisions body {prompt, to?, reply_to?}.
+ * Any `sender`/`from`/`participant`/`creator` field in the body is ignored on purpose.
+ */
+export function parseDecisionInput(body: unknown, names: readonly string[]): ParsedDecisionInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"prompt": "..." }.' };
+  }
+  const { prompt: rawPrompt, to, reply_to } = body as { prompt?: unknown; to?: unknown; reply_to?: unknown };
+  const prompt = cleanPollText(rawPrompt, 'prompt', DECISION_PROMPT_MAX_LENGTH);
+  if (typeof prompt !== 'string') return { ok: false, status: prompt.status, error: prompt.error };
+  const recipient = parseRecipient(to, names);
+  if (recipient === undefined) return { ok: false, status: 400, error: recipientHint(names) };
+  let replyTo: number | null = null;
+  if (reply_to !== undefined && reply_to !== null) {
+    if (typeof reply_to !== 'number' || !Number.isInteger(reply_to) || reply_to < 1) {
+      return { ok: false, status: 400, error: '"reply_to" must be a message id (a whole number).' };
+    }
+    replyTo = reply_to;
+  }
+  return { ok: true, prompt, recipient, replyTo };
+}
+
+export type ParsedDecisionPosition =
+  | { ok: true; stance: 'agree' | 'object'; note: string | null }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Validates the PUT /api/decisions/:id body {stance, note?}.
+ * `stance` is "agree" or "object". A note is optional for Agree and required for Object.
+ * Any `participant` field is ignored.
+ */
+export function parseDecisionPosition(body: unknown): ParsedDecisionPosition {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"stance": "agree"|"object", "note"?}.' };
+  }
+  const { stance, note: rawNote } = body as { stance?: unknown; note?: unknown };
+  if (stance !== 'agree' && stance !== 'object') {
+    return { ok: false, status: 400, error: '"stance" must be "agree" or "object".' };
+  }
+  let note: string | null = null;
+  if (rawNote !== undefined && rawNote !== null) {
+    if (typeof rawNote !== 'string') {
+      return { ok: false, status: 400, error: `"note" must be a plain text string (at most ${DECISION_NOTE_MAX_LENGTH} characters).` };
+    }
+    const text = rawNote.replace(/[\r\n\t]+/g, ' ').trim();
+    if (/[\x00-\x1f\x7f]/.test(text)) {
+      return { ok: false, status: 400, error: `"note" must be a plain text string (at most ${DECISION_NOTE_MAX_LENGTH} characters).` };
+    }
+    if ([...text].length > DECISION_NOTE_MAX_LENGTH) {
+      return { ok: false, status: 400, error: `"note" must be at most ${DECISION_NOTE_MAX_LENGTH} characters.` };
+    }
+    note = text || null;
+  }
+  if (stance === 'object' && !note) {
+    return { ok: false, status: 400, error: 'An Object needs a note that says why.' };
+  }
+  return { ok: true, stance, note };
+}
+
+/** True when the string is a well-formed decision card id. */
+export const isDecisionId = (value: unknown): value is string => typeof value === 'string' && DECISION_ID.test(value);
+
+
 /** Parses ?since=<id>. Returns a non-negative integer, null when absent, or undefined when invalid. */
 export function parseSince(value: string | null | undefined): number | null | undefined {
   if (value === null || value === undefined || value === '') return null;
@@ -342,6 +414,16 @@ export function toMarkdown(messages: Message[], exportedAt: Date = new Date()): 
       for (const opt of m.poll.options) {
         const who = opt.voters.length ? ` — ${opt.voters.map(displayName).join(', ')}` : '';
         out.push(`- ${opt.index}. ${opt.text} (${opt.votes}${who})`);
+      }
+      out.push('');
+    }
+    if (m.decision) {
+      const state = m.decision.agreed_at ? ' (agreed)' : '';
+      out.push(`Decision:${state} ${m.decision.prompt}`, '');
+      for (const pos of m.decision.positions) {
+        const mark = pos.stance === 'agree' ? '✓' : '✗';
+        const note = pos.note ? ` ${pos.note}` : '';
+        out.push(`- ${displayName(pos.participant)} ${mark}${note}`);
       }
       out.push('');
     }

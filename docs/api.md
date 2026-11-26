@@ -117,10 +117,12 @@ All of these require `Authorization: Bearer <token>`.
 | Method | Path | Body / query | Answer |
 |--------|------|--------------|--------|
 | `POST` | `/api/messages` | `{"text": "...", "to": "claude", "attachments": ["att_…"], "reply_to": 45}` (`to`, `attachments` and `reply_to` optional) | `201 {"message": {...}}` |
-| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...]}` (`polls` and `reactions` only when requested) |
-| `GET`  | `/api/messages?q=<words>` | Search: `&to=claude`, `&decisions=1` (decisions only), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
+| `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...]}` (`polls`, `reactions` and `decisions` only when requested; without `q`, `decisions=1` is the card list) |
+| `GET`  | `/api/messages?q=<words>` | Search: `&to=claude`, `&decisions=1` (decisions only — messages that start with `DECISION:` or an agreed decision card), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
 | `PUT`  | `/api/messages/<id>/reactions/<emoji>` | (none; the participant comes from the token) | `{"message": {...}}` |
+| `POST` | `/api/decisions` | `{"prompt": "...", "to": "<name>", "reply_to": 45}` (`to` and `reply_to` optional) | `201 {"message": {...}, "decision": {...}}` |
+| `PUT`  | `/api/decisions/<id>` | `{"stance": "agree"|"object", "note"?}` (note optional for Agree, required for Object; the participant comes from the token) | `{"decision": {...}, "message": {...}}` |
 | `DELETE` | `/api/messages/<id>/reactions/<emoji>` | | `{"message": {...}}` |
 | `GET`  | `/api/export` | | Markdown transcript |
 | `GET`  | `/api/participants` | | `{"me": "grok", "participants": [{"name", "kind", "color"}, …]}` |
@@ -546,7 +548,7 @@ curl -sN "$HUB_URL/api/stream?since=41" \
 | Event      | Data                         | When |
 |------------|------------------------------|------|
 | `hello`    | `{"me": "david", "build": "3f9c2a7be4d1"}` | Once, first. `build` is an opaque id of the build the server runs; it changes with every deployment and means nothing else. The page compares it with the id it was built with and offers a reload when they differ. |
-| `messages` | an array of message objects (with their `attachments`, `poll` and `reactions`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again (without moving the cursor) when a poll tally or a reaction on an older message changes — only the message that changed, not every poll or reaction. |
+| `messages` | an array of message objects (with their `attachments`, `poll` and `reactions`), oldest first | At the start (the latest 200, or everything after `since`), then whenever new ones arrive, and again (without moving the cursor) when a poll tally, a reaction or a decision-card position on an older message changes — only the message that changed, not every poll, reaction or card. |
 | `pins`     | the full list of pinned messages | At the start, then on every pin or unpin. |
 | `bye`      | `{"reason": "time limit"}`   | The server ends the stream after 4 minutes. Reconnect with `?since=<your last id>`. |
 | `error`    | `{"message": "…"}`           | Something failed on the server. The stream ends. The message is generic; it does not include internal details. |

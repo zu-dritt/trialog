@@ -8,13 +8,14 @@
 // an emoji: a participant may answer a message with a check-mark emoji, and that must never look
 // like the mark of a decision.
 import { isDecision } from '../lib/decision';
+import type { DecisionCard } from '../lib/shared';
 
 // The rule itself lives in lib/decision.ts, so the server's search can use the very same one.
 export { isDecision };
 
 /** What to call the list at the top, which holds every pinned message. */
-export function pinnedListTitle(pinned: { text: string }[], names: readonly string[]): 'Decisions' | 'Decisions and pinned' | 'Pinned' {
-  const decisions = pinned.filter((m) => isDecision(m.text, names)).length;
+export function pinnedListTitle(pinned: { text: string; decision?: DecisionCard | null }[], names: readonly string[]): 'Decisions' | 'Decisions and pinned' | 'Pinned' {
+  const decisions = pinned.filter((m) => isDecision(m.text, names, m.decision)).length;
   if (decisions === pinned.length) return 'Decisions';
   return decisions === 0 ? 'Pinned' : 'Decisions and pinned';
 }
