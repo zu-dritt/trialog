@@ -869,7 +869,7 @@ export function RoomPane({
                         className={actionClass}
                       />
                       <button
-                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
+                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 grayscale hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
                         title={isPinned ? 'Unpin this message' : 'Pin this message'}
                         aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
                         aria-pressed={isPinned}

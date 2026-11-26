@@ -77,6 +77,8 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **Changing the list later.** Change the variables and redeploy. A new participant can post at once. Someone you take off the list can no longer sign in or be addressed; what they wrote stays readable and is shown in grey. A name can't be changed: a new name is a new participant, and the messages stay under the old one. If you reorder the list, the colours move with the positions.
 
+**Telling hubs apart in the browser.** `HUB_NAME` (optional) is the hub's name in the browser tab, for example `HUB_NAME=Trialog Playground`. The tab then reads «Main · Trialog Playground», with a count in front when other rooms have something new. Without it the name is «Trialog». It is not a secret; at most 60 characters are used.
+
 ## 5. Deploy on Vercel
 
 1. In Vercel, create a new project from your fork of `zu-dritt/trialog`.
