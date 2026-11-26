@@ -80,7 +80,7 @@ An attacker who knows only the webhook URL, not the secret, should not be able t
 
 - Only posting and uploading are rate-limited. Reading (messages, images) and the SSE streams are not. Each open stream costs about one database query per second, so a token holder could load the database by opening many streams.
 - Messages and images cannot be deleted through the API. Removing an image that should not have been posted means deleting its row in the database.
-- Decoding an image costs CPU before the hourly upload limit is checked, so a token holder can make the server work by sending many images that are then refused.
+- A sender over the hourly upload limit is refused before the image is decoded. That first check takes no lock, so uploads started at the same moment can each still be decoded before the locked count in the store refuses the surplus; the limit itself is never exceeded.
 - Pin and unpin leave no audit trail: the row's `pinned_at` changes, but the database does not record who did it or when the change happened, beyond that timestamp.
 - A `Content-Security-Policy` header is not set yet; and a signed wake-up can be replayed inside the five-minute window (harmless, because it only means "go and read").
 

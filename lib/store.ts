@@ -81,6 +81,12 @@ export interface Store {
    * Every call first deletes uploads that have stayed unlinked for more than an hour.
    */
   addAttachment(input: NewAttachment, limitPerHour?: number): Promise<Attachment | null>;
+  /**
+   * How many images this sender has uploaded in the last hour. A quick look without a lock, so the
+   * route can refuse a sender who is over the limit before it decodes anything. The count that
+   * decides is still the locked one inside addAttachment.
+   */
+  uploadsInLastHour(sender: Sender): Promise<number>;
   /** The attachment and its bytes, or null. */
   getAttachment(id: string): Promise<{ attachment: StoredAttachment; data: Buffer } | null>;
   /** since=null → the latest `limit` messages; since=n → messages with id > n, oldest first. */
@@ -277,6 +283,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
       if (removed.length) await blobs.delete(db, removed);
       return stored;
     },
+    async uploadsInLastHour(sender) {
+      await ensure();
+      const [{ n }] = await db.query(
+        `SELECT count(*)::int AS n FROM attachments WHERE sender = $1::text AND created_at > now() - interval '1 hour'`,
+        [sender],
+      );
+      return n as number;
+    },
     async getAttachment(id) {
       await ensure();
       const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = $1::text`, [id]);
@@ -407,6 +421,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       await blobs.put(noDb, attachment.id, data);
       uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
       return attachment;
+    },
+    async uploadsInLastHour(sender) {
+      return [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
     },
     async getAttachment(id) {
       const upload = uploads.get(id);

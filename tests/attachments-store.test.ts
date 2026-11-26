@@ -135,10 +135,15 @@ for (const [name, make] of KITS) {
     must(await store.add({ sender: 'david', recipient: null, text: 'linked', attachments: [first.id] }));
     assert.ok(await store.addAttachment(shot('david', 'd1'), 2));
     assert.equal(await store.addAttachment(shot('david', 'd2'), 2), null);
+    // The quick count the route asks for before decoding sees the same uploads, refused ones not included.
+    assert.deepEqual([await store.uploadsInLastHour('grok'), await store.uploadsInLastHour('claude'), await store.uploadsInLastHour('david')], [3, 1, 2]);
     // An hour later the window has moved on.
     await age(61 * MINUTE);
+    assert.equal(await store.uploadsInLastHour('grok'), 0);
+    assert.equal(await store.uploadsInLastHour('david'), 0, 'a linked upload is kept, but it no longer counts');
     assert.ok(await store.addAttachment(shot('grok', 'next hour'), 3));
     assert.ok(await store.addAttachment(shot('david', 'next hour'), 2));
+    assert.equal(await store.uploadsInLastHour('grok'), 1);
   });
 }
 
