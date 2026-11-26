@@ -22,6 +22,7 @@ import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
+import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 
@@ -57,7 +58,7 @@ interface MessagesResponse {
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
   me: Sender;
-  participants: Participant[];
+  participants: ParticipantWithWake[];
 }
 
 /** Merge new messages into the list, de-duplicated by id and sorted. */
@@ -102,7 +103,7 @@ export default function Page() {
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
-  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
   // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
   const names = useMemo(() => participants.map((p) => p.name), [participants]);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
@@ -760,6 +761,7 @@ export default function Page() {
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
+      <WakeTargetsLine me={me} participants={participants} />
 
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">

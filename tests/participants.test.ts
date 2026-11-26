@@ -334,7 +334,7 @@ test('the wake-up webhook needs a participant named grok', () => {
     // With a list that has no grok there is nobody to wake: off, and the log says why.
     assert.equal(webhookConfig({ ...webhook, ...ENV }), null);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /GROK_WEBHOOK_URL is set, but PARTICIPANTS has no participant named "grok": wake-up webhook is off/);
+    assert.match(warnings[0], /GROK_WEBHOOK_URL is set, but PARTICIPANTS has no participant named "grok": that fallback is off/);
     assert.doesNotMatch(warnings[0], /webhook-test-secret|wake\.example/);
     // A broken list is every request's 500, not this function's business.
     assert.equal(webhookConfig({ ...webhook, PARTICIPANTS: 'ana:human' }), null);
