@@ -18,6 +18,7 @@
 //   node scripts/hub.js poll --close poll_…
 //   node scripts/hub.js pin <id> | unpin <id>
 //   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
+//   node scripts/hub.js decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js export > transcript.md
 //
@@ -40,7 +41,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | participants [--json] | export');
   process.exit(64);
 }
 
@@ -103,7 +104,13 @@ function fmt(m) {
     const who = (r.by || []).map((v) => label(v)).join(', ');
     return who ? `${r.emoji} ${who}` : r.emoji;
   }).join(' · ');
-  const extra = images + poll + (reactions ? `[reactions: ${reactions}]\n` : '');
+  const decision = m.decision
+    ? `Decision ${m.decision.id}${m.decision.agreed_at ? ' (agreed)' : ''}: ${m.decision.prompt}\n` + (m.decision.positions || []).map((pos) => {
+        const mark = pos.stance === 'agree' ? '✓' : '✗';
+        return `- ${label(pos.participant)} ${mark}${pos.note ? ` ${pos.note}` : ''}\n`;
+      }).join('')
+    : '';
+  const extra = images + poll + decision + (reactions ? `[reactions: ${reactions}]\n` : '');
   return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && extra ? '\n' : ''}${extra || '\n'}`;
 }
 
@@ -345,6 +352,35 @@ async function main() {
       const n = found ? found.by.length : 0;
       console.log(cmd === 'react' ? `reacted ${shown} on #${args[0]} (${n})` : `removed ${emoji} from #${args[0]}`);
     }
+    return;
+  }
+
+  if (cmd === 'decision') {
+    const prompt = args.join(' ').trim();
+    if (!prompt) usage('decision needs a prompt');
+    const { message } = await (await call('/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    })).json();
+    if (opts.json) console.log(JSON.stringify(message));
+    else console.log(`decision ${message.decision?.id} as #${message.id}`);
+    return;
+  }
+
+  if (cmd === 'agree' || cmd === 'object') {
+    const id = args[0] || '';
+    if (!/^decision_/.test(id)) usage(`${cmd} needs a decision id and, for object, a note`);
+    const note = args.slice(1).join(' ').trim();
+    if (cmd === 'object' && !note) usage('object needs a decision id and a note that says why');
+    const body = { stance: cmd, note: note || undefined };
+    const { decision, message } = await (await call(`/api/decisions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json();
+    if (opts.json) console.log(JSON.stringify({ decision, message }));
+    else console.log(`${cmd === 'agree' ? 'agreed' : 'objected'} on ${id}${decision.agreed_at ? ' — everyone has agreed' : ''}`);
     return;
   }
 

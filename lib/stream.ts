@@ -3,7 +3,7 @@
 //
 // There is no LISTEN/NOTIFY: the database is reached through Neon's pooler, which doesn't keep a
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
-// pinned ids, poll tallies, reaction tallies) and only reads messages when that changed. A vote or a reaction re-sends only the message whose fingerprint entry changed. The stream ends itself well inside the
+// pinned ids, poll tallies, reaction tallies, decision-card positions) and only reads messages when that changed. A vote, a reaction or a decision-card change re-sends only the message whose fingerprint entry changed. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
 import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
@@ -72,6 +72,28 @@ export function pollMessageIdsChanged(previous: string, next: string): number[] 
   return ids.sort((a, b) => a - b);
 }
 
+/** Parse a decisions fingerprint (`count|id:agree:object:latest,...`) into message-id → entry. */
+export function decisionEntriesInFingerprint(fingerprint: string): Map<number, string> {
+  return pollEntriesInFingerprint(fingerprint);
+}
+
+/**
+ * Message ids whose decision-card entry appeared, changed, or disappeared.
+ * A disappeared id still has to be re-sent, so the client can clear a withdrawn card.
+ */
+export function decisionMessageIdsChanged(previous: string, next: string): number[] {
+  const before = decisionEntriesInFingerprint(previous);
+  const after = decisionEntriesInFingerprint(next);
+  const ids = new Set<number>();
+  for (const [id, entry] of after) {
+    if (before.get(id) !== entry) ids.add(id);
+  }
+  for (const id of before.keys()) {
+    if (!after.has(id)) ids.add(id);
+  }
+  return [...ids].sort((a, b) => a - b);
+}
+
 export interface StreamOptions {
   store: Store;
   me: Sender;
@@ -133,6 +155,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       let pins = '';
       let polls = '';
       let reactions = '';
+      let decisions = '';
       const sendMessages = (messages: Message[]) => {
         if (!messages.length) return;
         last = messages[messages.length - 1].id;
@@ -146,6 +169,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
         pins = version.pins;
         polls = version.polls;
         reactions = version.reactions;
+        decisions = version.decisions;
         sendMessages(await store.list({ since, limit: BATCH }));
         send('pins', await store.pinned());
       } catch (e) {
@@ -189,6 +213,17 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
           if (version.reactions !== reactions) {
             const ids = reactionMessageIdsChanged(reactions, version.reactions);
             reactions = version.reactions;
+            if (ids.length) {
+              const updated = await store.listMessagesByIds(ids);
+              if (updated.length) send('messages', updated);
+            }
+            wrote = true;
+          }
+          // Decision-card changes do not move last_id, so they need their own fingerprint.
+          // Re-send those messages without moving `last`, or a lower id would make the next tick replay the stream.
+          if (version.decisions !== decisions) {
+            const ids = decisionMessageIdsChanged(decisions, version.decisions);
+            decisions = version.decisions;
             if (ids.length) {
               const updated = await store.listMessagesByIds(ids);
               if (updated.length) send('messages', updated);
