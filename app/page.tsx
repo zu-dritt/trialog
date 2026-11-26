@@ -8,6 +8,7 @@ import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, wi
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
+import { StatusBar } from './status';
 
 const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
@@ -452,6 +453,8 @@ export default function Page() {
           );
         })}
       </main>
+
+      <StatusBar token={token} onUnauthorized={forgetToken} />
 
       <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}

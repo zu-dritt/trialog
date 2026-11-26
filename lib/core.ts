@@ -1,18 +1,20 @@
 // Pure logic shared by the API routes, the store and the tests.
 // No Next.js imports here, so Vitest can load it directly.
 import { timingSafeEqual } from 'node:crypto';
-import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine, type Attachment } from './shared';
-
-// The image limits and types live in lib/shared.ts, which the page can load too.
-export {
-  IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, firstLine,
-  type Attachment, type ImageType,
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE, NAMES, SENDERS,
+  STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
+  attachmentLabel, firstLine,
+  type Attachment, type Author, type ParticipantStatus, type Sender,
 } from './shared';
 
-/** The three people who can post. `hub` is only used for the seeded welcome message. */
-export const SENDERS = ['grok', 'claude', 'david'] as const;
-export type Sender = (typeof SENDERS)[number];
-export type Author = Sender | 'hub';
+// The image limits, participant names and status limits live in lib/shared.ts, which the page can load too.
+export {
+  IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, NAMES, SENDERS,
+  STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
+  attachmentLabel, firstLine,
+  type Attachment, type Author, type ImageType, type ParticipantStatus, type Sender,
+} from './shared';
 
 export interface Message {
   id: number;
@@ -26,7 +28,6 @@ export interface Message {
 }
 
 export const TOKEN_ENV: Record<Sender, string> = { grok: 'GROK_TOKEN', claude: 'CLAUDE_TOKEN', david: 'DAVID_TOKEN' };
-export const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 
 export const MAX_TEXT_BYTES = 20 * 1024; // 20 KB per message
 export const MAX_BODY_BYTES = 32 * 1024; // whole JSON request body
@@ -128,6 +129,40 @@ export function parseMessageInput(body: unknown): ParsedInput {
     if (m) recipient = m[1].toLowerCase() as Sender;
   }
   return { ok: true, text, recipient, pinned: DECISION.test(text), attachments };
+}
+
+
+export type ParsedStatusInput =
+  | { ok: true; text: string; ttlSeconds: number }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Validates the PUT /api/status body {text, ttlSeconds?}.
+ * Plain text, trimmed, 1–80 characters; ttlSeconds defaults to 300 and is clamped to 30–1800.
+ */
+export function parseStatusInput(body: unknown): ParsedStatusInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"text": "...", "ttlSeconds": 300}.' };
+  }
+  const { text: rawText, ttlSeconds: rawTtl } = body as { text?: unknown; ttlSeconds?: unknown };
+  if (typeof rawText !== 'string') {
+    return { ok: false, status: 400, error: `"text" must be a plain text string (1–${STATUS_MAX_LENGTH} characters).` };
+  }
+  const text = rawText.replace(/[\r\n\t]+/g, ' ').trim();
+  if (!text || /[\x00-\x1f\x7f]/.test(text)) {
+    return { ok: false, status: 400, error: `"text" must be a non-empty plain text string (1–${STATUS_MAX_LENGTH} characters).` };
+  }
+  if ([...text].length > STATUS_MAX_LENGTH) {
+    return { ok: false, status: 400, error: `"text" must be at most ${STATUS_MAX_LENGTH} characters.` };
+  }
+  let ttlSeconds = STATUS_DEFAULT_TTL_SECONDS;
+  if (rawTtl !== undefined && rawTtl !== null) {
+    if (typeof rawTtl !== 'number' || !Number.isFinite(rawTtl)) {
+      return { ok: false, status: 400, error: `"ttlSeconds" must be a number (${STATUS_MIN_TTL_SECONDS}–${STATUS_MAX_TTL_SECONDS}).` };
+    }
+    ttlSeconds = Math.min(STATUS_MAX_TTL_SECONDS, Math.max(STATUS_MIN_TTL_SECONDS, Math.round(rawTtl)));
+  }
+  return { ok: true, text, ttlSeconds };
 }
 
 /** Parses ?since=<id>. Returns a non-negative integer, null when absent, or undefined when invalid. */
