@@ -140,7 +140,7 @@ for (const [name, make] of STORES) {
 test('sql: a database from before replies gains the column on first request and keeps its history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'trialog-'));
   try {
-    // The schema as it was before this change: everything up to migration 004.
+    // The schema as it was before this change: everything before the replies migration.
     const schema = await readFile(new URL('../schema.sql', import.meta.url), 'utf8');
     const old = schema.slice(0, schema.indexOf('DO $$'));
     assert.ok(old.includes('participant_status') && !old.includes('reply_to'));
@@ -254,7 +254,7 @@ test('old clients that send no reply_to work unchanged', async () => {
   assert.equal(res.status, 201);
   const { message } = (await res.json()) as { message: Message };
   assert.equal(message.reply_to, null);
-  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'recipient', 'reply_to', 'sender', 'text']);
+  assert.deepEqual(Object.keys(message).sort(), ['attachments', 'created_at', 'id', 'pinned_at', 'poll', 'recipient', 'reply_to', 'sender', 'text']);
   assert.equal((await post({ text: 'null is fine too', reply_to: null }, 'david')).status, 201);
   // A "sender" in the body is still ignored, also on a reply.
   const spoof = await posted({ text: 'I am not Grok', sender: 'grok', reply_to: message.id }, 'claude');

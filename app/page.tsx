@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Author, Message, Sender } from '../lib/core';
+import type { Author, Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, SENDERS, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, prepareForUpload, useImageLoader, withoutSent, type Draft } from './attachments';
@@ -9,6 +9,7 @@ import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, wri
 import { EmojiPicker, insertAtCursor } from './emoji';
 import { MessageBody } from './markdown';
 import { ChipRow } from './chips';
+import { PollCard, PollComposer, withPolls } from './polls';
 import {
   MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
   pickSelection, tooLong, typedIntent, useQuotableSelection, type QuoteChip,
@@ -45,6 +46,7 @@ interface MessagesResponse {
   me: Sender;
   messages: Message[];
   pinned: Message[];
+  polls?: Poll[];
 }
 
 /** Merge new messages into the list, de-duplicated by id and sorted. */
@@ -94,6 +96,9 @@ export default function Page() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollBusy, setPollBusy] = useState(false);
+  const [pollError, setPollError] = useState('');
   const boxRef = useRef<HTMLTextAreaElement>(null); // the message box
   const cursorAfterInsert = useRef<number | null>(null);
   const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -213,6 +218,7 @@ export default function Page() {
       setMe(data.me);
       addMessages(data.messages);
       setPinned(data.pinned);
+      if (data.polls?.length) setMessages((list) => withPolls(list, data.polls ?? []));
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -459,6 +465,54 @@ export default function Page() {
     }
   };
 
+  const applyPoll = (poll: Poll) => {
+    setMessages((list) => withPolls(list, [poll]));
+    setPinned((list) => withPolls(list, [poll]));
+  };
+
+  const createPoll = async (question: string, options: string[]) => {
+    setPollBusy(true);
+    setPollError('');
+    try {
+      const body: { question: string; options: string[]; to?: string } = { question, options };
+      if (to) body.to = to;
+      const res = await api('/api/polls', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = (await res.json()) as { message: Message; poll: Poll };
+      setMessages((list) => merge(list, [data.message]));
+      setPollOpen(false);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setPollError(errorMessage(e));
+    } finally {
+      setPollBusy(false);
+    }
+  };
+
+  const voteOnPoll = async (pollId: string, option: number | null) => {
+    try {
+      if (option === null) {
+        const data = (await (await api(`/api/polls/${pollId}/vote`, { method: 'DELETE' })).json()) as { poll: Poll };
+        applyPoll(data.poll);
+      } else {
+        const data = (await (await api(`/api/polls/${pollId}/vote`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ option }),
+        })).json()) as { poll: Poll };
+        applyPoll(data.poll);
+      }
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+  const closePoll = async (pollId: string) => {
+    try {
+      const data = (await (await api(`/api/polls/${pollId}/close`, { method: 'POST' })).json()) as { poll: Poll };
+      applyPoll(data.poll);
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
 
@@ -547,10 +601,18 @@ export default function Page() {
                       />
                     );
                   })()}
-                  {m.text.trim() !== '' && (
+                  {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
                     <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
                       <MessageBody text={m.text} />
                     </div>
+                  )}
+                  {m.poll && (
+                    <PollCard
+                      poll={m.poll}
+                      me={me}
+                      onVote={(pollId, option) => { void voteOnPoll(pollId, option); }}
+                      onClose={(pollId) => { void closePoll(pollId); }}
+                    />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
                 </div>
@@ -573,6 +635,14 @@ export default function Page() {
             <QuoteChips quotes={quotes} onRemove={removeQuote} />
             <DraftChips drafts={drafts} onRemove={removeDraft} />
           </ChipRow>
+        )}
+        {pollOpen && (
+          <PollComposer
+            busy={pollBusy}
+            error={pollError}
+            onCancel={() => { setPollOpen(false); setPollError(''); }}
+            onCreate={(question, options) => { void createPoll(question, options); }}
+          />
         )}
         {/* The message box has the full width on every screen. The controls sit in one row below it. */}
         <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
@@ -610,6 +680,14 @@ export default function Page() {
               disabled={drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE}
               title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
             >Image</button>
+            <button
+              type="button"
+              className={TOOL}
+              aria-pressed={pollOpen}
+              aria-expanded={pollOpen}
+              aria-controls={pollOpen ? 'poll-composer' : undefined}
+              onClick={() => { setPollOpen((v) => !v); setPollError(''); }}
+            >Poll</button>
             <EmojiPicker open={emojiOpen} onOpenChange={setEmojiOpen} onInsert={insertEmoji} boxRef={boxRef} buttonClassName={TOOL} />
             <ExpandButton expanded={expanded} onToggle={() => { setExpanded((v) => !v); boxRef.current?.focus(); }} className={TOOL} />
             <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>

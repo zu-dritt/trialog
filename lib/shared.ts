@@ -19,6 +19,32 @@ export interface ParticipantStatus {
   updated_at: string;
 }
 
+export const POLL_QUESTION_MAX_LENGTH = 200;
+export const POLL_OPTION_MAX_LENGTH = 80;
+export const POLL_MIN_OPTIONS = 2;
+export const POLL_MAX_OPTIONS = 10;
+/** Ids look like poll_3f9c… (24 hex digits). The pattern is a little wider so the format can grow. */
+export const POLL_ID = /^poll_[a-z0-9]{8,48}$/;
+
+export interface PollOption {
+  /** 1-based, in the order the creator gave. */
+  index: number;
+  text: string;
+  votes: number;
+  voters: Sender[];
+}
+
+/** A poll attached to a message, including the current tally. */
+export interface Poll {
+  id: string;
+  message_id: number;
+  creator: Sender;
+  question: string;
+  options: PollOption[];
+  closed_at: string | null;
+  created_at: string;
+}
+
 /** The image types Trialog accepts. An upload is recognised by its first bytes, never by a name or header. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];

@@ -3,7 +3,7 @@
 //
 // There is no LISTEN/NOTIFY: the database is reached through Neon's pooler, which doesn't keep a
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
-// pinned ids) and only reads messages when that changed. The stream ends itself well inside the
+// pinned ids, poll tallies) and only reads messages when that changed. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
 import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
@@ -71,6 +71,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
 
       let last = since ?? 0;
       let pins = '';
+      let polls = '';
       const sendMessages = (messages: Message[]) => {
         if (!messages.length) return;
         last = messages[messages.length - 1].id;
@@ -82,6 +83,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
         // Read the fingerprint before the lists: a change in between is then picked up by the first tick.
         const version = await store.version();
         pins = version.pins;
+        polls = version.polls;
         sendMessages(await store.list({ since, limit: BATCH }));
         send('pins', await store.pinned());
       } catch (e) {
@@ -107,6 +109,14 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
           if (version.pins !== pins) {
             pins = version.pins;
             send('pins', await store.pinned());
+            wrote = true;
+          }
+          // Vote and close changes do not move last_id, so they need their own fingerprint.
+          // Re-send those messages without moving `last`, or a lower id would make the next tick replay the stream.
+          if (version.polls !== polls) {
+            polls = version.polls;
+            const updated = await store.listPollMessages();
+            if (updated.length) send('messages', updated);
             wrote = true;
           }
           if (wrote) lastWrite = now();
