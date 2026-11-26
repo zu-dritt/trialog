@@ -93,7 +93,7 @@ test('a name for a new room is checked before anything is sent', () => {
   assert.match(roomNameProblem('2026', ROOMS), /at least one letter/);
   assert.match(roomNameProblem('Calm', []), /^$/);
   assert.match(roomNameProblem('calm talk', [room('calm-talk', 'Calm talk')]), /a room "calm-talk" already/);
-  assert.match(roomNameProblem('All', ROOMS), /a room "all" already/);
+  assert.match(roomNameProblem('All', ROOMS), /"all" can't be the id of a room/);
 });
 
 test('the tabs: the open room is marked and has no count, the others show what is new', () => {

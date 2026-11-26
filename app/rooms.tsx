@@ -9,7 +9,7 @@
 // the counts. The address carries the room (`?room=calm`), so a reload and a shared link land in
 // the right one; `main` needs nothing in the address.
 import { useEffect, useRef, useState } from 'react';
-import { MAIN_ROOM, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, roomIdFromName, type Room } from '../lib/shared';
+import { MAIN_ROOM, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, roomIdFromName, type Room } from '../lib/shared';
 
 // --- the room in the address ------------------------------------------------------------------
 
@@ -79,7 +79,8 @@ export function roomNameProblem(name: string, rooms: readonly Pick<Room, 'id'>[]
   if (!cleanRoomName(name)) return `A room name has at most ${ROOM_NAME_MAX_LENGTH} characters.`;
   const id = roomIdFromName(name);
   if (!id) return 'The name needs at least one letter from a to z.';
-  if (id === 'all' || rooms.some((r) => r.id === id)) return `There is a room "${id}" already.`;
+  if (RESERVED_ROOM_IDS.includes(id)) return `"${id}" can't be the id of a room. Try another name.`;
+  if (rooms.some((r) => r.id === id)) return `There is a room "${id}" already.`;
   return '';
 }
 
