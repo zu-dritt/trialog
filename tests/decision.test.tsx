@@ -31,49 +31,52 @@ const NOT_DECISIONS = [
   '',
 ];
 
+// The names that apply when PARTICIPANTS is not set.
+const THREE = ['grok', 'claude', 'david'];
+
 test('a message is a decision when it starts with DECISION:, after an optional @name', () => {
-  for (const text of DECISIONS) assert.equal(isDecision(text), true, JSON.stringify(text));
-  for (const text of NOT_DECISIONS) assert.equal(isDecision(text), false, JSON.stringify(text));
+  for (const text of DECISIONS) assert.equal(isDecision(text, THREE), true, JSON.stringify(text));
+  for (const text of NOT_DECISIONS) assert.equal(isDecision(text, THREE), false, JSON.stringify(text));
 });
 
 test('the page and the server agree on what a decision is', () => {
   // The server pins a message by this rule when it is posted (lib/core.ts). None of these texts
   // opens with a quote, which is the one case where the page looks further than the server.
   for (const text of [...DECISIONS, ...NOT_DECISIONS].filter((t) => t.trim() !== '')) {
-    const parsed = parseMessageInput({ text });
+    const parsed = parseMessageInput({ text }, THREE);
     assert.ok(parsed.ok, JSON.stringify(text));
-    assert.equal(isDecision(text), parsed.pinned, JSON.stringify(text));
+    assert.equal(isDecision(text, THREE), parsed.pinned, JSON.stringify(text));
   }
 });
 
 test('a quote at the top is skipped; a DECISION: inside a quote does not count', () => {
   // A decision that opens with the message it answers.
-  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage do we use?\n\nDECISION: Postgres'), true);
-  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage?\n\n@grok DECISION: Postgres'), true);
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage do we use?\n\nDECISION: Postgres', THREE), true);
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> Which storage?\n\n@grok DECISION: Postgres', THREE), true);
   // Quoting a decision is not deciding.
-  assert.equal(isDecision('> **Grok** in #45:\n>\n> DECISION: Postgres\n\nI am not sure about this.'), false);
-  assert.equal(isDecision('> DECISION: Postgres'), false);
-  assert.equal(isDecision('>DECISION: Postgres\n>\n> more'), false);
+  assert.equal(isDecision('> **Grok** in #45:\n>\n> DECISION: Postgres\n\nI am not sure about this.', THREE), false);
+  assert.equal(isDecision('> DECISION: Postgres', THREE), false);
+  assert.equal(isDecision('>DECISION: Postgres\n>\n> more', THREE), false);
 });
 
 test('pinned by hand is not a decision', () => {
   // What makes a decision is its text. Whether a message is pinned plays no part.
   const byHand = { id: 7, text: 'The address of the test page is in the README.', pinned_at: '2026-11-25T13:00:00Z' };
   const unpinnedDecision = { id: 8, text: 'DECISION: ship v1', pinned_at: null };
-  assert.equal(isDecision(byHand.text), false);
-  assert.equal(isDecision(unpinnedDecision.text), true);
+  assert.equal(isDecision(byHand.text, THREE), false);
+  assert.equal(isDecision(unpinnedDecision.text, THREE), true);
 });
 
 test('the list is called by what it holds', () => {
   const decision = { text: 'DECISION: ship v1' };
   const addressed = { text: '@grok DECISION: use Postgres' };
   const byHand = { text: 'The address of the test page is in the README.' };
-  assert.equal(pinnedListTitle([decision]), 'Decisions');
-  assert.equal(pinnedListTitle([decision, addressed]), 'Decisions');
-  assert.equal(pinnedListTitle([decision, byHand]), 'Decisions and pinned');
-  assert.equal(pinnedListTitle([byHand, addressed, byHand]), 'Decisions and pinned');
-  assert.equal(pinnedListTitle([byHand]), 'Pinned');
-  assert.equal(pinnedListTitle([byHand, byHand]), 'Pinned');
+  assert.equal(pinnedListTitle([decision], THREE), 'Decisions');
+  assert.equal(pinnedListTitle([decision, addressed], THREE), 'Decisions');
+  assert.equal(pinnedListTitle([decision, byHand], THREE), 'Decisions and pinned');
+  assert.equal(pinnedListTitle([byHand, addressed, byHand], THREE), 'Decisions and pinned');
+  assert.equal(pinnedListTitle([byHand], THREE), 'Pinned');
+  assert.equal(pinnedListTitle([byHand, byHand], THREE), 'Pinned');
 });
 
 test('the badge is a label with the word and a drawn check mark, not an emoji', () => {

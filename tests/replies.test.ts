@@ -25,6 +25,9 @@ const must = <T>(v: T | null | undefined): T => { assert.ok(v, 'expected a value
 
 // --- reading the request ------------------------------------------------------------------------
 
+// The names that apply when PARTICIPANTS is not set.
+const THREE = ['grok', 'claude', 'david'];
+
 test('parseReplyTo: a message id, nothing, or not an id', () => {
   assert.equal(parseReplyTo(undefined), null);
   assert.equal(parseReplyTo(null), null);
@@ -36,7 +39,7 @@ test('parseReplyTo: a message id, nothing, or not an id', () => {
 });
 
 test('parseMessageInput: reply_to is optional and never changes addressing or pinning', () => {
-  const ok = (body: unknown) => { const r = parseMessageInput(body); assert.ok(r.ok, JSON.stringify(r)); return r; };
+  const ok = (body: unknown) => { const r = parseMessageInput(body, THREE); assert.ok(r.ok, JSON.stringify(r)); return r; };
   assert.equal(ok({ text: 'plain' }).replyTo, null);
   assert.equal(ok({ text: 'answer', reply_to: 45 }).replyTo, 45);
   assert.equal(ok({ text: 'answer', reply_to: null }).replyTo, null);
@@ -44,10 +47,10 @@ test('parseMessageInput: reply_to is optional and never changes addressing or pi
   assert.deepEqual([r.recipient, r.pinned, r.replyTo], ['grok', true, 7]);
   // A reply to someone is not addressed to them by itself: the sender says who it is for.
   assert.equal(ok({ text: 'answer', reply_to: 7 }).recipient, null);
-  const bad = parseMessageInput({ text: 'answer', reply_to: 'the last one' });
+  const bad = parseMessageInput({ text: 'answer', reply_to: 'the last one' }, THREE);
   assert.ok(!bad.ok && bad.status === 400 && /reply_to/.test(bad.error));
   // Text is still required: a reply with nothing in it is not a message.
-  assert.equal(parseMessageInput({ text: '', reply_to: 45 }).ok, false);
+  assert.equal(parseMessageInput({ text: '', reply_to: 45 }, THREE).ok, false);
 });
 
 // --- the store ----------------------------------------------------------------------------------

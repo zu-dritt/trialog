@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Author, Message, Poll, Sender } from '../lib/core';
-import { MAX_ATTACHMENTS_PER_MESSAGE, SENDERS, attachmentLabel, firstLine, type Attachment } from '../lib/shared';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
+import type { Message, Poll, Sender } from '../lib/core';
+import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
@@ -20,7 +20,6 @@ import { StatusBar } from './status';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
 
-const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
 const POLL_MS = 1500;
@@ -28,14 +27,6 @@ const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
-
-// Full class names per sender, so Tailwind sees them at build time.
-const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
-  grok: { text: 'text-grok', bg: 'bg-grok', border: 'border-l-grok' },
-  claude: { text: 'text-claude', bg: 'bg-claude', border: 'border-l-claude' },
-  david: { text: 'text-david', bg: 'bg-david', border: 'border-l-david' },
-  hub: { text: 'text-hub', bg: 'bg-hub', border: 'border-l-hub' },
-};
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
@@ -50,6 +41,11 @@ interface MessagesResponse {
   messages: Message[];
   pinned: Message[];
   polls?: Poll[];
+}
+/** GET /api/participants: who takes part here. The page has no names of its own. */
+interface ParticipantsResponse {
+  me: Sender;
+  participants: Participant[];
 }
 
 /** Merge new messages into the list, de-duplicated by id and sorted. */
@@ -93,6 +89,10 @@ export default function Page() {
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  // The names alone, for the rules that read how a message starts ("@name", "DECISION:").
+  const names = useMemo(() => participants.map((p) => p.name), [participants]);
+  const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [drafts, setDrafts] = useState<Draft[]>([]); // images waiting in the composer
   const [dragging, setDragging] = useState(false);
   const lastId = useRef(0);
@@ -205,6 +205,27 @@ export default function Page() {
     const abort = new AbortController();
     lastId.current = 0;
     setMessages([]);
+    setParticipants([]);
+    setSetupError('');
+
+    /**
+     * Asks who takes part and who this token belongs to: the names, the recipient picker and the
+     * colours all come from the answer. Asked again whenever the stream reconnects, so a change to
+     * the server's setting shows up without a reload. A failure here stops nothing: messages are
+     * still shown, in the neutral colour, until an answer arrives.
+     */
+    const loadParticipants = async () => {
+      try {
+        const data = (await (await api('/api/participants', { signal: abort.signal })).json()) as ParticipantsResponse;
+        if (stopped) return;
+        setParticipants(data.participants);
+        setMe(data.me);
+        setSetupError('');
+      } catch (e) {
+        if (errorMessage(e) === 'unauthorized') throw e; // the token was refused: the caller stops
+        if (!stopped && errorMessage(e).startsWith('Configuration error')) setSetupError(errorMessage(e));
+      }
+    };
 
     const addMessages = (incoming: Message[]) => {
       if (!incoming.length) return;
@@ -262,6 +283,8 @@ export default function Page() {
       while (!stopped) {
         let clean = false;
         try {
+          await loadParticipants();
+          if (stopped) return;
           clean = await readStream();
         } catch (e) {
           if (stopped || errorMessage(e) === 'unauthorized') return;
@@ -286,6 +309,11 @@ export default function Page() {
     void run();
     return () => { stopped = true; abort.abort(); };
   }, [token, api]);
+
+  // A recipient who is no longer a participant can't stay selected.
+  useEffect(() => {
+    if (to && participants.length && !participants.some((p) => p.name === to)) setTo('');
+  }, [to, participants]);
 
   // Auto-scroll, unless the reader scrolled up.
   useLayoutEffect(() => {
@@ -361,7 +389,7 @@ export default function Page() {
     const source = m.text.trim() !== '' ? m.text : (m.attachments ?? []).map(attachmentLabel).join('\n');
     const text = selected ?? source;
     if (text.trim() === '') return;
-    const chip: QuoteChip = { key: nextQuoteKey.current++, author: NAMES[m.sender] ?? m.sender, messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
+    const chip: QuoteChip = { key: nextQuoteKey.current++, author: displayName(m.sender), messageId: m.id, kind: selected === null ? 'message' : 'selection', text };
     const result = withQuote(quotesRef.current, chip);
     setNotice(quoteNotice(result.refused));
     quotesRef.current = result.quotes; // so a second quote right away counts this one
@@ -394,7 +422,7 @@ export default function Page() {
       // "@name" and "DECISION:" at the start of what was typed mean what they always mean. The
       // server looks for them at the start of the message, where the quotes now stand, so the
       // page asks for the recipient here, and for the pin below.
-      const typed = sentQuotes.length ? typedIntent(draft, SENDERS) : { to: null, decision: false };
+      const typed = sentQuotes.length ? typedIntent(draft, names) : { to: null, decision: false };
       if (to) body.to = to;
       else if (typed.to) body.to = typed.to;
       if (replyTo) body.reply_to = replyTo.id;
@@ -533,6 +561,10 @@ export default function Page() {
   const pinnedIds = new Set(pinned.map((m) => m.id));
   const byId = new Map(messages.map((m) => [m.id, m])); // to find the message a reply answers
   let lastDay = '';
+  // A name the server doesn't list (the hub's welcome, a former participant) gets the neutral colour.
+  const color = (name: string) => colorOf(name, participants);
+  const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
+  const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
   const reload = () => window.location.reload();
 
   return (
@@ -547,7 +579,7 @@ export default function Page() {
         <span role="status" className="flex flex-1">
           {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
-        {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
+        {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
@@ -555,12 +587,12 @@ export default function Page() {
       {pinned.length > 0 && (
         <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
           {/* Every pinned message is listed here. A decision carries its badge; a message pinned by hand does not. */}
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned)}</h2>
+          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
           <ul className="text-sm">
             {pinned.map((m) => (
               <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
-                {isDecision(m.text) && <><DecisionBadge />{' '}</>}
+                <a href={`#m-${m.id}`}>#{m.id}</a> <span className="font-bold" style={{ color: color(m.sender) }}>{displayName(m.sender)}</span>{' '}
+                {isDecision(m.text, names) && <><DecisionBadge />{' '}</>}
                 <span>{firstLine(m, 160)}</span>
               </li>
             ))}
@@ -577,28 +609,29 @@ export default function Page() {
           const showDay = day !== lastDay;
           lastDay = day;
           const isPinned = pinnedIds.has(m.id);
-          const s = STYLE[m.sender];
+          const own = color(m.sender);
           return (
             <div key={m.id}>
               {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
               <article
                 id={`m-${m.id}`}
                 tabIndex={-1}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-david)]' : ''}`}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`}
+                style={{ borderLeftColor: own }}
               >
-                <div className={`grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg ${s.bg}`}>
-                  {NAMES[m.sender]?.[0] ?? '?'}
+                <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
+                  {displayName(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2 text-[13px] text-muted">
-                    <span className={`font-bold ${s.text}`}>{NAMES[m.sender] ?? m.sender}</span>
+                    <span className="font-bold" style={{ color: own }}>{displayName(m.sender)}</span>
                     {m.recipient && (
-                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {NAMES[m.recipient]}</span>
+                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {displayName(m.recipient)}</span>
                     )}
                     <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
                     <span className="text-xs">#{m.id}</span>
                     {/* On a narrow screen the header line has no room for the badge: there it gets a line of its own, below. */}
-                    {isDecision(m.text) && <DecisionBadge className="max-sm:hidden" />}
+                    {isDecision(m.text, names) && <DecisionBadge className="max-sm:hidden" />}
                     <ReplyButton
                       messageId={m.id}
                       onReply={() => startReply(m)}
@@ -619,14 +652,14 @@ export default function Page() {
                       onClick={() => togglePin(m, isPinned)}
                     >📌</button>
                   </div>
-                  {isDecision(m.text) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
+                  {isDecision(m.text, names) && <div className="mt-0.5 sm:hidden"><DecisionBadge /></div>}
                   {m.reply_to != null && (() => {
                     const parent = byId.get(m.reply_to);
                     return (
                       <ReplyContext
                         replyTo={m.reply_to} parent={parent} onJump={jumpTo}
-                        author={parent ? NAMES[parent.sender] ?? parent.sender : undefined}
-                        authorClass={parent ? STYLE[parent.sender].text : undefined}
+                        author={parent ? displayName(parent.sender) : undefined}
+                        authorColor={parent ? color(parent.sender) : undefined}
                       />
                     );
                   })()}
@@ -639,6 +672,7 @@ export default function Page() {
                     <PollCard
                       poll={m.poll}
                       me={me}
+                      participants={participants}
                       onVote={(pollId, option) => { void voteOnPoll(pollId, option); }}
                       onClose={(pollId) => { void closePoll(pollId); }}
                     />
@@ -651,16 +685,17 @@ export default function Page() {
         })}
       </main>
 
-      <StatusBar token={token} onUnauthorized={forgetToken} />
+      <StatusBar token={token} onUnauthorized={forgetToken} participants={participants} />
 
-      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-david bg-panel' : 'border-line'}`}>
-        {dragging && <div className="mb-1.5 text-[13px] text-david">Drop the image to attach it.</div>}
+      <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-accent bg-panel' : 'border-line'}`}>
+        {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
+        {setupError && <div role="alert" className="mb-1.5 text-[13px] text-bad">{setupError}</div>}
         {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
         {overLimit && <div className="mb-1.5 text-[13px] text-bad" role="alert">{overLimit}</div>}
         {/* Everything that goes with the next message, in one row: the message it answers, quotes, images. */}
         {(replyTo || quotes.length > 0 || drafts.length > 0) && (
           <ChipRow>
-            {replyTo && <ReplyingTo parent={replyTo} author={NAMES[replyTo.sender] ?? replyTo.sender} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
+            {replyTo && <ReplyingTo parent={replyTo} author={displayName(replyTo.sender)} onCancel={() => { setReplyTo(null); boxRef.current?.focus(); }} />}
             <QuoteChips quotes={quotes} onRemove={removeQuote} />
             <DraftChips drafts={drafts} onRemove={removeDraft} />
           </ChipRow>
@@ -680,7 +715,7 @@ export default function Page() {
             rows={2}
             value={draft}
             aria-label="Message"
-            placeholder="Message (Markdown). @claude / @grok to address, DECISION: to pin. Paste or drop an image to attach it."
+            placeholder={`Message (Markdown). ${addressHint}, DECISION: to pin. Paste or drop an image to attach it.`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
               const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
@@ -696,9 +731,7 @@ export default function Page() {
           <div className="flex flex-wrap items-center gap-2">
             <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
               <option value="">to everyone</option>
-              <option value="grok">to Grok</option>
-              <option value="claude">to Claude</option>
-              <option value="david">to David</option>
+              {participants.map((p) => <option key={p.name} value={p.name}>to {displayName(p.name)}</option>)}
             </select>
             <input
               ref={fileInput} type="file" accept={ACCEPT} multiple hidden

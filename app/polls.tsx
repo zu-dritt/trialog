@@ -2,14 +2,8 @@
 
 import { useState } from 'react';
 import type { Message } from '../lib/core';
-import type { Poll, Sender } from '../lib/shared';
-import { NAMES, POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, VOTE_HINT } from '../lib/shared';
-
-const STYLE: Record<Sender, string> = {
-  grok: 'text-grok',
-  claude: 'text-claude',
-  david: 'text-david',
-};
+import type { Participant, Poll, Sender } from '../lib/shared';
+import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH, VOTE_HINT, colorOf, displayName } from '../lib/shared';
 
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 
@@ -32,11 +26,14 @@ export function myVote(poll: Poll, me: Sender | null): number | null {
 export function PollCard({
   poll,
   me,
+  participants = [],
   onVote,
   onClose,
 }: {
   poll: Poll;
   me: Sender | null;
+  /** From GET /api/participants: gives each voter their colour. A voter who isn't on it is grey. */
+  participants?: readonly Participant[];
   onVote?: (pollId: string, option: number | null) => void;
   onClose?: (pollId: string) => void;
 }) {
@@ -57,7 +54,7 @@ export function PollCard({
           const selected = mine === option.index;
           const label = `${option.index}. ${option.text}`;
           const voters = option.voters.map((name) => (
-            <span key={name} className={`font-semibold ${STYLE[name] ?? ''}`}>{NAMES[name] ?? name}</span>
+            <span key={name} className="font-semibold" style={{ color: colorOf(name, participants) }}>{displayName(name)}</span>
           ));
           const who = voters.length > 0 && (
             <span className="text-xs text-muted">
@@ -79,13 +76,13 @@ export function PollCard({
           return (
             <li key={option.index}>
               {closed || !onVote ? (
-                <div className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 ${selected ? 'border-david bg-panel' : 'border-line'}`}>
+                <div className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 ${selected ? 'border-accent bg-panel' : 'border-line'}`}>
                   {inner}
                 </div>
               ) : (
                 <button
                   type="button"
-                  className={`flex w-full cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-fg hover:bg-panel ${selected ? 'border-david bg-panel' : 'border-line bg-transparent'}`}
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-fg hover:bg-panel ${selected ? 'border-accent bg-panel' : 'border-line bg-transparent'}`}
                   aria-pressed={selected}
                   aria-label={selected ? `Withdraw vote for ${label}` : `Vote for ${label}`}
                   onClick={() => onVote(poll.id, selected ? null : option.index)}

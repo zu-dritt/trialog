@@ -16,7 +16,7 @@
 // the reader saw, not the Markdown behind it, so it is escaped: a quoted "*" stays a star and a
 // quoted "<b>" stays those three characters when the new message is shown.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MAX_TEXT_BYTES } from '../lib/shared';
+import { MAX_TEXT_BYTES, addressing } from '../lib/shared';
 import { Chip } from './chips';
 
 /** Marks the element that holds one message's text. Its value is the message id. */
@@ -187,12 +187,10 @@ export function tooLong(composed: string, quoteCount: number, max: number = MAX_
  * no longer is that start, so the page reads them here and asks for the same things explicitly.
  */
 export function typedIntent(typed: string, names: readonly string[]): { to: string | null; decision: boolean } {
-  const group = names.map((n) => n.replace(/[^A-Za-z0-9_-]/g, '')).filter(Boolean).join('|');
-  if (!group) return { to: null, decision: /^\s*DECISION:/.test(typed) };
-  // The same two rules as the server's (lib/core.ts): the name in any case, DECISION: in capitals.
-  const mention = new RegExp(`^\\s*@(${group})\\b`, 'i').exec(typed);
-  const decision = new RegExp(`^\\s*(?:@(?:${group})\\b[\\s,:]*)?DECISION:`).test(typed);
-  return { to: mention ? mention[1].toLowerCase() : null, decision };
+  // The server's own two rules (addressing in lib/shared.ts): the name in any case, DECISION: in capitals.
+  const { mention, decision } = addressing(names);
+  const found = mention.exec(typed);
+  return { to: found ? found[1].toLowerCase() : null, decision: decision.test(typed) };
 }
 
 /**

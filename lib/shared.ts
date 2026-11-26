@@ -1,11 +1,71 @@
 // Limits and small pure helpers that the server and the page both use.
 // Nothing from Node is imported here, so the page can load this file in the browser.
 
-/** The three people who can post. `hub` is only used for the seeded welcome message. */
-export const SENDERS = ['grok', 'claude', 'david'] as const;
-export type Sender = (typeof SENDERS)[number];
-export type Author = Sender | 'hub';
-export const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
+/**
+ * A participant's name, as it is configured in PARTICIPANTS (lib/participants.ts) and stored with
+ * every message. Which names exist is a setting, so this is a string and not a fixed list.
+ */
+export type Sender = string;
+/** A participant, or `hub`, which is only used for the seeded welcome message. */
+export type Author = string;
+
+/** Lowercase, starts with a letter, then letters, digits or "-", at most 24 characters. The database checks the same shape. */
+export const NAME_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
+/** Names no participant can have: they mean "everyone" as a recipient, or belong to the hub itself. */
+export const RESERVED_NAMES: readonly string[] = ['all', 'everyone', 'hub', 'system'];
+
+export type ParticipantKind = 'human' | 'agent';
+/** One participant as GET /api/participants returns it. `color` is an index into PARTICIPANT_COLORS. */
+export interface Participant {
+  name: Sender;
+  kind: ParticipantKind;
+  color: number;
+}
+
+/**
+ * Twelve colours that read well on the page's dark background, handed out in the order of the
+ * PARTICIPANTS setting. The first three are the colours the three default participants always had;
+ * the other nine were picked to be as far from those, and from each other, as the page allows
+ * (tests/participants.test.ts checks contrast and distance).
+ */
+export const PARTICIPANT_COLORS: readonly string[] = [
+  '#f0883e', '#c792ea', '#4fb3ff', '#44e444', '#44e4c4', '#ecec79',
+  '#ec7990', '#d5b990', '#77c464', '#e85ee8', '#59bdcf', '#ace444',
+];
+/** For the hub's welcome message, and for anyone who wrote here once and is no longer a participant. */
+export const NEUTRAL_COLOR = '#7d8590';
+
+/** The colour of a name: the participant's own, or the neutral one for the hub and for former participants. */
+export function colorOf(name: string, participants: readonly Participant[]): string {
+  const found = participants.find((p) => p.name === name);
+  return (found && PARTICIPANT_COLORS[found.color]) || NEUTRAL_COLOR;
+}
+
+/**
+ * The two rules for how a message starts, for the configured names: "@name" addresses someone,
+ * and "DECISION:" (after an optional "@name") makes it a decision. The server reads a message by
+ * these patterns, and the page uses the same ones, so the two can't disagree.
+ *
+ * A name counts only when no letter, digit or "_" follows it, so "@grokbot" addresses nobody.
+ * Longer names are tried first, so with "ana" and "ana-maria" both configured, "@ana-maria" means
+ * the second. The name may be written in any case when addressing; in front of DECISION: it is
+ * case-sensitive, as it was before the names were configurable.
+ */
+export function addressing(names: readonly string[]): { mention: RegExp; decision: RegExp } {
+  // Only well-formed names take part. They hold letters, digits and "-", so they need no escaping.
+  const known = names.filter((name) => NAME_PATTERN.test(name)).sort((a, b) => b.length - a.length);
+  const any = known.length ? known.join('|') : '(?!)'; // with no names, nothing is a name
+  const end = '(?![A-Za-z0-9_])';
+  return {
+    mention: new RegExp(`^\\s*@(${any})${end}`, 'i'),
+    decision: new RegExp(`^\\s*(?:@(?:${any})${end}[\\s,:]*)?DECISION:`),
+  };
+}
+
+/** How a name is shown: "grok" → "Grok", "ana-maria" → "Ana-Maria". Works for any stored name. */
+export function displayName(name: string): string {
+  return name.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');
+}
 
 export const STATUS_MAX_LENGTH = 80;
 export const STATUS_DEFAULT_TTL_SECONDS = 300;
@@ -56,7 +116,7 @@ export function pollResultText(poll: Poll): string {
   const lines = [`Poll closed: ${poll.question}`];
   for (const option of poll.options) {
     const votes = `${option.votes} ${option.votes === 1 ? 'vote' : 'votes'}`;
-    const who = option.voters.map((id) => NAMES[id] ?? id).join(', ');
+    const who = option.voters.map(displayName).join(', ');
     lines.push(who ? `${option.index}. ${option.text} — ${votes} (${who})` : `${option.index}. ${option.text} — ${votes}`);
   }
   return lines.join('\n');

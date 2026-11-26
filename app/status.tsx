@@ -1,18 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { NAMES, type ParticipantStatus, type Sender } from '../lib/shared';
+import { colorOf, displayName, type Participant, type ParticipantStatus } from '../lib/shared';
 
 export const STATUS_POLL_MS = 5_000;
 export const STATUS_EXPIRY_TICK_MS = 1_000;
 export const STATUS_MAX_FAILURES = 3;
-
-// Full class names per participant so Tailwind keeps them at build time.
-const STYLE: Record<Sender, string> = {
-  grok: 'text-grok',
-  claude: 'text-claude',
-  david: 'text-david',
-};
 
 /** Returns only statuses whose expires_at is strictly in the future relative to `now`. */
 export function activeStatuses(statuses: ParticipantStatus[], now: number = Date.now()): ParticipantStatus[] {
@@ -45,8 +38,12 @@ export async function fetchStatuses(
   }
 }
 
-/** Renders the active participant status line above the message composer. */
-export function StatusList({ statuses, now }: { statuses: ParticipantStatus[]; now?: number }) {
+/**
+ * Renders the active participant status line above the message composer. Each status is shown in
+ * its participant's colour, which comes from `participants` (GET /api/participants); someone who
+ * isn't on that list gets the neutral colour.
+ */
+export function StatusList({ statuses, now, participants = [] }: { statuses: ParticipantStatus[]; now?: number; participants?: readonly Participant[] }) {
   const active = activeStatuses(statuses, now);
   if (!active.length) return null;
   return (
@@ -56,8 +53,8 @@ export function StatusList({ statuses, now }: { statuses: ParticipantStatus[]; n
       className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line/70 bg-panel/60 px-4 py-1.5 text-xs"
     >
       {active.map((s) => (
-        <span key={s.participant} className={`inline-flex min-w-0 items-baseline gap-1 ${STYLE[s.participant]}`}>
-          <span className="font-semibold">{NAMES[s.participant]}:</span>
+        <span key={s.participant} className="inline-flex min-w-0 items-baseline gap-1" style={{ color: colorOf(s.participant, participants) }}>
+          <span className="font-semibold">{displayName(s.participant)}:</span>
           <span className="max-w-[48ch] truncate opacity-90">{s.text}</span>
           <span aria-hidden="true" className="select-none">
             <span className="status-dot">.</span>
@@ -71,7 +68,7 @@ export function StatusList({ statuses, now }: { statuses: ParticipantStatus[]; n
 }
 
 /** Polls GET /api/status on a light 5 s cadence and drops statuses locally when expires_at passes. */
-export function StatusBar({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+export function StatusBar({ token, onUnauthorized, participants = [] }: { token: string; onUnauthorized: () => void; participants?: readonly Participant[] }) {
   const [statuses, setStatuses] = useState<ParticipantStatus[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const onUnauthRef = useRef(onUnauthorized);
@@ -122,5 +119,5 @@ export function StatusBar({ token, onUnauthorized }: { token: string; onUnauthor
     return () => window.clearInterval(timer);
   }, [statuses.length]);
 
-  return <StatusList statuses={statuses} now={now} />;
+  return <StatusList statuses={statuses} now={now} participants={participants} />;
 }
