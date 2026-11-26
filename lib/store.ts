@@ -6,6 +6,7 @@
 // and written only through lib/blobs.ts.
 import { randomBytes } from 'node:crypto';
 import { createMemoryBlobs, createSqlBlobs, type Blobs } from './blobs';
+import { MAX_SCALE, validScale } from './shared';
 import {
   MAX_ATTACHMENT_BYTES, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, UPLOADS_PER_HOUR, WELCOME_TEXT,
   type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
@@ -38,6 +39,8 @@ export interface NewAttachment {
   width: number;
   height: number;
   data: Buffer;
+  /** Image pixels per point (Attachment.scale). Left out: 1. */
+  scale?: number;
 }
 export interface StoredAttachment extends Attachment {
   sender: Sender;
@@ -271,11 +274,27 @@ const SCHEMA = [
    END
    $$`,
   `CREATE INDEX IF NOT EXISTS messages_reply_to ON messages (reply_to) WHERE reply_to IS NOT NULL`,
+  // The scale of an image (migrations/006-attachment-scale.sql): how many of its pixels make one
+  // point on the screen it was taken on. Images stored before this have 1. The column is only
+  // added when it is missing; a plain ADD COLUMN IF NOT EXISTS would ask for an exclusive lock on
+  // the table every time, even with nothing to do.
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'attachments' AND column_name = 'scale'
+     ) THEN
+       ALTER TABLE attachments ADD COLUMN scale SMALLINT NOT NULL DEFAULT 1
+         CONSTRAINT attachments_scale_range CHECK (scale BETWEEN 1 AND ${MAX_SCALE});
+     END IF;
+   EXCEPTION WHEN duplicate_column THEN
+     NULL;
+   END $$`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
 const BASE_COLS = 'id, sender, recipient, text, created_at, pinned_at, reply_to';
-const ATTACHMENT_COLS = 'id, content_type, width, height, bytes';
+const ATTACHMENT_COLS = 'id, content_type, width, height, bytes, scale';
 // Every message comes back with its attachments (never their bytes), in the order the sender gave.
 const POLL_JSON = `json_build_object(
   'id', p.id,
@@ -297,7 +316,7 @@ const POLL_JSON = `json_build_object(
 )`;
 const COLS = `${BASE_COLS},
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
-            'width', a.width, 'height', a.height, 'bytes', a.bytes) ORDER BY a.position, a.id), '[]'::json)
+            'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY a.position, a.id), '[]'::json)
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
   (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll`;
 // Inserts take a transaction-level advisory lock so ids are committed in order: a poller asking
@@ -335,6 +354,7 @@ const toAttachment = (r: Row): Attachment => ({
   width: Number(r.width),
   height: Number(r.height),
   bytes: Number(r.bytes),
+  scale: validScale(Number(r.scale)),
 });
 /** The json column arrives parsed from pg and PGlite; a string is handled in case a driver doesn't. */
 const toAttachments = (v: unknown): Attachment[] => {
@@ -454,7 +474,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
         return { ...toMessage(rows[0]), attachments: linked };
       });
     },
-    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+    async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
       await ensure();
       const id = newAttachmentId();
       let removed: string[] = [];
@@ -473,12 +493,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs()): Store {
         );
         if ((n as number) >= limitPerHour) return null;
         await tx.query(
-          `INSERT INTO attachments (id, sender, content_type, bytes, width, height)
-           VALUES ($1::text, $2::text, $3::text, $4::int, $5::int, $6::int)`,
-          [id, sender, content_type, data.length, width, height],
+          `INSERT INTO attachments (id, sender, content_type, bytes, width, height, scale)
+           VALUES ($1::text, $2::text, $3::text, $4::int, $5::int, $6::int, $7::int)`,
+          [id, sender, content_type, data.length, width, height, scale],
         );
         await blobs.put(tx, id, data);
-        return { id, content_type, width, height, bytes: data.length };
+        return { id, content_type, width, height, bytes: data.length, scale };
       });
       if (removed.length) await blobs.delete(db, removed);
       return stored;
@@ -790,7 +810,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
-  const meta = ({ id, content_type, width, height, bytes }: Attachment): Attachment => ({ id, content_type, width, height, bytes });
+  const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
     async ensure() {},
@@ -811,13 +831,15 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now 
       for (const upload of linked) upload.message_id = m.id;
       return copy(m);
     },
-    async addAttachment({ sender, content_type, width, height, data }, limitPerHour = UPLOADS_PER_HOUR) {
+    async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
+      // The same check the database makes.
+      if (!Number.isInteger(scale) || scale < 1 || scale > MAX_SCALE) throw new Error(`An image's scale must be a whole number from 1 to ${MAX_SCALE}.`);
       const removed = [...uploads.values()].filter((u) => u.message_id === null && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
       for (const id of removed) uploads.delete(id);
       if (removed.length) await blobs.delete(noDb, removed);
       const recent = [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
       if (recent >= limitPerHour) return null;
-      const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length };
+      const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length, scale };
       await blobs.put(noDb, attachment.id, data);
       uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
       return attachment;
