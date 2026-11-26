@@ -100,6 +100,33 @@ test('a web address in a quote is a link as in any message, with the same rules,
   assert.equal(squash(visible(sentence)), 'Grok in #45:\n\nIs it https://example.com/a?b=1&c=2? Or *this*: https://example.com/x.');
   assert.deepEqual([...sentence.matchAll(/href="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&')), ['https://example.com/a?b=1&c=2', 'https://example.com/x']);
   assert.ok(!sentence.includes('<em>'));
+  // Two more from the review. Closing punctuation directly behind an address used to be escaped with a
+  // backslash, which the renderer took for one more character of the address.
+  const starred = html(quoteSelection('Grok', 45, 'https://ex.com/*bold*'));
+  assert.equal(/href="([^"]*)"/.exec(starred)?.[1], 'https://ex.com/*bold', 'no backslash in the link');
+  assert.equal(squash(visible(starred)), 'Grok in #45:\n\nhttps://ex.com/*bold*', 'and the text is as it was');
+  assert.ok(!starred.includes('%5C') && !starred.includes('\\') && !starred.includes('<em>'), starred);
+  // An address written in angle brackets: the ">" is not part of the address.
+  const angled = html(quoteSelection('Grok', 45, '<https://example.com>'));
+  assert.equal(/href="([^"]*)"/.exec(angled)?.[1], 'https://example.com');
+  assert.equal(/<a [^>]*>([^<]*)<\/a>/.exec(angled)?.[1], 'https://example.com');
+  assert.equal(squash(visible(angled)), 'Grok in #45:\n\n<https://example.com>');
+  // The same family, each checked for the link and for the text.
+  for (const [text, href] of [
+    ['see <https://example.com/a?b=1&c=2> now', 'https://example.com/a?b=1&c=2'],
+    ['<https://example.com>, <https://example.org>.', 'https://example.com'],
+    ['https://ex.com/a_b_ and _x_', 'https://ex.com/a_b'],
+    ['https://ex.com/**', 'https://ex.com/'],
+    ['https://ex.com/a]', 'https://ex.com/a'],
+    ['https://ex.com/x*. Next', 'https://ex.com/x'],
+    ['https://ex.com/a~b~', 'https://ex.com/a~b'],
+    ['https://ex.com/x>y', 'https://ex.com/x%3Ey'],
+  ]) {
+    const out = html(quoteSelection('Grok', 45, text));
+    assert.equal(/href="([^"]*)"/.exec(out)?.[1].replace(/&amp;/g, '&'), href, text);
+    assert.equal(squash(visible(out)), `Grok in #45:\n\n${text}`, text);
+    assert.ok(!out.includes('%5C') && !/<(em|del|code)\b/.test(out), `${text}: ${out}`);
+  }
   // Something that only starts like an address is escaped like any text: no link with a label of the writer's choosing.
   const dressed = html(quoteSelection('Grok', 45, 'https://[click here](https://other.example/x) and http://*bold*'));
   assert.equal(squash(visible(dressed)), 'Grok in #45:\n\nhttps://[click here](https://other.example/x) and http://*bold*');
@@ -290,6 +317,33 @@ test('"@name" and "DECISION:" at the start of the typed text are read as the ser
   assert.ok(withQuote.ok && withQuote.recipient === null && withQuote.pinned === false);
   // Names with characters that mean something in a pattern can't break it.
   assert.deepEqual(typedIntent('@a.b hi', ['a.b', '(x']), { to: null, decision: false });
+});
+
+test('a quote can never decide who the message is for', () => {
+  // Found in use: a message that began with a quoted line starting with "@david" was addressed
+  // to David. The recipient is read from an "@name" at the very start of the message text.
+  const mention: Quote = { author: 'Claude', messageId: 43, kind: 'selection', text: '@grok please review this\nand DECISION: ship it' };
+  const wholeMention: Quote = { author: 'Claude', messageId: 43, kind: 'message', text: '@grok DECISION: ship it' };
+  for (const quote of [mention, wholeMention]) {
+    // A composed message starts with the quote's header line, so the server finds no "@name" at its start, and no "DECISION:".
+    const quoted = composeMessage([quote], 'I agree.');
+    assert.ok(quoted.startsWith('> **Claude** in #43:'), quoted);
+    const server = parseMessageInput({ text: quoted });
+    assert.ok(server.ok && server.recipient === null && server.pinned === false, 'the quote neither addresses nor pins');
+    // Quotes only: the same.
+    const only = parseMessageInput({ text: composeMessage([quote], '') });
+    assert.ok(only.ok && only.recipient === null && only.pinned === false);
+    // Every line of a quote starts with ">", so no line of it can look like the start of a message.
+    assert.ok(quoteMarkdown(quote).split('\n').every((line) => line.startsWith('>')));
+  }
+  // The page reads the recipient from what the writer typed, and from nothing else.
+  assert.deepEqual(typedIntent('I agree.', SENDERS), { to: null, decision: false });
+  assert.deepEqual(typedIntent('@claude I agree.', SENDERS), { to: 'claude', decision: false });
+  assert.deepEqual(typedIntent('', SENDERS), { to: null, decision: false }, 'quotes only: nobody in particular');
+  // So: a quote that starts with "@grok", an answer that starts with "@claude". It goes to Claude.
+  const body = { text: composeMessage([mention], '@claude I agree.'), to: typedIntent('@claude I agree.', SENDERS).to };
+  const sent = parseMessageInput(body);
+  assert.ok(sent.ok && sent.recipient === 'claude');
 });
 
 test('a chip shows who, which message and the first words; the full text is its tooltip', () => {

@@ -40,9 +40,13 @@ const ORDERED = /^(\d+)([.)])/;
 // bracket; then a host name with a dot; then everything up to the next space or "<".
 // Something that merely starts like an address (no proper host name) is escaped like all other text.
 const ADDRESS = /(?:(?<![A-Za-z])https?:\/\/|(?<![^\s(])(?=www\.))(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+[^\s<]*/g;
-// What the renderer leaves out of a link at its end: closing punctuation, and something that
-// looks like a character reference. Those are text again, and are escaped as text.
-const ADDRESS_TAIL = /(?:&[A-Za-z0-9#]+;|[!"'*,.:;?_~])+$/;
+// What does not belong to a link at its end: closing punctuation, something that looks like a
+// character reference, and the ">" of an address written in angle brackets. Those are text again.
+const ADDRESS_TAIL = /(?:&[A-Za-z0-9#]+;|[!"'*,.:;?_~>])+$/;
+// The characters directly behind an address can't be escaped with a backslash: the renderer would
+// take the backslash for one more character of the address. A character reference does the same
+// job, and the renderer knows that one is never part of a link.
+const TAIL_REFERENCE: Record<string, string> = { '*': '&ast;', _: '&lowbar;', ']': '&rsqb;', '>': '&gt;' };
 
 /** Cuts off what the renderer will not count as part of the link. */
 function linkedPart(address: string): string {
@@ -67,9 +71,12 @@ function escapeLine(line: string): string {
   let escaped = '';
   let done = 0;
   for (const match of trimmed.matchAll(ADDRESS)) {
-    const address = linkedPart(match[0]);
-    escaped += escapeText(trimmed.slice(done, match.index)) + address;
-    done = match.index + address.length;
+    const linked = linkedPart(match[0]);
+    // What stands directly behind the link, up to the next space: written without backslashes.
+    const end = match.index + match[0].length;
+    const tail = trimmed.slice(match.index + linked.length, end).replace(/[*_\]>]/g, (c) => TAIL_REFERENCE[c]);
+    escaped += escapeText(trimmed.slice(done, match.index)) + linked + tail;
+    done = end;
   }
   escaped += escapeText(trimmed.slice(done));
   return escaped.replace(LINE_START, '\\$1').replace(ORDERED, '$1\\$2');
