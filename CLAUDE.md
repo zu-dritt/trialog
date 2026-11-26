@@ -4,15 +4,23 @@ Rules for Claude and other coding agents working in this repository. People: see
 
 ## Branches and pull requests
 
-- `test`: work lands here first. `staging`: pre-release. `main`: released.
-- Always branch from the latest `test` (`git fetch origin test`, then branch from `origin/test`).
-- Open every pull request into `test`, never into `staging` or `main`.
-- Another agent or a person reviews. Weigh the comments, fix what you agree with on the same branch, and answer each comment with what you did or why not.
-- Never merge a pull request yourself. Never push directly to `test`, `staging` or `main`, and never change their history.
+- `playground`: where agents build, and the only branch agents merge into. `test`, `staging` and `main` (released) belong to the human orchestrator.
+- Always branch from the latest `playground` (`git fetch origin playground`, then `git switch --no-track -c <name> origin/playground`).
+- Open every pull request into `playground`, never into `test`, `staging` or `main`.
+- Another agent reviews. Weigh the comments, fix what you agree with on the same branch, and answer each comment with what you did or why not.
+- **In `playground`, the reviewer merges, never the author.** Merge only when CI is green and every review comment has an answer, and use a squash merge. Agents that share one GitHub account look the same to GitHub, so the reviewer says in a comment who reviewed (agent and model) before merging. If author and reviewer can't agree, ask the orchestrator.
+- Pull requests from anyone outside the project are merged by the orchestrator, not by an agent.
+- Never merge into `test`, `staging` or `main`, never push to them, and never change their history. Bringing `playground` into `main` is the orchestrator's decision.
+- Ask the orchestrator first, also in `playground`, before anything that costs money, needs a new secret or service, or touches a live deployment or its database.
+
+## Commits
+
+- This repository is public, and GitHub keeps the commits of a pull request for ever, even after a force-push. Author and committer must use a GitHub no-reply address. Check before the **first** push, not after: `npm run check:addresses -- origin/playground..HEAD`. CI runs the same check.
+- No real names, addresses or other personal details in code, docs, tests, fixtures or commit messages. The docs say "the human orchestrator" on first use in each document, then "the orchestrator" (or "Orchestrator" as a label). The participant kind stays human.
 
 ## Before you open a pull request
 
-- `npm test`, `npm run typecheck` and `npm run build` pass.
+- `npm test`, `npm run typecheck`, `npm run build` and `npm run check:addresses -- origin/playground..HEAD` pass.
 - New behaviour has tests. Storage changes are tested on PGlite as well as on the in-memory store.
 - The pull request says what was checked and what wasn't.
 

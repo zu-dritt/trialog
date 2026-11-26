@@ -6,10 +6,8 @@
   --color-line: #262a33;
   --color-fg: #e6e8ee;
   --color-muted: #8b91a0;
-  --color-grok: #f0883e;
-  --color-claude: #c792ea;
-  --color-david: #4fb3ff;
-  --color-hub: #7d8590;
+  /* Links and the drop highlight. Participants get their colours from PARTICIPANT_COLORS in lib/shared.ts. */
+  --color-accent: #4fb3ff;
   --color-ok: #3fb950;
   --color-bad: #f85149;
   --color-decision: #d29922;
@@ -21,7 +19,7 @@
   :root { color-scheme: dark; }
   html, body { height: 100%; background: var(--color-bg); color: var(--color-fg); }
   body { font: 15px/1.5 var(--font-sans); }
-  a { color: var(--color-david); }
+  a { color: var(--color-accent); }
 }
 
 /* Rendered Markdown inside a message. Tailwind's preflight resets lists, headings and margins,
@@ -51,4 +49,44 @@
   .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; }
   .md th { font-weight: 700; }
   .md blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--color-line); color: var(--color-muted); }
+}
+
+@keyframes status-dot-pulse {
+  0%, 20% { opacity: 0.25; }
+  50% { opacity: 1; }
+  100% { opacity: 0.25; }
+}
+
+.status-dot {
+  display: inline-block;
+  animation: status-dot-pulse 1.4s infinite ease-in-out;
+}
+.status-dot-2 { animation-delay: 0.2s; }
+.status-dot-3 { animation-delay: 0.4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
+/* Learn by doing (app/tour.tsx): the ring around the control a step points at, and the recap's
+   moving message path. Both stand still for someone who asks for less motion. */
+[data-tour-target] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+  opacity: 1 !important;
+}
+@keyframes tour-ring {
+  0%, 100% { outline-color: var(--color-accent); }
+  50% { outline-color: transparent; }
+}
+@keyframes tour-flow {
+  to { stroke-dashoffset: -16; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-tour-target] { animation: tour-ring 1.6s ease-in-out infinite; }
+  .tour-path { stroke-dasharray: 10 6; animation: tour-flow 0.9s linear infinite; }
 }

@@ -4,9 +4,9 @@ import { afterEach, beforeEach, test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import type { Sender } from '../lib/core';
-import { createMemoryStore, createSqlStore, wakesGrok, type Db, type Row, type Store } from '../lib/store';
+import { createMemoryStore, createSqlStore, WAKE_SENDING_STALE_MS, wakesGrok, type Db, type Row, type Store } from '../lib/store';
 import {
-  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, sign, verify, webhookConfig,
+  COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, combinedSignature, createWakeup, setWakeDnsForTests, sign, verify, webhookConfig,
   type DeliveryResult, type WakeupPayload,
 } from '../lib/webhook';
 
@@ -115,9 +115,17 @@ function fakeFetch(script: Reply[] = []) {
   return { calls, fetch: impl as typeof fetch };
 }
 
-function setup(store: Store, script: Reply[] = []) {
+function setup(store: Store, script: Reply[] = [], targets: Record<string, { url: string; secret: string }> = { grok: CONFIG }) {
   const f = fakeFetch(script);
-  const wakeup = createWakeup({ store, config: CONFIG, fetch: f.fetch, now: () => NOW_MS, debounceMs: 20, timeoutMs: 40, retryDelaysMs: [5, 10] });
+  const wakeup = createWakeup({
+    store,
+    fallbackTargets: targets,
+    fetch: f.fetch,
+    now: () => NOW_MS,
+    debounceMs: 20,
+    timeoutMs: 40,
+    retryDelaysMs: [5],
+  });
   /** Stores a message and triggers the wake-up, as the POST route does. */
   const post = async (sender: Sender, recipient: Sender | null, text = 'hi') => {
     const message = await store.add({ sender, recipient, text });
@@ -132,8 +140,8 @@ const settle = (jobs: (Promise<DeliveryResult> | null)[]) => Promise.all(jobs.fi
 
 let errorLog: unknown[][] = [];
 const realError = console.error;
-beforeEach(() => { errorLog = []; console.error = (...args: unknown[]) => { errorLog.push(args); }; });
-afterEach(() => { console.error = realError; vi.restoreAllMocks(); });
+beforeEach(() => { errorLog = []; console.error = (...args: unknown[]) => { errorLog.push(args); }; setWakeDnsForTests(async () => [{ address: '93.184.216.34', family: 4 }]); });
+afterEach(() => { console.error = realError; setWakeDnsForTests(null); vi.restoreAllMocks(); });
 
 const STORES: [string, () => Promise<Store>][] = [
   ['sql (PGlite)', async () => createSqlStore(pgliteDb(new PGlite()))],
@@ -141,21 +149,20 @@ const STORES: [string, () => Promise<Store>][] = [
 ];
 
 for (const [name, make] of STORES) {
-  test(`${name}: a burst becomes one delivery with a thin, signed payload`, async () => {
+  test(`${name}: a burst is one signed POST per message, after one debounce`, async () => {
     const store = await make();
     const { calls, post } = setup(store);
-    const a = await post('david', null, 'SECRET-TEXT-ONE');
-    const b = await post('claude', 'grok', 'SECRET-TEXT-TWO');
-    const c = await post('david', 'grok', 'SECRET-TEXT-THREE');
+    const a = await post('david', null, 'A note about storage.');
+    const b = await post('claude', 'grok', 'Agreed, I think.');
+    const c = await post('david', 'grok', 'Please take a look.');
     const results = await settle([a.job, b.job, c.job]);
 
-    assert.equal(calls.length, 1, 'one webhook for the burst');
-    assert.deepEqual(results.map((r) => r.status).sort(), ['covered', 'covered', 'delivered']);
+    assert.equal(calls.length, 3, 'one webhook per message, not one for the burst');
+    assert.deepEqual(results.map((r) => r.status).sort(), ['delivered', 'idle', 'idle']);
 
     const [call] = calls;
     assert.equal(call.url, CONFIG.url);
     assert.equal(call.redirect, 'manual');
-    // Exactly these headers, with exactly these names.
     assert.deepEqual(Object.keys(call.headers).sort(), ['Content-Type', COMBINED_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER].sort());
     assert.equal(COMBINED_HEADER, 'X-Hub-Grok-Signature');
     assert.equal(
@@ -163,22 +170,30 @@ for (const [name, make] of STORES) {
       `t=${call.headers[TIMESTAMP_HEADER]},v1=${call.headers[SIGNATURE_HEADER].replace('sha256=', '')}`,
       'same timestamp and same hex as the two separate headers',
     );
-    assert.equal(SIGNATURE_HEADER, 'X-Hub-Signature');
-    assert.equal(TIMESTAMP_HEADER, 'X-Hub-Timestamp');
     assert.equal(call.headers['Content-Type'], 'application/json');
     assert.equal(call.headers[TIMESTAMP_HEADER], '1795620000', 'Unix seconds, not milliseconds');
 
-    // Thin payload: ids only, no message text.
     const payload = payloadOf(call);
-    assert.deepEqual(payload, { first_id: a.message.id, last_id: c.message.id, count: 3, sent_at: 1795620000 });
-    assert.ok(!call.body.includes('SECRET-TEXT'), 'no message text in the payload');
+    assert.equal(payload.id, a.message.id);
+    assert.equal(payload.sender, 'david');
+    assert.ok(payload.recipients.includes('grok') && payload.recipients.includes('claude'));
+    assert.equal(payload.preview, 'A note about storage.');
+    assert.deepEqual({ first_id: payload.first_id, last_id: payload.last_id, count: payload.count, sent_at: payload.sent_at }, {
+      first_id: a.message.id, last_id: a.message.id, count: 1, sent_at: 1795620000,
+    });
     assert.ok(!call.body.includes(CONFIG.secret));
 
-    // The receiver's checks pass on the raw body as sent.
     assert.deepEqual(
       verify({ secret: CONFIG.secret, timestamp: call.headers[TIMESTAMP_HEADER], signature: call.headers[SIGNATURE_HEADER], rawBody: call.body, now: 1795620000 }),
       { ok: true },
     );
+
+    const wakes = await store.listWakes([a.message.id, b.message.id, c.message.id]);
+    assert.deepEqual(wakes.map((w) => [w.message_id, w.participant, w.status]), [
+      [a.message.id, 'grok', 'delivered'],
+      [b.message.id, 'grok', 'delivered'],
+      [c.message.id, 'grok', 'delivered'],
+    ]);
   });
 
   test(`${name}: a message after a delivery gets its own delivery (nothing is dropped)`, async () => {
@@ -190,52 +205,79 @@ for (const [name, make] of STORES) {
     const [result] = await settle([second.job]);
     assert.equal(result.status, 'delivered');
     assert.equal(calls.length, 2);
-    assert.deepEqual(payloadOf(calls[1]), { first_id: second.message.id, last_id: second.message.id, count: 1, sent_at: 1795620000 });
+    assert.equal(payloadOf(calls[1]).id, second.message.id);
+    assert.equal(payloadOf(calls[1]).count, 1);
   });
 
-  test(`${name}: only messages for Grok or everyone trigger, never Grok's own`, async () => {
+  test(`${name}: a message from the human wakes every agent with a target, whoever it is addressed to`, async () => {
     const store = await make();
-    const { calls, post } = setup(store);
-    const own = await post('grok', null, "Grok's own post");
-    const other = await post('david', 'claude', 'for Claude only');
-    assert.equal(own.job, null);
-    assert.equal(other.job, null);
-    // A later qualifying message covers only itself, not the two above.
-    const real = await post('claude', 'grok');
-    await settle([real.job]);
+    const { calls, post } = setup(store); // only grok has a target
+    const toClaude = await post('david', 'claude', 'for the other agent only');
+    assert.ok(toClaude.job, 'the human still wakes grok, even when the message is addressed to someone else');
+    await settle([toClaude.job]);
     assert.equal(calls.length, 1);
-    assert.deepEqual(payloadOf(calls[0]), { first_id: real.message.id, last_id: real.message.id, count: 1, sent_at: 1795620000 });
+    assert.equal(payloadOf(calls[0]).id, toClaude.message.id);
+    assert.deepEqual(payloadOf(calls[0]).recipients, ['claude']);
+
+    const own = await post('grok', null, "an agent's own post to everyone");
+    // Addressed to everyone, but never the sender: this would wake the other agent, who has no target.
+    const [idle] = await settle([own.job]);
+    assert.equal(idle.status, 'idle');
+    assert.equal(calls.length, 1);
   });
 
-  test(`${name}: retries, then succeeds with identical bytes`, async () => {
+  test(`${name}: an agent-to-agent message wakes only the agent it addresses, never the sender`, async () => {
+    const quill = { url: 'https://quill.example/wake', secret: 'quill-test-secret-0123456789' };
     const store = await make();
-    const { calls, post } = setup(store, [500, 'throw', 200]);
+    const { calls, post } = setup(store, [], { grok: CONFIG, claude: quill });
+    const toGrok = await post('claude', 'grok', 'a question for one agent');
+    await settle([toGrok.job]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, CONFIG.url);
+    assert.deepEqual(payloadOf(calls[0]).recipients, ['grok']);
+
+    const toHuman = await post('claude', 'david', 'only for the human');
+    assert.equal(toHuman.job, null, 'an agent writing to the human wakes no agent');
+    assert.equal(calls.length, 1);
+  });
+
+  test(`${name}: retries once, then succeeds with identical bytes`, async () => {
+    const store = await make();
+    const { calls, post } = setup(store, [500, 200]);
     const m = await post('david', 'grok');
     const [result] = await settle([m.job]);
-    assert.deepEqual(result, { status: 'delivered', attempts: 3, claim: { first_id: m.message.id, last_id: m.message.id, count: 1, previous_id: 0 } });
-    assert.equal(calls.length, 3);
+    assert.equal(result.status, 'delivered');
+    assert.equal(calls.length, 2, 'the first try and one retry');
     assert.equal(calls[1].body, calls[0].body);
-    assert.deepEqual(calls[2].headers, calls[0].headers);
-    // Delivered, so the range is not sent again.
-    assert.equal(await store.claimWakeup(), null);
+    assert.deepEqual(calls[1].headers, calls[0].headers);
+    const [row] = await store.listWakes([m.message.id]);
+    assert.equal(row.status, 'delivered');
+    assert.equal(row.attempts, 2);
   });
 
-  test(`${name}: after the last retry fails, the range is re-sent with the next message`, async () => {
+  test(`${name}: after the retry fails, the delivery is recorded as failed and is not sent again with the next message`, async () => {
     const store = await make();
-    const { calls, post } = setup(store, [500, 302, 'hang']);
+    const { calls, post } = setup(store, [500, 'hang', 200]);
     const lost = await post('david', 'grok');
     const [failed] = await settle([lost.job]);
     assert.equal(failed.status, 'failed');
-    assert.equal(calls.length, 3, 'one attempt plus two retries (a redirect and a timeout count as failures)');
-    // The failure is logged with the ids and without the secret.
+    assert.equal(calls.length, 2, 'one attempt plus one retry (a timeout counts as a failure)');
     const logged = errorLog.flat().join(' ');
     assert.match(logged, new RegExp(`#${lost.message.id}`));
     assert.ok(!logged.includes(CONFIG.secret));
+    assert.ok(!logged.includes(CONFIG.url), 'the target URL is not logged');
+
+    const [row] = await store.listWakes([lost.message.id]);
+    assert.equal(row.status, 'failed');
+    assert.equal(row.attempts, 2);
+    assert.ok(row.error);
+    assert.ok(!row.error.includes(CONFIG.secret));
 
     const next = await post('claude', null);
     const [result] = await settle([next.job]);
     assert.equal(result.status, 'delivered');
-    assert.deepEqual(payloadOf(calls[3]), { first_id: lost.message.id, last_id: next.message.id, count: 2, sent_at: 1795620000 });
+    assert.equal(calls.length, 3, 'only the new message is sent, not the failed one again');
+    assert.equal(payloadOf(calls[2]).id, next.message.id);
   });
 
   test(`${name}: a failed claim is not put back once a later claim has moved on`, async () => {
@@ -251,6 +293,45 @@ for (const [name, make] of STORES) {
     assert.equal(await store.claimWakeup(), null);
     assert.equal(await store.releaseWakeup(second), true);
     assert.deepEqual(await store.claimWakeup(), second, 'the released range can be claimed again');
+  });
+
+  test(`${name}: listWakeTargets returns updated_at as ISO 8601`, async () => {
+    const store = await make();
+    await store.setWakeTarget('grok', CONFIG.url, CONFIG.secret);
+    const [row] = await store.listWakeTargets();
+    assert.equal(row.participant, 'grok');
+    assert.equal(row.url, CONFIG.url);
+    assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  test(`${name}: two delivery jobs never send the same wake twice`, async () => {
+    const store = await make();
+    const message = await store.add({ sender: 'david', recipient: 'grok', text: 'only once' });
+    assert.ok(message);
+    await store.enqueueWakes(message.id, ['grok']);
+    const a = setup(store);
+    const b = setup(store);
+    // onMessage enqueues again (no-op) and both run deliver; only one should claim the row.
+    await settle([a.wakeup.onMessage(message), b.wakeup.onMessage(message)]);
+    const sent = [...a.calls, ...b.calls];
+    assert.equal(sent.length, 1, 'exactly one signed POST');
+    assert.equal(JSON.parse(sent[0].body).id, message.id);
+    const [row] = await store.listWakes([message.id]);
+    assert.equal(row.status, 'delivered');
+  });
+
+  test(`${name}: a name that rebinds to an internal address is not contacted`, async () => {
+    const store = await make();
+    setWakeDnsForTests(async () => [{ address: '10.0.0.9', family: 4 }]);
+    const { calls, post } = setup(store);
+    const sent = await post('david', 'grok', 'should not leave the hub');
+    const [result] = await settle([sent.job]);
+    assert.equal(result.status, 'failed');
+    assert.equal(calls.length, 0, 'no request is sent');
+    const [row] = await store.listWakes([sent.message.id]);
+    assert.equal(row.status, 'failed');
+    assert.match(String(row.error), /internal address/);
+    assert.ok(!String(row.error).includes('10.0.0.9'));
   });
 }
 
@@ -269,11 +350,29 @@ test('history from before the webhook existed never triggers a wake-up', async (
 
 test('a job never rejects, even when the store fails', async () => {
   const store = createMemoryStore();
-  store.claimWakeup = async () => { throw new Error('database is down'); };
+  store.enqueueWakes = async () => { throw new Error('database is down'); };
   const { wakeup } = setup(store);
-  const job = wakeup.onMessage({ sender: 'david', recipient: 'grok' });
+  const job = wakeup.onMessage({ id: 1, sender: 'david', recipient: 'grok', text: 'hi' });
   assert.ok(job);
   assert.deepEqual(await job, { status: 'error', error: 'Error: database is down' });
+});
+
+test('a sending claim is taken again after a minute, and not before', async () => {
+  let now = 1_000_000;
+  const store = createMemoryStore({ now: () => now });
+  const message = await store.add({ sender: 'david', recipient: 'grok', text: 'claim me' });
+  assert.ok(message);
+  await store.enqueueWakes(message.id, ['grok']);
+  const first = await store.claimPendingWakes();
+  assert.equal(first.length, 1);
+  assert.equal(first[0].message_id, message.id);
+  assert.deepEqual(await store.claimPendingWakes(), [], 'still sending, not yet stale');
+  now += WAKE_SENDING_STALE_MS - 1;
+  assert.deepEqual(await store.claimPendingWakes(), [], 'just under a minute');
+  now += 2;
+  const again = await store.claimPendingWakes();
+  assert.equal(again.length, 1);
+  assert.equal(again[0].message_id, message.id);
 });
 
 test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 is retried', async (ctx) => {
@@ -297,8 +396,8 @@ test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 i
   try {
     const { port } = server.address() as { port: number };
     const store = createMemoryStore();
-    const config = { url: `http://127.0.0.1:${port}/wake`, secret: CONFIG.secret }; // bypasses webhookConfig's https rule on purpose
-    const wakeup = createWakeup({ store, config, debounceMs: 10, timeoutMs: 2000, retryDelaysMs: [10, 10] });
+    const fallbackTargets = { grok: { url: `http://127.0.0.1:${port}/wake`, secret: CONFIG.secret } }; // bypasses https on purpose
+    const wakeup = createWakeup({ store, fallbackTargets, debounceMs: 10, timeoutMs: 2000, retryDelaysMs: [10], enforcePublicTarget: false });
     const message = await store.add({ sender: 'david', recipient: 'grok', text: 'over the wire' });
     assert.ok(message);
     const result = await wakeup.onMessage(message);
@@ -311,12 +410,17 @@ test('over real HTTP: the receiver gets the exact headers and bytes, and a 503 i
       assert.equal(headers['content-type'], 'application/json');
       assert.equal(headers['x-hub-signature-256'], undefined);
       assert.match(timestamp, /^\d{10}$/);
-      // An independent receiver: HMAC over the ASCII timestamp, a dot, and the raw bytes received.
       const expected = 'sha256=' + createHmac('sha256', CONFIG.secret).update(Buffer.concat([Buffer.from(`${timestamp}.`, 'ascii'), raw])).digest('hex');
       assert.equal(signature, expected);
       assert.equal(headers['x-hub-grok-signature'], `t=${timestamp},v1=${expected.slice(7)}`);
       assert.deepEqual(verify({ secret: CONFIG.secret, timestamp, signature, rawBody: raw }), { ok: true });
-      assert.deepEqual(Object.keys(JSON.parse(raw.toString('utf8')) as object), ['first_id', 'last_id', 'count', 'sent_at']);
+      const body = JSON.parse(raw.toString('utf8')) as WakeupPayload;
+      assert.equal(body.id, message.id);
+      assert.equal(body.sender, 'david');
+      assert.deepEqual(body.recipients, ['grok']);
+      assert.equal(body.preview, 'over the wire');
+      assert.equal(body.first_id, message.id);
+      assert.equal(body.count, 1);
     }
     assert.ok(received[0].raw.equals(received[1].raw), 'identical bytes on the retry');
   } finally {

@@ -1,45 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Author, Message, Sender } from '../lib/core';
-import { createSseParser, type SseEvent } from '../lib/sse';
-import { MessageBody } from './markdown';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Message, Sender } from '../lib/core';
+import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
+import { RoomPane, RoomPicker } from './pane';
+import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
+import { SearchBox } from './search';
+import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
+import { StatusBar } from './status';
+import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
+import { NewVersionPill, useWaitingLong } from './version';
+import { BUILD_ID, isOtherBuild } from '../lib/build';
+import { defaultSecondRoom, readSplit, writeSplit } from './split';
+import { SplitToggle, useSplitFits } from './split-ui';
+import { TourButton, TourPanel, useTour } from './tour';
 
-const NAMES: Record<Author, string> = { grok: 'Grok', claude: 'Claude', david: 'David', hub: 'Hub' };
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
-const POLL_MS = 1500;
-// How long to poll after the live stream failed before trying the stream again.
-const FALLBACK_MS = 30_000;
-// A stream that ends sooner than this without the server saying goodbye counts as a failure.
-const MIN_STREAM_MS = 5_000;
-
-// Full class names per sender, so Tailwind sees them at build time.
-const STYLE: Record<Author, { text: string; bg: string; border: string }> = {
-  grok: { text: 'text-grok', bg: 'bg-grok', border: 'border-l-grok' },
-  claude: { text: 'text-claude', bg: 'bg-claude', border: 'border-l-claude' },
-  david: { text: 'text-david', bg: 'bg-david', border: 'border-l-david' },
-  hub: { text: 'text-hub', bg: 'bg-hub', border: 'border-l-hub' },
-};
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
-const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
 
-const timeFmt = new Intl.DateTimeFormat('de-CH', { hour: '2-digit', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-interface MessagesResponse {
-  me: Sender;
-  messages: Message[];
-  pinned: Message[];
-}
-
-/** Merge new messages into the list, de-duplicated by id and sorted. */
-function merge(list: Message[], incoming: Message[]): Message[] {
-  const byId = new Map(list.map((m) => [m.id, m]));
-  for (const m of incoming) byId.set(m.id, m);
-  return [...byId.values()].sort((a, b) => a.id - b.id);
-}
+/** Until the server has said which rooms there are, the page shows the one that always exists. */
+const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -64,18 +46,95 @@ function TokenForm({ onSave }: { onSave: (token: string) => void }) {
 export default function Page() {
   const [token, setToken] = useState<string | null>(null); // null: not read yet; '': none saved
   const [me, setMe] = useState<Sender | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [pinned, setPinned] = useState<Message[]>([]);
+  // The room that is open in the leading pane. The address follows this room, so a reload stays there.
+  const [room, setRoom] = useState(MAIN_ROOM);
+  const [rooms, setRooms] = useState<Room[]>(ONLY_MAIN);
+  const roomRef = useRef(MAIN_ROOM);
+  roomRef.current = room;
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+  const [, setSeenChanged] = useState(0); // another window of this browser has seen something: draw the tabs again
   const [status, setStatus] = useState('connecting…');
-  const [draft, setDraft] = useState('');
-  const [to, setTo] = useState('');
-  const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState('');
-  const lastId = useRef(0);
-  const listRef = useRef<HTMLElement>(null);
-  const stick = useRef(true);
+  const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
+  const newVersion = isOtherBuild(BUILD_ID, serverBuild);
+  const newVersionWaitsLong = useWaitingLong(newVersion);
+  const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
+  const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
+  const [pageNotice, setPageNotice] = useState('');
+  const [splitOn, setSplitOn] = useState(false);
+  const [secondRoom, setSecondRoom] = useState(MAIN_ROOM);
+  const [splitReady, setSplitReady] = useState(false);
+  const [seek, setSeek] = useState<{ room: string; id: number } | null>(null);
+  const [leadHeard, setLeadHeard] = useState<{ messages: Message[]; primed: boolean }>({ messages: [], primed: false });
+  const [sideHeard, setSideHeard] = useState<{ messages: Message[]; primed: boolean }>({ messages: [], primed: false });
+  const fits = useSplitFits();
+  const splitVisible = splitOn && fits;
+  const heardMessages = useMemo(() => {
+    const byId = new Map(leadHeard.messages.map((m) => [m.id, m]));
+    if (splitVisible) for (const m of sideHeard.messages) byId.set(m.id, m);
+    return [...byId.values()].sort((a, b) => a.id - b.id);
+  }, [leadHeard.messages, sideHeard.messages, splitVisible]);
+  const primed = leadHeard.primed && (!splitVisible || sideHeard.primed);
+  const sound = useSoundMode({ messages: heardMessages, me, participants, primed, newVersion });
+  const onLeadHeard = useCallback((messages: Message[], next: boolean) => setLeadHeard({ messages, primed: next }), []);
+  const onSideHeard = useCallback((messages: Message[], next: boolean) => setSideHeard({ messages, primed: next }), []);
+  // Learn by doing: the guided tour. Both panes report the person's own actions to it (tour.note).
+  // It is offered only once the leading pane's latest messages are in, so the page can tell whether
+  // the person has written there before.
+  const tour = useTour({ me, participants, loaded: leadHeard.primed, history: heardMessages });
+  const noteTour = tour.note;
 
-  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); }, []);
+  // The address says which room to open. Read together with the token, so the page opens once, in that room.
+  useEffect(() => {
+    setRoom(roomFromSearch(window.location.search));
+    setToken(localStorage.getItem(TOKEN_KEY) || '');
+    // Back and forward in the browser move between the rooms that were open.
+    const onPop = () => setRoom(roomFromSearch(window.location.search));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  // The stored split choice is per participant, and starts off when none has been kept.
+  useEffect(() => {
+    if (!me) {
+      setSplitReady(false);
+      setSplitOn(false);
+      setSecondRoom(MAIN_ROOM);
+      return undefined;
+    }
+    const pref = readSplit(localStorage, me);
+    setSplitOn(pref.open);
+    setSecondRoom(pref.room);
+    setSplitReady(true);
+  }, [me]);
+
+  useEffect(() => {
+    if (!me || !splitReady) return undefined;
+    writeSplit(localStorage, me, { open: splitOn, room: secondRoom });
+    return undefined;
+  }, [me, splitOn, secondRoom, splitReady]);
+
+  // Two panes of the same room are not useful: if the left is opened onto the right, pick another.
+  useEffect(() => {
+    if (!splitOn || secondRoom !== room) return undefined;
+    const next = defaultSecondRoom(rooms, room);
+    if (next !== secondRoom) setSecondRoom(next);
+    return undefined;
+  }, [splitOn, room, secondRoom, rooms]);
+
+  useEffect(() => {
+    if (splitVisible) return undefined;
+    setSideHeard({ messages: [], primed: false });
+    return undefined;
+  }, [splitVisible]);
+
+  /** Opens another room in the leading pane. The address follows, so a reload stays there and the link can be shared. */
+  const openRoom = useCallback((id: string) => {
+    if (id === roomRef.current) return;
+    window.history.pushState(null, '', addressForRoom(window.location.href, id));
+    setRoom(id);
+    noteTour({ kind: 'room' });
+  }, [noteTour]);
 
   const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
   const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
@@ -91,244 +150,180 @@ export default function Page() {
     return res;
   }, [token, forgetToken]);
 
-  // Live updates. The page reads /api/stream (new messages and pin changes pushed by the server).
-  // If the stream can't be opened or breaks, it polls /api/messages instead and tries the stream
-  // again after a while, so the page keeps working either way.
-  useEffect(() => {
-    if (!token) return undefined;
-    let stopped = false;
-    const abort = new AbortController();
-    lastId.current = 0;
-    setMessages([]);
-
-    const addMessages = (incoming: Message[]) => {
-      if (!incoming.length) return;
-      lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
-      setMessages((list) => merge(list, incoming));
-    };
-    const pause = (ms: number) => new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      abort.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-    });
-
-    /** One request to the polling endpoint. */
-    const pollOnce = async () => {
-      const query = lastId.current ? `?since=${lastId.current}` : '';
-      const data = (await (await api(`/api/messages${query}`, { signal: abort.signal })).json()) as MessagesResponse;
-      if (stopped) return;
-      setMe(data.me);
-      addMessages(data.messages);
-      setPinned(data.pinned);
-    };
-
-    /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
-    const readStream = async (): Promise<boolean> => {
-      const query = lastId.current ? `?since=${lastId.current}` : '';
-      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
-      if (!res.body) throw new Error('no stream');
-      const opened = Date.now();
-      let goodbye = false;
-      const parser = createSseParser((event: SseEvent) => {
-        if (stopped) return;
-        if (event.event === 'hello') { setMe((JSON.parse(event.data) as { me: Sender }).me); setStatus('live'); }
-        else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
-        else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
-        else if (event.event === 'bye') goodbye = true;
-      });
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parser.push(decoder.decode(value, { stream: true }));
-      }
-      return goodbye || Date.now() - opened >= MIN_STREAM_MS;
-    };
-
-    const run = async () => {
-      while (!stopped) {
-        let clean = false;
-        try {
-          clean = await readStream();
-        } catch (e) {
-          if (stopped || errorMessage(e) === 'unauthorized') return;
-        }
-        if (stopped) return;
-        if (clean) continue; // the server ended the stream on schedule: reconnect from the last id
-
-        // Fallback: poll for a while, then try the stream again.
-        const until = Date.now() + FALLBACK_MS;
-        while (!stopped && Date.now() < until) {
-          try {
-            await pollOnce();
-            if (!stopped) setStatus('live · polling');
-          } catch (e) {
-            if (stopped || errorMessage(e) === 'unauthorized') return;
-            setStatus('offline, retrying…');
-          }
-          await pause(POLL_MS);
-        }
-      }
-    };
-    void run();
-    return () => { stopped = true; abort.abort(); };
-  }, [token, api]);
-
-  // Auto-scroll, unless the reader scrolled up.
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-  const onScroll = () => {
-    const el = listRef.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-
-  const send = async () => {
-    if (!draft.trim() || sending) return;
-    setSending(true);
-    setNotice('');
+  /** Creates a room and opens it in the leading pane. Resolves to '' when that worked, or to what went wrong. */
+  const createRoom = async (name: string): Promise<string> => {
     try {
-      const res = await api('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(to ? { text: draft, to } : { text: draft }),
-      });
-      const { message } = (await res.json()) as { message: Message };
-      // Don't move lastId forward here: the next poll picks up anything sent in between.
-      setMessages((list) => merge(list, [message]));
-      if (message.pinned_at) setPinned((p) => merge(p, [message]));
-      setDraft('');
-      stick.current = true;
+      const res = await api('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      const created = ((await res.json()) as { room: Room }).room;
+      setRooms((list) => (list.some((r) => r.id === created.id) ? list : [...list, created]));
+      openRoom(created.id);
+      return '';
     } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    } finally {
-      setSending(false);
+      return errorMessage(e) === 'unauthorized' ? 'Not signed in.' : errorMessage(e);
     }
   };
 
-  const togglePin = async (m: Message, isPinned: boolean) => {
-    try {
-      const res = await api(`/api/messages/${m.id}/pin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pinned: !isPinned }),
-      });
-      const data = (await res.json()) as { message: Message; pinned: Message[] };
-      setPinned(data.pinned);
-      setMessages((list) => merge(list, [data.message]));
-    } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
-    }
-  };
+  /** Asks the server for the messages that contain every word of `q`. */
+  const runSearch = useCallback(async (q: string, decisionsOnly: boolean) => {
+    const params = new URLSearchParams({ q });
+    if (decisionsOnly) params.set('decisions', '1');
+    return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
+  }, [api]);
 
   const exportTranscript = async () => {
     try {
-      const blob = await (await api('/api/export')).blob();
+      // The transcript of the room in the leading pane (the one the address names).
+      const blob = await (await api(`/api/export${room === MAIN_ROOM ? '' : `?room=${room}`}`)).blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `trialog-${new Date().toISOString().slice(0, 10)}.md`;
+      a.download = `trialog-${room === MAIN_ROOM ? '' : `${room}-`}${new Date().toISOString().slice(0, 10)}.md`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+      if (errorMessage(e) !== 'unauthorized') setPageNotice(errorMessage(e));
     }
   };
+
+  const toggleSplit = () => {
+    setSplitOn((on) => {
+      if (on) return false;
+      setSecondRoom((cur) => (cur === roomRef.current ? defaultSecondRoom(roomsRef.current, roomRef.current) : cur));
+      return true;
+    });
+  };
+
+  const onMissingPrimary = useCallback((_missing: string) => {
+    window.history.replaceState(null, '', addressForRoom(window.location.href, MAIN_ROOM));
+    setRoom(MAIN_ROOM);
+  }, []);
+
+  const onMissingSecond = useCallback((missing: string) => {
+    setSecondRoom(() => defaultSecondRoom(roomsRef.current.filter((r) => r.id !== missing), roomRef.current === missing ? MAIN_ROOM : roomRef.current));
+  }, []);
+
+  const openRooms = useMemo(
+    () => (splitVisible ? [room, secondRoom] : [room]),
+    [splitVisible, room, secondRoom],
+  );
+  // A message addressed to you rings from any room, even one that is not open.
+  useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
   if (token === null) return null;
   if (!token) return <TokenForm onSave={saveToken} />;
 
-  const pinnedIds = new Set(pinned.map((m) => m.id));
-  let lastDay = '';
+  const shown = (name: string) => labelOf(name, participants);
+  const reload = () => window.location.reload();
+  const shownRooms = me ? withSeenApplied(rooms, readSeen(localStorage, me)) : rooms;
+  const tabs = (className: string) => (
+    <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
+  );
+  const statusBar = (
+    <StatusBar participants={participants} token={token} onUnauthorized={forgetToken} />
+  );
+  const paneShared = {
+    token,
+    api,
+    me,
+    setMe,
+    participants,
+    setParticipants,
+    setRooms,
+    setSeenChanged,
+    openRooms,
+    onUnauthorized: forgetToken,
+    soundSent: sound.sent,
+    onTour: noteTour,
+  };
 
   return (
-    <div className="mx-auto flex h-screen max-w-[1000px] flex-col">
-      <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+    <div className={`mx-auto flex h-screen flex-col ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
+      {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
+      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        <span className="flex-1" />
-        {me && <span className="text-[13px] font-semibold">You: {NAMES[me]}</span>}
-        <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
+        <SoundToggle on={sound.on} onToggle={sound.toggle} />
+        {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
+        {/* The "New version available" pill comes directly after the status, so the state of the
+            page reads in one spot. On a narrow screen it sits on a line of its own, under the
+            status. An empty holder takes no room in the row. */}
+        <span role="status" className={`max-md:contents md:flex ${newVersion ? '' : 'md:-mr-3'}`}>
+          {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
+        </span>
+        {/* The rooms come after the state of the page: the open one marked, the others with what is new there. */}
+        {tabs('hidden lg:flex lg:max-w-[42%]')}
+        <SplitToggle on={splitOn} onToggle={toggleSplit} disabled={!fits} />
+        {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
+        <SearchBox
+          search={runSearch}
+          onPick={(m) => { if (m.room !== room) openRoom(m.room); setSeek({ room: m.room, id: m.id }); }}
+          participants={participants}
+          rooms={rooms}
+        />
+        {me && <span className="text-[13px] font-semibold">You: {shown(me)}</span>}
+        <button className={BUTTON} onClick={() => { void exportTranscript(); }}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
+      {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
+      <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden">
+        {tabs('flex min-w-0 flex-1')}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
+      </div>
+      <TourPanel tour={tour} me={me} participants={participants} />
+      <WakeTargetsLine me={me} participants={participants} />
+      {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
+      {splitVisible && statusBar}
 
-      {pinned.length > 0 && (
-        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">Decisions</h2>
-          <ul className="text-sm">
-            {pinned.map((m) => (
-              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`}>#{m.id}</a> <span className={`font-bold ${STYLE[m.sender].text}`}>{NAMES[m.sender]}</span>{' '}
-                <span>{m.text.trim().split('\n')[0].slice(0, 160)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
-        {messages.map((m) => {
-          const date = new Date(m.created_at);
-          const day = dayFmt.format(date);
-          const showDay = day !== lastDay;
-          lastDay = day;
-          const isPinned = pinnedIds.has(m.id);
-          const s = STYLE[m.sender];
-          return (
-            <div key={m.id}>
-              {showDay && <div className="mb-1.5 mt-3.5 text-center text-xs text-muted">{day}</div>}
-              <article
-                id={`m-${m.id}`}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 ${s.border} ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'}`}
-              >
-                <div className={`grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg ${s.bg}`}>
-                  {NAMES[m.sender]?.[0] ?? '?'}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
-                    <span className={`font-bold ${s.text}`}>{NAMES[m.sender] ?? m.sender}</span>
-                    {m.recipient && (
-                      <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {NAMES[m.recipient]}</span>
-                    )}
-                    <time dateTime={m.created_at} title={date.toLocaleString('de-CH')}>{timeFmt.format(date)}</time>
-                    <span className="text-xs">#{m.id}</span>
-                    <button
-                      className={`ml-auto cursor-pointer border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-25 group-hover:opacity-60'}`}
-                      title={isPinned ? 'Unpin decision' : 'Pin as decision'}
-                      onClick={() => togglePin(m, isPinned)}
-                    >📌</button>
-                  </div>
-                  <div className="md wrap-anywhere">
-                    <MessageBody text={m.text} />
-                  </div>
-                </div>
-              </article>
-            </div>
-          );
-        })}
-      </main>
-
-      <footer className="border-t border-line px-4 py-2.5">
-        {notice && <div className="mb-1.5 text-[13px] text-bad">{notice}</div>}
-        <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Recipient" className={FIELD}>
-            <option value="">to everyone</option>
-            <option value="grok">to Grok</option>
-            <option value="claude">to Claude</option>
-            <option value="david">to David</option>
-          </select>
-          <textarea
-            rows={2}
-            value={draft}
-            placeholder="Message (Markdown). Enter sends, Shift+Enter for a new line. @claude / @grok to address, DECISION: to pin."
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            className={`${FIELD} max-h-[40vh] min-h-[42px] flex-1 resize-y`}
+      {splitVisible ? (
+        <div className="flex min-h-0 flex-1">
+          <RoomPane
+            {...paneShared}
+            lead
+            room={room}
+            roomInfo={rooms.find((r) => r.id === room)}
+            setServerBuild={setServerBuild}
+            setStatus={setStatus}
+            setSetupError={setSetupError}
+            setupError={setupError}
+            onMissingRoom={onMissingPrimary}
+            seek={seek}
+            onJumped={() => setSeek(null)}
+            onHeard={onLeadHeard}
           />
-          <button type="submit" className={BUTTON} disabled={sending || !draft.trim()}>Send</button>
-        </form>
-      </footer>
+          <div className="w-px shrink-0 bg-line" aria-hidden="true" />
+          <RoomPane
+            {...paneShared}
+            room={secondRoom}
+            roomInfo={rooms.find((r) => r.id === secondRoom)}
+            onMissingRoom={onMissingSecond}
+            onHeard={onSideHeard}
+            picker={
+              <RoomPicker
+                rooms={shownRooms}
+                current={secondRoom}
+                onPick={(id) => { setSecondRoom(id); noteTour({ kind: 'room' }); }}
+              />
+            }
+          />
+        </div>
+      ) : (
+        <RoomPane
+          {...paneShared}
+          lead
+          room={room}
+          roomInfo={rooms.find((r) => r.id === room)}
+          setServerBuild={setServerBuild}
+          setStatus={setStatus}
+          setSetupError={setSetupError}
+          setupError={setupError}
+          onMissingRoom={onMissingPrimary}
+          seek={seek}
+          onJumped={() => setSeek(null)}
+          onHeard={onLeadHeard}
+          statusBar={statusBar}
+        />
+      )}
     </div>
   );
 }
