@@ -37,7 +37,10 @@ test('explainer page: the wake rule matches whoToWake for every sender and recip
   };
   const roster: Participant[] = page.ROSTER.map((p, color) => ({ name: p.name, kind: p.kind as Participant['kind'], color }));
   const names = roster.map((p) => p.name);
-  assert.deepEqual(names, ['human', 'claude', 'grok']);
+  assert.deepEqual(names, ['orchestrator', 'claude', 'grok']);
+  // Requests on the page name a participant, never a kind.
+  for (const p of page.ROSTER) assert.ok(p.name !== 'human' && p.name !== 'agent', `${p.name} is a kind, not a name`);
+  assert.doesNotMatch(html, /"to": ?"(human|agent)"/);
 
   let checked = 0;
   for (const sender of names) {
@@ -53,7 +56,7 @@ test('explainer page: the wake rule matches whoToWake for every sender and recip
   }
   assert.equal(checked, 12);
   // The rule's three cases, spelled out.
-  assert.deepEqual(page.wokenFor('human', 'claude'), ['claude', 'grok']);
+  assert.deepEqual(page.wokenFor('orchestrator', 'claude'), ['claude', 'grok']);
   assert.deepEqual(page.wokenFor('grok', null), ['claude']);
-  assert.deepEqual(page.wokenFor('claude', 'human'), []);
+  assert.deepEqual(page.wokenFor('claude', 'orchestrator'), []);
 });

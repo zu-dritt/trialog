@@ -63,7 +63,7 @@
   .chip.on rect { stroke: var(--text); fill: #222733; }
   .chip.on text { fill: var(--text); }
   .badge { font-size: 11px; font-weight: 700; text-anchor: middle; }
-  #packet text { font-size: 11px; font-weight: 700; fill: var(--text); text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+  #packet text { font-size: 11px; font-weight: 700; fill: var(--text); text-anchor: end; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
 
   .caption { margin-top: 8px; min-height: 3.2em; }
   .caption .n { color: var(--muted); font-size: 12px; }
@@ -140,12 +140,12 @@
 
       <svg id="diagram" viewBox="0 0 360 400" role="img" aria-labelledby="diagram-title">
         <title id="diagram-title">The orchestrator's browser, Claude and Grok above; Trialog in the middle; Postgres below.</title>
-        <line class="edge" id="e-human" x1="60" y1="70" x2="60" y2="170"></line>
+        <line class="edge" id="e-orchestrator" x1="60" y1="70" x2="60" y2="170"></line>
         <line class="edge" id="e-claude" x1="180" y1="70" x2="180" y2="170"></line>
         <line class="edge" id="e-grok" x1="300" y1="70" x2="300" y2="170"></line>
         <line class="edge" id="e-db" x1="180" y1="250" x2="180" y2="300"></line>
 
-        <g class="node" id="n-human" style="--c: var(--human)">
+        <g class="node" id="n-orchestrator" style="--c: var(--human)">
           <rect x="10" y="12" width="100" height="58" rx="10"></rect>
           <text class="name" x="60" y="36" style="font-size:13px">Orchestrator</text>
           <text x="60" y="55">the page</text>
@@ -181,7 +181,7 @@
 
         <g id="packet" visibility="hidden">
           <circle r="9" id="packet-dot"></circle>
-          <text y="-14" id="packet-label"></text>
+          <text x="-14" y="4" id="packet-label"></text>
         </g>
       </svg>
 
@@ -249,7 +249,7 @@
      notToSelf() in lib/store.ts. tests/explainer-page.test.ts runs this block against both. -->
 <script id="wake-rule">
 var ROSTER = [
-  { name: 'human', kind: 'human' },
+  { name: 'orchestrator', kind: 'human' },
   { name: 'claude', kind: 'agent' },
   { name: 'grok', kind: 'agent' }
 ];
@@ -279,9 +279,16 @@ function wokenFor(sender, to) {
 <script>
 (function () {
   'use strict';
-  var NAMES = { human: 'Orchestrator', claude: 'Claude', grok: 'Grok' };
-  var COLOR = { human: 'var(--human)', claude: 'var(--claude)', grok: 'var(--grok)' };
-  var POS = { human: [60, 41], claude: [180, 41], grok: [300, 41], api: [180, 210], db: [180, 344] };
+  var NAMES = { orchestrator: 'Orchestrator', claude: 'Claude', grok: 'Grok' };
+  var COLOR = { orchestrator: 'var(--human)', claude: 'var(--claude)', grok: 'var(--grok)' };
+  // The packet runs along the drawn lines and stops short of the boxes, below the woken badges,
+  // so its label (left of the dot) never covers a node's title.
+  var LINE_X = { orchestrator: 60, claude: 180, grok: 300 };
+  function ends(a, b) {
+    if (a === 'db' || b === 'db') { var top = [180, 258], bottom = [180, 292]; return a === 'db' ? [bottom, top] : [top, bottom]; }
+    var p = a === 'api' ? b : a, x = LINE_X[p], near = [x, 102], far = [x, 162];
+    return a === 'api' ? [far, near] : [near, far];
+  }
   var AGENTS = ['claude', 'grok'];
   var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -293,7 +300,7 @@ function wokenFor(sender, to) {
     return n;
   };
 
-  var state = { from: 'human', to: null, listen: { claude: 'polling', grok: 'webhook' }, speed: 1, nextId: 45 };
+  var state = { from: 'orchestrator', to: null, listen: { claude: 'polling', grok: 'webhook' }, speed: 1, nextId: 45 };
 
   // ---------- composer ----------
   function buildSeg(box, name, options, current, onPick) {
@@ -311,10 +318,10 @@ function wokenFor(sender, to) {
   }
   function renderComposer() {
     buildSeg($('from'), 'from', [
-      { value: 'human', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+      { value: 'orchestrator', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
     ], state.from, function (v) { state.from = v; renderRule(); });
     buildSeg($('to'), 'to', [
-      { value: null, label: 'Everyone' }, { value: 'human', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+      { value: null, label: 'Everyone' }, { value: 'orchestrator', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
     ], state.to, function (v) { state.to = v; renderRule(); });
   }
   function syncComposer() {
@@ -328,10 +335,10 @@ function wokenFor(sender, to) {
     var stored = notToSelf(from, to);
     var woken = wokenFor(from, to).indexOf(agent) >= 0;
     var self = to === from ? ' It was addressed to its own sender, so it is stored as a message to everyone.' : '';
-    if (from === 'human') return 'A message from the orchestrator (a human) wakes every agent, whoever it is for.' + self;
+    if (from === 'orchestrator') return 'A message from the orchestrator (a human) wakes every agent, whoever it is for.' + self;
     if (agent === from) return 'An agent is never woken by its own message.' + self;
     if (woken) return (stored === null ? 'For everyone, so every other agent is addressed.' : 'It is addressed to ' + NAMES[agent] + '.') + self;
-    if (stored === 'human') return 'From an agent, only for the orchestrator: no agent is woken.';
+    if (stored === 'orchestrator') return 'From an agent, only for the orchestrator: no agent is woken.';
     return 'From an agent, and not addressed to ' + NAMES[agent] + '.';
   }
   function renderRule() {
@@ -356,12 +363,12 @@ function wokenFor(sender, to) {
   }
   function buildMatrix() {
     var body = $('matrix');
-    ['human', 'claude', 'grok'].forEach(function (from) {
+    ['orchestrator', 'claude', 'grok'].forEach(function (from) {
       var tr = el('tr');
       var th = el('th', { scope: 'row', class: 'rowh' }, NAMES[from]);
       th.style.color = COLOR[from];
       tr.appendChild(th);
-      [null, 'human', 'claude', 'grok'].forEach(function (to) {
+      [null, 'orchestrator', 'claude', 'grok'].forEach(function (to) {
         var td = el('td');
         var woken = wokenFor(from, to);
         var b = el('button', { type: 'button', 'data-from': from, 'data-to': to || '',
@@ -411,7 +418,7 @@ function wokenFor(sender, to) {
     var body = { text: m.text };
     if (toSent) body.to = toSent;
     steps.push({
-      t: (from === 'human' ? 'The browser' : NAMES[from] + ' (with hub.js)') + ' sends it to Trialog with a Bearer token.',
+      t: (from === 'orchestrator' ? 'The browser' : NAMES[from] + ' (with hub.js)') + ' sends it to Trialog with a Bearer token.',
       code: 'POST /api/messages\nAuthorization: Bearer ••••••••••••\n' + JSON.stringify(body),
       on: [from, 'api'], edges: [from], moves: [[from, 'api', 'POST', from]]
     });
@@ -439,7 +446,7 @@ function wokenFor(sender, to) {
     steps.push({
       t: 'The live stream pushes message ' + id + ' to the page.',
       code: 'GET /api/stream  →  event: messages\ndata: [{"id": ' + id + ', "sender": "' + from + '", …}]',
-      on: ['api', 'human'], edges: ['human'], moves: [['api', 'human', 'stream', from]],
+      on: ['api', 'orchestrator'], edges: ['orchestrator'], moves: [['api', 'orchestrator', 'stream', from]],
       enter: function () { addChat({ id: id, sender: from, recipient: stored, text: m.text }); }
     });
     var woken = whoToWake({ sender: from, recipient: stored }, ROSTER);
@@ -450,7 +457,7 @@ function wokenFor(sender, to) {
       badge: { claude: woken.indexOf('claude') >= 0 ? 'woken' : 'not woken', grok: woken.indexOf('grok') >= 0 ? 'woken' : 'not woken' }
     });
     if (!woken.length) {
-      steps.push({ t: 'No agent is woken. The message waits in the chat until someone reads it.', code: '', on: ['human'] });
+      steps.push({ t: 'No agent is woken. The message waits in the chat until someone reads it.', code: '', on: ['orchestrator'] });
       return steps;
     }
     woken.forEach(function (a) {
@@ -486,7 +493,7 @@ function wokenFor(sender, to) {
       steps.push({
         t: NAMES[a] + ' replies. The reply is a new message (' + rid + ') and takes the same path; the stream shows it on the page.',
         code: 'POST /api/messages\nAuthorization: Bearer <' + NAMES[a] + '’s own token>\n' + JSON.stringify({ text: REPLY[a], to: to || undefined }),
-        on: [a, 'api', 'human'], edges: [a, 'human'], moves: [[a, 'api', 'reply', a], ['api', 'human', 'stream', a]],
+        on: [a, 'api', 'orchestrator'], edges: [a, 'orchestrator'], moves: [[a, 'api', 'reply', a], ['api', 'orchestrator', 'stream', a]],
         enter: function () { addChat({ id: rid, sender: a, recipient: to, text: REPLY[a] }); }
       });
     });
@@ -499,7 +506,7 @@ function wokenFor(sender, to) {
 
   function clearLights() {
     Array.prototype.forEach.call(document.querySelectorAll('.node, .edge, .chip'), function (n) { n.classList.remove('on'); n.style.removeProperty('--c'); });
-    ['human', 'claude', 'grok'].forEach(function (p) { $('n-' + p).style.setProperty('--c', COLOR[p]); });
+    ['orchestrator', 'claude', 'grok'].forEach(function (p) { $('n-' + p).style.setProperty('--c', COLOR[p]); });
     $('b-claude').textContent = ''; $('b-grok').textContent = '';
     $('api-sub').textContent = 'the token decides who is speaking';
     $('rule').classList.remove('flash');
@@ -526,7 +533,7 @@ function wokenFor(sender, to) {
 
   function animate(moves, done) {
     if (reduced || !moves || !moves.length) {
-      if (moves && moves.length) { var last = moves[moves.length - 1]; place(POS[last[1]], last[2], last[3]); }
+      if (moves && moves.length) { var last = moves[moves.length - 1]; place(ends(last[0], last[1])[1], last[2], last[3]); }
       done(); return;
     }
     var seg = 0, per = 850 / state.speed, t0 = null;
@@ -534,7 +541,7 @@ function wokenFor(sender, to) {
       if (!run || run.anim !== frame) return;
       if (t0 === null) t0 = ts;
       var mv = moves[seg], k = Math.min(1, (ts - t0) / per), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-      var a = POS[mv[0]], b = POS[mv[1]];
+      var ab = ends(mv[0], mv[1]), a = ab[0], b = ab[1];
       place([a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e], mv[2], mv[3]);
       if (k >= 1) { seg++; t0 = null; if (seg >= moves.length) { run.anim = null; done(); return; } }
       requestAnimationFrame(frame);
