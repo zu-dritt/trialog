@@ -345,3 +345,184 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('react and unreact send the Bearer token to the reactions API', async () => {
+  const seen: { method: string; url: string; auth: string | undefined }[] = [];
+  const message = {
+    id: 42,
+    sender: 'grok',
+    recipient: null,
+    text: 'Looks good',
+    created_at: '2026-11-26T04:00:00.000Z',
+    pinned_at: null,
+    attachments: [],
+    reactions: [{ emoji: '👍', by: ['claude'] }],
+  };
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method || '', url: req.url || '', auth: req.headers.authorization });
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'DELETE') {
+      res.end(JSON.stringify({ message: { ...message, reactions: [] } }));
+    } else {
+      res.end(JSON.stringify({ message }));
+    }
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const put = await run('react', '42', '👍');
+    assert.equal(put.code, 0, put.stderr);
+    assert.match(put.stdout, /reacted 👍 on #42 \(1\)/);
+    const del = await run('unreact', '42', '👍');
+    assert.equal(del.code, 0, del.stderr);
+    assert.match(del.stdout, /removed 👍 from #42/);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].method, 'PUT');
+    assert.equal(seen[1].method, 'DELETE');
+    const encoded = encodeURIComponent('👍');
+    for (const s of seen) {
+      assert.equal(s.url, `/api/messages/42/reactions/${encoded}`);
+      assert.equal(s.auth, 'Bearer cli-test-token-0123456789abcdef');
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('read prints reactions so an agent can see who reacted', async () => {
+  const server = createServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      me: 'claude',
+      messages: [{
+        id: 9,
+        sender: 'grok',
+        recipient: null,
+        text: 'Looks good',
+        created_at: '2026-11-26T04:00:00.000Z',
+        pinned_at: null,
+        attachments: [],
+        reactions: [{ emoji: '👍', by: ['david', 'claude'] }],
+      }],
+    }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const { code, stdout } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile(process.execPath, [HUB, 'read'], {
+        env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      child.stdin?.end();
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /\[reactions: 👍 David, Claude\]/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('react needs a message id and an emoji', async () => {
+  assert.equal((await hub('react')).code, 64);
+  assert.equal((await hub('react', '42')).code, 64);
+  assert.equal((await hub('unreact', 'nope', '👍')).code, 64);
+});
+
+test('react reports the count even when the server stores the catalogue form of the emoji', async () => {
+  const heart = '❤️'; // catalogue form, with the variation selector
+  const typed = '\u2764'; // what a client may send
+  const server = createServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      message: {
+        id: 42,
+        reactions: [{ emoji: heart, by: ['claude'] }],
+      },
+    }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const { code, stdout } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile(process.execPath, [HUB, 'react', '42', typed], {
+        env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      child.stdin?.end();
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, new RegExp(`reacted ${heart} on #42 \\(1\\)`));
+    assert.doesNotMatch(stdout, /\(0\)/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('search needs at least one word, before any request', async () => {
+  for (const args of [['search'], ['search', '   '], ['search', '--json'], ['search', '--pinned'], ['search', '--decisions']]) {
+    const { code, stderr } = await hub(...args);
+    assert.equal(code, 64, args.join(' '));
+    assert.match(stderr, /search needs at least one word/);
+    assert.doesNotMatch(stderr, /fetch failed|ECONNREFUSED/, 'no request was attempted');
+  }
+});
+
+test('search sends the words as q with the token, and prints the results like read', async () => {
+  const seen: { url: string; auth: string | undefined }[] = [];
+  const found = [
+    { id: 12, sender: 'claude', recipient: 'grok', text: 'DECISION: images go into the database', created_at: '2026-11-26T04:05:00.000Z', pinned_at: '2026-11-26T04:05:00.000Z', attachments: [], reply_to: 9, poll: null },
+    { id: 9, sender: 'grok', recipient: null, text: 'Which storage for the images?', created_at: '2026-11-26T04:00:00.000Z', pinned_at: null, attachments: [], reply_to: null, poll: null },
+  ];
+  const server = createServer((req, res) => {
+    seen.push({ url: req.url ?? '', auth: req.headers.authorization });
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ me: 'claude', messages: (req.url ?? '').includes('zebra') ? [] : found }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const plain = await run('search', 'images 100%', '--limit', '20', '--to', 'grok', '--pinned', '--decisions');
+    assert.equal(plain.code, 0);
+    const url = new URL(seen[0].url, 'http://hub.test');
+    assert.equal(url.pathname, '/api/messages');
+    // The words arrive as typed: the percent sign is encoded for the address, not taken as a pattern.
+    assert.equal(url.searchParams.get('q'), 'images 100%');
+    assert.equal(url.searchParams.get('limit'), '20');
+    assert.equal(url.searchParams.get('to'), 'grok');
+    assert.equal(url.searchParams.get('pinned'), '1');
+    assert.equal(url.searchParams.get('decisions'), '1');
+    assert.equal(seen[0].auth, 'Bearer cli-test-token-0123456789abcdef');
+    // Printed like read, in the order the hub gave: newest first.
+    assert.match(plain.stdout, /^#12 \[\d\d:\d\d\] Claude → Grok ↳ #9 📌:\nDECISION: images go into the database\n\n#9 \[\d\d:\d\d\] Grok:\nWhich storage for the images\?\n/);
+    assert.match(plain.stderr, /^2 found, newest first$/m);
+
+    // Several words without quotes are one query; without options nothing else is sent.
+    await run('search', 'storage', 'images');
+    assert.equal(new URL(seen[1].url, 'http://hub.test').search, '?q=storage+images');
+
+    const asJson = await run('search', 'images', '--json');
+    assert.deepEqual(JSON.parse(asJson.stdout), found);
+
+    const none = await run('search', 'zebra');
+    assert.equal(none.code, 0);
+    assert.equal(none.stdout, '');
+    assert.match(none.stderr, /^nothing found$/m);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

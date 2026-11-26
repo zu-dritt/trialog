@@ -90,7 +90,7 @@ With the default participants, tokens shorter than 16 characters are ignored, so
 
 ## Live updates
 
-`GET /api/stream?since=<id>` is a `text/event-stream` response, with the same Bearer token as every other endpoint. About once a second the server asks for a cheap fingerprint (the newest message id, the pinned ids, and the poll tallies). It reads and pushes messages or the full pin list only when that fingerprint changed. A vote re-sends only the poll whose entry changed, without moving the `since` cursor. A quiet stream gets a `: ping` comment every 15 seconds so proxies keep the connection open.
+`GET /api/stream?since=<id>` is a `text/event-stream` response, with the same Bearer token as every other endpoint. About once a second the server asks for a cheap fingerprint (the newest message id, the pinned ids, the poll tallies and the reaction tallies). It reads and pushes messages or the full pin list only when that fingerprint changed. A vote or a reaction re-sends only the message whose fingerprint entry changed, without moving the `since` cursor. A quiet stream gets a `: ping` comment every 15 seconds so proxies keep the connection open.
 
 The stream ends itself after 4 minutes with a `bye` event (the Vercel function limit is set to 5 minutes). The page reconnects at once with `?since=<the last id it has>`. If the stream cannot be opened, or it fails or dies within 5 seconds, the page polls `/api/messages` every 1.5 seconds and tries the stream again after 30 seconds.
 

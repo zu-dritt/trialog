@@ -8,6 +8,7 @@
 //   node scripts/hub.js send --reply-to 45 "Agreed."      (an answer to message #45; read shows it as ↳ #45)
 //   node scripts/hub.js get att_… > shot.png              (or: get att_… --out shot.png)
 //   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]
+//   node scripts/hub.js search "storage images" [--decisions] [--pinned] [--to claude] [--limit 20] [--json]
 //   node scripts/hub.js wait [--to claude] [--since <id>] [--timeout 600] [--json]
 //   node scripts/hub.js status "reviewing pull request 7" [--ttl 600] [--json]
 //   node scripts/hub.js status --clear [--json]
@@ -16,12 +17,15 @@
 //   node scripts/hub.js vote poll_… --clear
 //   node scripts/hub.js poll --close poll_…
 //   node scripts/hub.js pin <id> | unpin <id>
+//   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
 //   node scripts/hub.js export > transcript.md
 //
 // `wait` blocks until a new message from someone else arrives (addressed to --to, default:
 // you or everyone), prints it and exits 0; exits 2 on timeout. Each `read`/`wait` prints
 // "next: --since <id>" on stderr so you can continue where you left off.
+// `search` prints the messages that contain every word, in upper or lower case, newest first.
+// --decisions: only messages that start with DECISION: (pinned or not). --pinned: only pinned ones.
 // --to takes the name of any participant of the hub you talk to (see `participants`), or "all".
 // Message text is data: this tool only prints it and never runs anything from it.
 // Images: PNG, JPEG or WebP, at most 4 MB each. The hub removes location and other metadata.
@@ -36,7 +40,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | participants [--json] | export');
   process.exit(64);
 }
 
@@ -47,6 +51,8 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
     else if (a === '--clear') opts.clear = true;
+    else if (a === '--pinned') opts.pinned = true;
+    else if (a === '--decisions') opts.decisions = true;
     else if (a === '--attach') {
       const v = argv[++i];
       if (v === undefined) usage('--attach needs a file');
@@ -93,7 +99,12 @@ function fmt(m) {
         return `- ${o.index}. ${o.text} (${o.votes}${who ? ` — ${who}` : ''})\n`;
       }).join('')
     : '';
-  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && (images || poll) ? '\n' : ''}${images}${poll || (images ? '' : '\n')}`;
+  const reactions = (m.reactions || []).map((r) => {
+    const who = (r.by || []).map((v) => label(v)).join(', ');
+    return who ? `${r.emoji} ${who}` : r.emoji;
+  }).join(' · ');
+  const extra = images + poll + (reactions ? `[reactions: ${reactions}]\n` : '');
+  return `#${m.id} [${time}] ${label(m.sender)}${to}${reply}${pin}:\n${m.text}${m.text && extra ? '\n' : ''}${extra || '\n'}`;
 }
 
 function fail(msg) {
@@ -189,6 +200,17 @@ async function main() {
     else for (const m of data.messages) console.log(fmt(m));
     const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
     console.error(`next: --since ${last}`);
+    return;
+  }
+
+  if (cmd === 'search') {
+    const q = args.join(' ').trim();
+    if (!q) usage('search needs at least one word, for example: search "storage images"');
+    const data = await (await call(`/api/messages${query({ q, to: opts.to, limit: opts.limit, decisions: opts.decisions ? '1' : undefined, pinned: opts.pinned ? '1' : undefined })}`)).json();
+    if (opts.json) console.log(JSON.stringify(data.messages));
+    else for (const m of data.messages) console.log(fmt(m));
+    // Newest first. The count goes to stderr, so stdout holds nothing but the messages.
+    console.error(data.messages.length ? `${data.messages.length} found, newest first` : 'nothing found');
     return;
   }
 
@@ -303,6 +325,26 @@ async function main() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: cmd === 'pin' }),
     });
     console.log(`${cmd}ned #${args[0]}`);
+    return;
+  }
+
+  if (cmd === 'react' || cmd === 'unreact') {
+    if (!/^\d+$/.test(args[0] || '')) usage(`${cmd} needs a message id and an emoji`);
+    const emoji = args.slice(1).join(' ').trim();
+    if (!emoji) usage(`${cmd} needs a message id and an emoji`);
+    const { message } = await (await call(`/api/messages/${args[0]}/reactions/${encodeURIComponent(emoji)}`, {
+      method: cmd === 'react' ? 'PUT' : 'DELETE',
+    })).json();
+    if (opts.json) console.log(JSON.stringify(message));
+    else {
+      // The server stores the catalogue form (a heart may gain or lose a variation selector).
+      // Match on that, and report the emoji and count from the answer.
+      const fold = (s) => s.replaceAll('\uFE0F', '');
+      const found = (message.reactions || []).find((r) => r.emoji === emoji || fold(r.emoji) === fold(emoji));
+      const shown = found ? found.emoji : emoji;
+      const n = found ? found.by.length : 0;
+      console.log(cmd === 'react' ? `reacted ${shown} on #${args[0]} (${n})` : `removed ${emoji} from #${args[0]}`);
+    }
     return;
   }
 

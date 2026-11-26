@@ -4,7 +4,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EmojiPanel, EmojiPicker, RECENT_MAX, insertAtCursor, parseRecent, pushRecent, searchEmojis } from '../app/emoji';
+import { EmojiPanel, EmojiPicker, PANEL_HEIGHT, PANEL_MIN_HEIGHT, RECENT_MAX, insertAtCursor, panelHeight, parseRecent, pushRecent, searchEmojis } from '../app/emoji';
 import { ALL_EMOJIS, EMOJI_GROUPS } from '../app/emoji-data';
 
 const chars = (query: string) => searchEmojis(query).map((e) => e.char);
@@ -122,6 +122,55 @@ test('the panel: a labelled dialog with a search field and one named button per 
   assert.equal((out.match(/tabindex="-1"/g) ?? []).length, buttons.length - 1);
   // Text only: no image, and nothing that points at another site.
   assert.ok(!/<img|<svg|<link|url\(|https?:/.test(out));
+});
+
+test('the panel has one height, whatever it shows', () => {
+  // Enough room: the full height. Less room: what there is, but never squeezed to nothing.
+  assert.equal(PANEL_HEIGHT, 352);
+  assert.equal(panelHeight(900), PANEL_HEIGHT);
+  assert.equal(panelHeight(PANEL_HEIGHT), PANEL_HEIGHT);
+  assert.equal(panelHeight(300), 300);
+  assert.equal(panelHeight(40), PANEL_MIN_HEIGHT);
+  // Before the room is known: the full height, or half the window if that is less.
+  assert.equal(panelHeight(undefined), 'min(352px, 50vh)');
+
+  /** The parts that decide the size: the panel's own tag, the search field's holder, and the list's holder. */
+  const frame = (out: string) => {
+    const panel = /^<div[^>]*role="dialog"[^>]*>/.exec(out)?.[0] ?? '';
+    const [field, list] = [...out.matchAll(/<div class="([^"]*)">(?=<input)|<div class="([^"]*overflow-y-auto[^"]*)">/g)].map((m) => m[1] ?? m[2]);
+    return { panel, field, list };
+  };
+  const full = renderToStaticMarkup(<EmojiPanel id="p" maxHeight={900} recent={[ROCKET, THUMBS_UP]} onPick={() => {}} />);
+  const { panel, field, list } = frame(full);
+  // A height, not a largest height: a short list must not make the panel shorter.
+  assert.match(panel, /style="height:352px"/);
+  assert.ok(!full.includes('max-height'), 'nothing in the panel sizes itself by its content');
+  assert.match(panel, /class="[^"]*\bflex\b[^"]*\bflex-col\b/);
+  // The search field keeps its own height at the top; the list takes the rest and scrolls inside it.
+  assert.ok(field.split(' ').includes('flex-none'), field);
+  for (const c of ['min-h-0', 'flex-1', 'overflow-y-auto', '[scrollbar-gutter:stable]']) assert.ok(list.split(' ').includes(c), c);
+  // The field is in front of the list and not inside it, so it cannot scroll away or move.
+  assert.ok(full.indexOf('type="search"') < full.indexOf('overflow-y-auto'));
+  assert.ok(!full.slice(full.indexOf('overflow-y-auto')).includes('type="search"'));
+
+  // The same frame with everything, without the "Recently used" row, with a few matches and with none.
+  const views = {
+    'no recent row': <EmojiPanel id="p" maxHeight={900} recent={[]} onPick={() => {}} />,
+    'a few matches': <EmojiPanel id="p" maxHeight={900} recent={[ROCKET]} onPick={() => {}} initialQuery="rocket" />,
+    'no match': <EmojiPanel id="p" maxHeight={900} recent={[ROCKET]} onPick={() => {}} initialQuery="zzzzqqq" />,
+  };
+  for (const [name, view] of Object.entries(views)) assert.deepEqual(frame(renderToStaticMarkup(view)), { panel, field, list }, name);
+
+  const few = renderToStaticMarkup(views['a few matches']);
+  assert.ok((few.match(/<button/g) ?? []).length >= 1 && (few.match(/<button/g) ?? []).length < 10);
+  assert.ok(!few.includes('Recently used'), 'a search shows its matches only');
+  // No match: the list area is still there, with a line that says so in it.
+  const none = renderToStaticMarkup(views['no match']);
+  assert.equal((none.match(/<button/g) ?? []).length, 0);
+  assert.match(none.slice(none.indexOf('overflow-y-auto')), /No emoji found for “zzzzqqq”\./);
+  // In less room the panel is smaller, and again one size for every view.
+  assert.match(frame(renderToStaticMarkup(<EmojiPanel maxHeight={220} recent={[]} onPick={() => {}} initialQuery="zzzzqqq" />)).panel, /style="height:220px"/);
+  assert.match(frame(renderToStaticMarkup(<EmojiPanel maxHeight={220} recent={[ROCKET]} onPick={() => {}} />)).panel, /style="height:220px"/);
 });
 
 test('the panel without recent emojis starts with the first group', () => {

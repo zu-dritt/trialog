@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } fr
 import type { Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
@@ -15,7 +15,9 @@ import {
   MAX_QUOTES, MESSAGE_TEXT_ATTRIBUTE, QuoteChips, QuoteCommentBox, QuoteMessageButton, QuoteSelectionButton, addQuote as withQuote, composeMessage,
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
+import { ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
+import { SearchBox } from './search';
 import { StatusBar } from './status';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
@@ -27,6 +29,10 @@ const POLL_MS = 1500;
 const FALLBACK_MS = 30_000;
 // A stream that ends sooner than this without the server saying goodbye counts as a failure.
 const MIN_STREAM_MS = 5_000;
+// Going to a message that is older than what the page holds loads the messages in between, in
+// requests of this size, and at most this many of them.
+const OLDER_PAGE_SIZE = 500;
+const OLDER_PAGES = 20;
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 const FIELD = 'rounded-md border border-line bg-panel px-2 py-1.5';
@@ -41,6 +47,7 @@ interface MessagesResponse {
   messages: Message[];
   pinned: Message[];
   polls?: Poll[];
+  reactions?: { message_id: number; reactions: Message['reactions'] }[];
 }
 /** GET /api/participants: who takes part here. The page has no names of its own. */
 interface ParticipantsResponse {
@@ -112,6 +119,7 @@ export default function Page() {
   const [expanded, setExpanded] = useState(false); // the tall writing area
   const [replyTo, setReplyTo] = useState<Message | null>(null); // the message the next one will answer
   const [marked, setMarked] = useState<number | null>(null); // a message that was just jumped to
+  const pendingJump = useRef<number | null>(null); // a message to go to as soon as it is on the page
   const draftOwner = useRef<Sender | null>(null); // whose text is in the message box
   const [quotes, setQuotes] = useState<QuoteChip[]>([]); // quotes waiting above the message box
   const quotesRef = useRef<QuoteChip[]>([]);
@@ -163,6 +171,8 @@ export default function Page() {
     setDrafts((list) => [...list, ...added]);
     const update = (key: number, change: Partial<Draft>) => setDrafts((list) => list.map((d) => (d.key === key ? { ...d, ...change } : d)));
     added.forEach((d, i) => {
+      // For the full-size view of the chip: at which scale the file is shown, as far as the page can tell.
+      void localScale(taken[i], pasted).then((scale) => { if (scale) update(d.key, { scale }); }, () => {});
       void (async () => {
         try {
           const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
@@ -231,6 +241,7 @@ export default function Page() {
       if (!incoming.length) return;
       lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
       setMessages((list) => merge(list, incoming));
+      setPinned((list) => replaceMatching(list, incoming));
     };
     const pause = (ms: number) => new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, ms);
@@ -239,7 +250,7 @@ export default function Page() {
 
     /** One request to the polling endpoint. */
     const pollOnce = async () => {
-      const params = new URLSearchParams({ polls: '1' });
+      const params = new URLSearchParams({ polls: '1', reactions: '1' });
       if (lastId.current) params.set('since', String(lastId.current));
       const data = (await (await api(`/api/messages?${params}`, { signal: abort.signal })).json()) as MessagesResponse;
       if (stopped) return;
@@ -247,6 +258,10 @@ export default function Page() {
       addMessages(data.messages);
       setPinned(data.pinned);
       if (data.polls?.length) setMessages((list) => withPolls(list, data.polls ?? []));
+      if (data.reactions) {
+        setMessages((list) => applyReactionList(list, data.reactions ?? []));
+        setPinned((list) => applyReactionList(list, data.reactions ?? []));
+      }
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -514,6 +529,45 @@ export default function Page() {
     clearTimeout(markTimer.current);
     markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
+  // A message that had to be loaded first is on the page now: go to it.
+  useEffect(() => {
+    const id = pendingJump.current;
+    if (id === null || !document.getElementById(`m-${id}`)) return;
+    pendingJump.current = null;
+    jumpTo(id);
+  });
+
+  /**
+   * Goes to a message wherever it is. If it is older than what the page holds, the messages from
+   * it up to the oldest one on the page are loaded first, so the stream has no hole in it.
+   */
+  const goToMessage = async (id: number) => {
+    if (document.getElementById(`m-${id}`)) { jumpTo(id); return; }
+    const oldest = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
+    try {
+      const older: Message[] = [];
+      let since = id - 1;
+      for (let page = 0; page < OLDER_PAGES && since < oldest - 1; page++) {
+        const data = (await (await api(`/api/messages?since=${since}&limit=${OLDER_PAGE_SIZE}`)).json()) as MessagesResponse;
+        older.push(...data.messages.filter((m) => m.id < oldest));
+        if (data.messages.length < OLDER_PAGE_SIZE) break;
+        since = data.messages[data.messages.length - 1].id;
+      }
+      if (!older.some((m) => m.id === id)) { setNotice(`Message #${id} is no longer there.`); return; }
+      stick.current = false; // the reader is going somewhere: don't pull the stream to its end
+      pendingJump.current = id;
+      setMessages((list) => merge(list, older));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(`Could not load message #${id}: ${errorMessage(e)}`);
+    }
+  };
+
+  /** Asks the server for the messages that contain every word of `q`. */
+  const runSearch = useCallback(async (q: string, decisionsOnly: boolean) => {
+    const params = new URLSearchParams({ q });
+    if (decisionsOnly) params.set('decisions', '1');
+    return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
+  }, [api]);
 
   const togglePin = async (m: Message, isPinned: boolean) => {
     try {
@@ -525,6 +579,18 @@ export default function Page() {
       const data = (await res.json()) as { message: Message; pinned: Message[] };
       setPinned(data.pinned);
       setMessages((list) => merge(list, [data.message]));
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
+    }
+  };
+
+  const toggleReaction = async (m: Message, emoji: string, on: boolean) => {
+    try {
+      const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
+      const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
+      const data = (await res.json()) as { message: Message };
+      setMessages((list) => merge(list, [data.message]));
+      setPinned((list) => replaceMatching(list, [data.message]));
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
     }
@@ -611,12 +677,14 @@ export default function Page() {
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
-        {/* The free space of the header starts with the "New version available" pill, directly after
-            the status, so the state of the page reads in one spot and nothing else moves when it
-            appears. On a narrow screen the pill sits on a line of its own, under the status. */}
-        <span role="status" className="flex flex-1">
+        {/* The "New version available" pill comes directly after the status, so the state of the
+            page reads in one spot. On a narrow screen it sits on a line of its own, under the
+            status. An empty holder takes no room in the row. */}
+        <span role="status" className={`max-md:contents md:flex ${newVersion ? '' : 'md:-mr-3'}`}>
           {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
+        {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
+        <SearchBox search={runSearch} onPick={(m) => void goToMessage(m.id)} participants={participants} />
         {me && <span className="text-[13px] font-semibold">You: {displayName(me)}</span>}
         <button className={BUTTON} onClick={exportTranscript}>Export .md</button>
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
@@ -725,6 +793,7 @@ export default function Page() {
                     />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
+                  <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
                 </div>
               </article>
             </div>

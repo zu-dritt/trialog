@@ -1,5 +1,6 @@
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseLimit, parseMessageInput, parseRecipient, parseSince, recipientHint } from '../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
+import { SEARCH_LIMIT, parseQuery } from '../../../lib/search';
 import { waitUntil } from '@vercel/functions';
 import { loadRoster } from '../../../lib/participants';
 import { AttachmentLinkError, ReplyTargetError, getStore } from '../../../lib/store';
@@ -10,9 +11,19 @@ export const runtime = 'nodejs';
 // Room for the wake-up webhook job after the response: 2 s debounce plus three attempts of up to 5 s.
 export const maxDuration = 60;
 
+/** A switch in the query, such as `decisions=1`. Left out or 0: off. */
+function parseSwitch(value: string | null): boolean | undefined {
+  if (value === null || value === '' || value === '0' || value === 'false') return false;
+  return value === '1' || value === 'true' ? true : undefined;
+}
+
 // GET /api/messages?since=<id>&to=<name>&limit=<n>
 // Without `since`: the latest messages. With `since`: messages with a higher id, oldest first.
 // Always includes the pinned decisions and who you are (derived from your token).
+//
+// GET /api/messages?q=<words>&to=<name>&decisions=1&pinned=1&limit=<n>
+// Search: the messages that contain every word, newest first, as {me, messages}.
+// decisions=1: only messages that start with DECISION: (pinned or not). pinned=1: only pinned ones.
 export const GET = safe(async (request: Request) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;
@@ -22,18 +33,38 @@ export const GET = safe(async (request: Request) => {
   const { names } = loadRoster();
   const to = parseRecipient(params.get('to'), names);
   if (to === undefined) return error(400, recipientHint(names));
-  const limit = parseLimit(params.get('limit'));
+  const q = params.get('q');
+  const limit = parseLimit(params.get('limit') || (q === null ? null : String(SEARCH_LIMIT)));
   if (limit === undefined) return error(400, '"limit" must be a whole number.');
   const store = await getStore();
-  // The top-level polls list is opt-in (`?polls=1`). The page asks for it so a since-poll
-  // still sees votes on older polls; the CLI, which polls every few seconds, leaves it off.
+  if (q !== null) {
+    const query = parseQuery(q);
+    if (!query.ok) return error(400, query.error);
+    if (since !== null) return error(400, '"since" cannot be combined with "q": a search returns the newest matches first.');
+    const decisions = parseSwitch(params.get('decisions'));
+    if (decisions === undefined) return error(400, '"decisions" must be 1 or 0.');
+    const pinned = parseSwitch(params.get('pinned'));
+    if (pinned === undefined) return error(400, '"pinned" must be 1 or 0.');
+    return json({ me, messages: await store.search({ words: query.words, to, decisionsAmong: decisions ? names : null, pinned, limit }) });
+  }
+  // The top-level polls and reactions lists are opt-in (`?polls=1`, `?reactions=1`). The page asks
+  // for them so a since-poll still sees votes and reactions on older messages; the CLI, which polls
+  // every few seconds, leaves them off.
   const includePolls = params.get('polls') === '1';
-  const [messages, pinned, polls] = await Promise.all([
+  const includeReactions = params.get('reactions') === '1';
+  const [messages, pinned, polls, reactions] = await Promise.all([
     store.list({ since, to, limit }),
     store.pinned(),
     includePolls ? store.listPolls() : Promise.resolve(null),
+    includeReactions ? store.listReactions() : Promise.resolve(null),
   ]);
-  return json(includePolls ? { me, messages, pinned, polls } : { me, messages, pinned });
+  return json({
+    me,
+    messages,
+    pinned,
+    ...(includePolls ? { polls } : {}),
+    ...(includeReactions ? { reactions } : {}),
+  });
 });
 
 // POST /api/messages {"text": "...", "to": "<name>", "attachments": ["att_…"], "reply_to": 45}

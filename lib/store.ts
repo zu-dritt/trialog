@@ -10,9 +10,11 @@ import { MAX_SCALE, validScale } from './shared';
 import {
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, welcomeText,
   pollResultText,
-  type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Sender,
+  type Attachment, type Author, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type Sender,
 } from './core';
+import { decisionSqlPattern, isDecision } from './decision';
 import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
+import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -89,6 +91,20 @@ export interface ListOptions {
   to?: Sender | null;
   limit?: number;
 }
+export interface SearchOptions {
+  /** A message matches when it contains every one of these, in upper or lower case. */
+  words: string[];
+  to?: Sender | null;
+  /**
+   * Only decisions: messages that start with DECISION:, by the rule in lib/decision.ts, pinned or
+   * not. The value is the list of participants' names, which the rule needs (an "@name" may stand
+   * in front of DECISION:). Left out or null: all messages.
+   */
+  decisionsAmong?: readonly string[] | null;
+  /** Only pinned messages, decision or not. */
+  pinned?: boolean;
+  limit?: number;
+}
 /** A range of messages one wake-up webhook covers. `previous_id` is what the watermark was before the claim. */
 export interface WakeupClaim {
   first_id: number;
@@ -107,7 +123,20 @@ export interface StreamVersion {
   pins: string;
   /** Fingerprint of poll rows and votes, so the live stream can push tally changes. */
   polls: string;
+  /** Fingerprint of who reacted with what; a new, changed or withdrawn reaction changes it. */
+  reactions: string;
 }
+
+/** Reactions on one message, as returned at the top level of GET /api/messages. */
+export interface MessageReactions {
+  message_id: number;
+  reactions: Reaction[];
+}
+
+export type AddReactionResult =
+  | { status: 'ok'; message: Message }
+  | { status: 'not_found' }
+  | { status: 'rate_limited' };
 export interface Store {
   ensure(): Promise<void>;
   /**
@@ -131,10 +160,15 @@ export interface Store {
   getAttachment(id: string): Promise<{ attachment: StoredAttachment; data: Buffer } | null>;
   /** since=null → the latest `limit` messages; since=n → messages with id > n, oldest first. */
   list(options?: ListOptions): Promise<Message[]>;
+  /**
+   * The messages that contain every word, newest first. The words are taken literally. A poll's
+   * question and options count as text of the message that carries the poll.
+   */
+  search(options: SearchOptions): Promise<Message[]>;
   pinned(): Promise<Message[]>;
   setPinned(id: number, pinned: boolean): Promise<Message | null>;
   all(): Promise<Message[]>;
-  /** A cheap fingerprint of the stream: the newest message id and the ids of the pinned messages. */
+  /** A cheap fingerprint of the stream: the newest message id, the pinned ids, polls and reactions. */
   version(): Promise<StreamVersion>;
   /**
    * Claims every message Grok has not been woken for yet (addressed to Grok or to everyone, not
@@ -173,6 +207,16 @@ export interface Store {
    * the poll stays open so they can retry.
    */
   closePoll(pollId: string, participant: Sender, limitPerMin?: number): Promise<{ poll: Poll; message: Message | null } | null>;
+  /**
+   * Adds the caller's reaction. The participant comes from the token, never from a body.
+   * Returns rate_limited when this sender has added 30 reactions in the last minute.
+   * Putting the same emoji again is a no-op and is not counted against the limit.
+   */
+  addReaction(messageId: number, participant: Sender, emoji: string, limitPerMin?: number): Promise<AddReactionResult>;
+  /** Removes the caller's reaction. Returns null when the message does not exist. */
+  removeReaction(messageId: number, participant: Sender, emoji: string): Promise<Message | null>;
+  /** Every message that currently has reactions, for since-poll and the stream. */
+  listReactions(): Promise<MessageReactions[]>;
 }
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
@@ -336,6 +380,25 @@ const SCHEMA = [
        ALTER TABLE poll_votes ADD CONSTRAINT poll_votes_participant_shape CHECK (participant ~ ${NAME_SHAPE});
      END IF;
    END $$`,
+  // Message reactions (migrations/008-reactions.sql).
+  `CREATE TABLE IF NOT EXISTS reactions (
+     message_id  BIGINT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+     participant TEXT NOT NULL,
+     emoji       TEXT NOT NULL CHECK (char_length(emoji) BETWEEN 1 AND 32),
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (message_id, participant, emoji),
+     CONSTRAINT reactions_participant_shape CHECK (participant ~ ${NAME_SHAPE})
+   )`,
+  // If an earlier draft of this table listed names, replace that check with the shape check.
+  `DO $$
+   BEGIN
+     PERFORM pg_advisory_xact_lock(7230421);
+     ALTER TABLE reactions DROP CONSTRAINT IF EXISTS reactions_participant_is_participant;
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_shape') THEN
+       ALTER TABLE reactions ADD CONSTRAINT reactions_participant_shape CHECK (participant ~ ${NAME_SHAPE});
+     END IF;
+   END $$`,
+  `CREATE INDEX IF NOT EXISTS reactions_message_id ON reactions (message_id)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -364,7 +427,16 @@ const COLS = `${BASE_COLS},
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
             'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY a.position, a.id), '[]'::json)
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
-  (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll`;
+  (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll,
+  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+     FROM (
+       SELECT emoji,
+              json_agg(participant ORDER BY created_at, participant) AS by,
+              min(created_at) AS first_at
+         FROM reactions
+        WHERE message_id = messages.id
+        GROUP BY emoji
+     ) g) AS reactions`;
 // Inserts take a transaction-level advisory lock so ids are committed in order: a poller asking
 // for "since=<id>" can never skip a message that committed late with a lower id. Transaction-level
 // locks work behind Neon's pooler (PgBouncer in transaction mode).
@@ -372,6 +444,7 @@ const LOCK_ID = 7230418;
 // Uploads take their own lock, so a slow upload never holds up posting. It makes the hourly count
 // exact when one sender uploads several images at once.
 const UPLOAD_LOCK_ID = 7230419;
+const REACTION_LOCK_ID = 7230420;
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
@@ -392,6 +465,15 @@ const POLLS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM polls) || '|' ||
       FROM polls p
     ) t
   ), '')`;
+// One entry per message: id:count:latest, so a swap (same count, different emoji) still shows.
+const REACTIONS_FINGERPRINT_SQL = `(SELECT count(*)::text FROM reactions) || '|' ||
+  (SELECT coalesce(max(created_at)::text, '') FROM reactions) || '|' ||
+  (SELECT coalesce(string_agg(message_id::text || ':' || n::text || ':' || latest, ',' ORDER BY message_id), '')
+     FROM (
+       SELECT message_id, count(*)::int AS n, max(created_at)::text AS latest
+       FROM reactions
+       GROUP BY message_id
+     ) t)`;
 // Messages that wake Grok: addressed to Grok or to everyone, and not written by Grok or the hub.
 const WAKES_GROK = `sender NOT IN ('grok', 'hub') AND (recipient IS NULL OR recipient = 'grok')`;
 export const wakesGrok = (m: Pick<Message, 'sender' | 'recipient'>): boolean =>
@@ -450,6 +532,18 @@ const toPoll = (v: unknown): Poll | null => {
     created_at: iso(r.created_at) as string,
   };
 };
+const toReaction = (r: Row): Reaction => ({
+  emoji: r.emoji as string,
+  by: Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []),
+});
+const toReactions = (v: unknown): Reaction[] => {
+  const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
+  return Array.isArray(list) ? (list as Row[]).map(toReaction) : [];
+};
+const toMessageReactions = (r: Row): MessageReactions => ({
+  message_id: Number(r.message_id),
+  reactions: toReactions(r.reactions),
+});
 const toMessage = (r: Row): Message => ({
   id: Number(r.id),
   sender: r.sender as Author,
@@ -460,6 +554,7 @@ const toMessage = (r: Row): Message => ({
   attachments: toAttachments(r.attachments),
   reply_to: r.reply_to == null ? null : Number(r.reply_to),
   poll: toPoll(r.poll),
+  reactions: toReactions(r.reactions),
 });
 
 export interface StoreOptions {
@@ -602,6 +697,26 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         );
       return rows.map(toMessage);
     },
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
+      await ensure();
+      if (!words.length) return [];
+      // Plain ILIKE over the text, and over the poll's question and options when there is one.
+      // Every word is a parameter with its LIKE characters escaped (the default escape is "\"),
+      // so nothing in a query acts as a pattern. No index: at a few thousand short messages a
+      // scan takes a few milliseconds.
+      const rows = await db.query(
+        `SELECT ${COLS} FROM messages
+         WHERE (messages.text || E'\\n' || coalesce(
+                 (SELECT p.question || E'\\n' || array_to_string(p.options, E'\\n') FROM polls p WHERE p.message_id = messages.id), ''))
+               ILIKE ALL ($1::text[])
+           AND ($2::text IS NULL OR recipient = $2::text)
+           AND (NOT $3::boolean OR pinned_at IS NOT NULL)
+           AND ($4::text IS NULL OR messages.text ~ $4::text)
+         ORDER BY id DESC LIMIT $5::int`,
+        [words.map(likePattern), to, pinned, decisionsAmong ? decisionSqlPattern(decisionsAmong) : null, limit],
+      );
+      return rows.map(toMessage);
+    },
     async pinned() {
       await ensure();
       const rows = await db.query(`SELECT ${COLS} FROM messages WHERE pinned_at IS NOT NULL ORDER BY id`, []);
@@ -625,10 +740,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       const [row] = await db.query(
         `SELECT (SELECT coalesce(max(id), 0) FROM messages) AS last_id,
                 (SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM messages WHERE pinned_at IS NOT NULL) AS pins,
-                ${POLLS_FINGERPRINT_SQL} AS polls`,
+                ${POLLS_FINGERPRINT_SQL} AS polls,
+                ${REACTIONS_FINGERPRINT_SQL} AS reactions`,
         [],
       );
-      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls) };
+      return { last_id: Number(row.last_id), pins: String(row.pins), polls: String(row.polls), reactions: String(row.reactions) };
     },
     async claimWakeup() {
       await ensure();
@@ -822,6 +938,63 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { poll, message: { ...toMessage(inserted[0]), attachments: [], poll: null } };
       });
     },
+    async addReaction(messageId, participant, emoji, limitPerMin = RATE_LIMIT_PER_MIN) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(${REACTION_LOCK_ID})`, []);
+        const [exists] = await tx.query(`SELECT id FROM messages WHERE id = $1::bigint`, [messageId]);
+        if (!exists) return { status: 'not_found' as const };
+        const [already] = await tx.query(
+          `SELECT 1 FROM reactions WHERE message_id = $1::bigint AND participant = $2::text AND emoji = $3::text`,
+          [messageId, participant, emoji],
+        );
+        if (!already) {
+          const [{ n }] = await tx.query(
+            `SELECT count(*)::int AS n FROM reactions
+             WHERE participant = $1::text AND created_at > now() - interval '60 seconds'`,
+            [participant],
+          );
+          if ((n as number) >= limitPerMin) return { status: 'rate_limited' as const };
+          await tx.query(
+            `INSERT INTO reactions (message_id, participant, emoji)
+             VALUES ($1::bigint, $2::text, $3::text)`,
+            [messageId, participant, emoji],
+          );
+        }
+        const [row] = await tx.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [messageId]);
+        return { status: 'ok' as const, message: toMessage(row) };
+      });
+    },
+    async removeReaction(messageId, participant, emoji) {
+      await ensure();
+      const [exists] = await db.query(`SELECT id FROM messages WHERE id = $1::bigint`, [messageId]);
+      if (!exists) return null;
+      await db.query(
+        `DELETE FROM reactions WHERE message_id = $1::bigint AND participant = $2::text AND emoji = $3::text`,
+        [messageId, participant, emoji],
+      );
+      const [row] = await db.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [messageId]);
+      return toMessage(row);
+    },
+    async listReactions() {
+      await ensure();
+      const rows = await db.query(
+        `SELECT message_id,
+                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+                   FROM (
+                     SELECT emoji,
+                            json_agg(participant ORDER BY created_at, participant) AS by,
+                            min(created_at) AS first_at
+                       FROM reactions r2
+                      WHERE r2.message_id = r.message_id
+                      GROUP BY emoji
+                   ) g) AS reactions
+           FROM (SELECT DISTINCT message_id FROM reactions) r
+          ORDER BY message_id`,
+        [],
+      );
+      return rows.map(toMessageReactions);
+    },
   };
 }
 
@@ -837,7 +1010,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let nextId = 1;
   const timestamp = () => new Date(now()).toISOString();
   const push = (r: Partial<Message> & { sender: Author; text: string }): Message => {
-    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], reply_to: null, poll: null, ...r };
+    const m: Message = { id: nextId++, recipient: null, pinned_at: null, created_at: timestamp(), attachments: [], reply_to: null, poll: null, reactions: [], ...r };
     rows.push(m);
     return m;
   };
@@ -889,10 +1062,43 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     if (row.closed_at) throw new PollError('closed');
     return row;
   };
+  type ReactionRow = { message_id: number; participant: Sender; emoji: string; created_at: string };
+  const reactionRows: ReactionRow[] = [];
+  const reactionsOn = (messageId: number): Reaction[] => {
+    const grouped = new Map<string, { by: Sender[]; first: string; index: number }>();
+    for (const r of reactionRows) {
+      if (r.message_id !== messageId) continue;
+      const g = grouped.get(r.emoji);
+      if (g) g.by.push(r.participant);
+      else grouped.set(r.emoji, { by: [r.participant], first: r.created_at, index: grouped.size });
+    }
+    return [...grouped.entries()]
+      .sort((a, b) => a[1].first.localeCompare(b[1].first) || a[1].index - b[1].index)
+      .map(([emoji, g]) => ({ emoji, by: g.by }));
+  };
+  const reactionsFingerprint = (): string => {
+    const byMessage = new Map<number, { n: number; latest: string }>();
+    let latest = '';
+    for (const r of reactionRows) {
+      const cur = byMessage.get(r.message_id);
+      if (!cur) byMessage.set(r.message_id, { n: 1, latest: r.created_at });
+      else {
+        cur.n += 1;
+        if (r.created_at > cur.latest) cur.latest = r.created_at;
+      }
+      if (r.created_at > latest) latest = r.created_at;
+    }
+    const body = [...byMessage.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([id, row]) => `${id}:${row.n}:${row.latest}`)
+      .join(',');
+    return `${reactionRows.length}|${latest}|${body}`;
+  };
   const copy = (m: Message): Message => ({
     ...m,
     attachments: m.attachments.map((a) => ({ ...a })),
     poll: pollForMessage(m.id),
+    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by] })),
   });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const uploads = new Map<string, StoredAttachment & { created: number }>();
@@ -944,6 +1150,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since));
       return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
     },
+    async search({ words, to = null, decisionsAmong = null, pinned = false, limit = SEARCH_LIMIT }) {
+      if (!words.length) return [];
+      return rows.map(copy)
+        .filter((m) => (to === null || m.recipient === to) && (!pinned || m.pinned_at) && (!decisionsAmong || isDecision(m.text, decisionsAmong)) && matchesAll(m, words))
+        .reverse().slice(0, limit);
+    },
     async pinned() { return rows.filter((m) => m.pinned_at).map(copy); },
     async setPinned(id, pinned) {
       const m = rows.find((r) => r.id === id);
@@ -953,7 +1165,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async all() { return rows.map(copy); },
     async version() {
-      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint() };
+      return { last_id: rows[rows.length - 1].id, pins: rows.filter((m) => m.pinned_at).map((m) => m.id).join(','), polls: pollsFingerprint(), reactions: reactionsFingerprint() };
     },
     async claimWakeup() {
       const fresh = rows.filter((m) => m.id > lastNotifiedId && wakesGrok(m));
@@ -1067,6 +1279,28 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         reply_to: row.message_id,
       });
       return { poll, message: copy(message) };
+    },
+    async addReaction(messageId, participant, emoji, limitPerMin = RATE_LIMIT_PER_MIN) {
+      shaped(participant);
+      if (!rows.some((m) => m.id === messageId)) return { status: 'not_found' as const };
+      if (!reactionRows.some((r) => r.message_id === messageId && r.participant === participant && r.emoji === emoji)) {
+        const cutoff = now() - 60_000;
+        const recent = reactionRows.filter((r) => r.participant === participant && Date.parse(r.created_at) > cutoff).length;
+        if (recent >= limitPerMin) return { status: 'rate_limited' as const };
+        reactionRows.push({ message_id: messageId, participant, emoji, created_at: timestamp() });
+      }
+      return { status: 'ok' as const, message: copy(rows.find((m) => m.id === messageId)!) };
+    },
+    async removeReaction(messageId, participant, emoji) {
+      const m = rows.find((r) => r.id === messageId);
+      if (!m) return null;
+      const i = reactionRows.findIndex((r) => r.message_id === messageId && r.participant === participant && r.emoji === emoji);
+      if (i >= 0) reactionRows.splice(i, 1);
+      return copy(m);
+    },
+    async listReactions() {
+      const ids = [...new Set(reactionRows.map((r) => r.message_id))].sort((a, b) => a - b);
+      return ids.map((message_id) => ({ message_id, reactions: reactionsOn(message_id) }));
     },
   };
 }

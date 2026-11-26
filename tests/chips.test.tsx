@@ -35,8 +35,10 @@ test('every chip has a remove button that says what it removes', () => {
   const out = render(<ChipRow>{reply}{quotes}{images}</ChipRow>);
   assert.match(out, /^<ul [^>]*aria-label="Attached to this message"/);
   assert.equal((out.match(/<li[ >]/g) ?? []).length, 3, 'one row, three chips, in this order: answer, quotes, images');
-  const labels = [...out.matchAll(/<button type="button" aria-label="([^"]*)" title="([^"]*)"/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(labels.map((l) => l[0]), ['Cancel the reply', 'Remove the quote from Claude, #46', 'Remove image shot.png']);
+  const all = [...out.matchAll(/<button type="button" aria-label="([^"]*)" title="([^"]*)"/g)].map((m) => [m[1], m[2]]);
+  // An image chip can also be opened, to look at the image; that is a button of its own.
+  assert.deepEqual(all.map((l) => l[0]), ['Cancel the reply', 'Remove the quote from Claude, #46', 'View image shot.png', 'Remove image shot.png']);
+  const labels = all.filter(([label]) => !label.startsWith('View '));
   assert.ok(labels.every(([label, title]) => label === title), 'the tooltip says the same as the label');
   assert.ok(out.indexOf('Replying to') < out.indexOf('Claude') && out.indexOf('Claude') < out.indexOf('uploading'));
 });
