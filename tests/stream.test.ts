@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
 import { SSE_PING, createSseParser, sseEvent, type SseEvent } from '../lib/sse';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { createEventStream } from '../lib/stream';
+import { createEventStream, pollMessageIdsChanged } from '../lib/stream';
 
 // --- encoder and parser ---------------------------------------------------------------------------
 
@@ -61,14 +61,14 @@ for (const [name, make] of STORES) {
   test(`${name}: version changes with new messages and with pins`, async () => {
     const store = await make();
     await store.ensure();
-    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0:0::' }, 'only the welcome message');
+    assert.deepEqual(await store.version(), { last_id: 1, pins: '', polls: '0|' }, 'only the welcome message');
     const a = must(await store.add({ sender: 'david', recipient: null, text: 'one' }));
     const b = must(await store.add({ sender: 'grok', recipient: null, text: 'DECISION: two', pinned: true }));
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0:0::' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(b.id), polls: '0|' });
     await store.setPinned(a.id, true);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0:0::' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: `${a.id},${b.id}`, polls: '0|' });
     await store.setPinned(b.id, false);
-    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0:0::' });
+    assert.deepEqual(await store.version(), { last_id: b.id, pins: String(a.id), polls: '0|' });
   });
 }
 
@@ -258,4 +258,13 @@ test('route: needs a token, validates since, and answers as an event stream', as
   assert.equal(pins.event, 'pins');
   abort.abort();
   await r.finished();
+});
+
+test('pollMessageIdsChanged returns only ids whose entry changed', () => {
+  assert.deepEqual(pollMessageIdsChanged('0|', '0|'), []);
+  assert.deepEqual(pollMessageIdsChanged('0|', '1|12:0:t0'), [12]);
+  // A vote on 12 does not re-send 13.
+  assert.deepEqual(pollMessageIdsChanged('2|12:1:t0,13:1:t0', '2|12:2:t1,13:1:t0'), [12]);
+  // A change at a constant count (someone switches option) still shows, because latest moved.
+  assert.deepEqual(pollMessageIdsChanged('1|12:1:t0', '1|12:1:t1'), [12]);
 });
