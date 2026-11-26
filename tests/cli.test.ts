@@ -345,3 +345,93 @@ test('the CLI follows the names of the hub it talks to: --to, participants, and 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('react and unreact send the Bearer token to the reactions API', async () => {
+  const seen: { method: string; url: string; auth: string | undefined }[] = [];
+  const message = {
+    id: 42,
+    sender: 'grok',
+    recipient: null,
+    text: 'Looks good',
+    created_at: '2026-11-26T04:00:00.000Z',
+    pinned_at: null,
+    attachments: [],
+    reactions: [{ emoji: '👍', by: ['claude'] }],
+  };
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method || '', url: req.url || '', auth: req.headers.authorization });
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'DELETE') {
+      res.end(JSON.stringify({ message: { ...message, reactions: [] } }));
+    } else {
+      res.end(JSON.stringify({ message }));
+    }
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const run = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(process.execPath, [HUB, ...args], {
+      env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+    }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+    child.stdin?.end();
+  });
+  try {
+    const put = await run('react', '42', '👍');
+    assert.equal(put.code, 0, put.stderr);
+    assert.match(put.stdout, /reacted 👍 on #42 \(1\)/);
+    const del = await run('unreact', '42', '👍');
+    assert.equal(del.code, 0, del.stderr);
+    assert.match(del.stdout, /removed 👍 from #42/);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].method, 'PUT');
+    assert.equal(seen[1].method, 'DELETE');
+    const encoded = encodeURIComponent('👍');
+    for (const s of seen) {
+      assert.equal(s.url, `/api/messages/42/reactions/${encoded}`);
+      assert.equal(s.auth, 'Bearer cli-test-token-0123456789abcdef');
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('read prints reactions so an agent can see who reacted', async () => {
+  const server = createServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      me: 'claude',
+      messages: [{
+        id: 9,
+        sender: 'grok',
+        recipient: null,
+        text: 'Looks good',
+        created_at: '2026-11-26T04:00:00.000Z',
+        pinned_at: null,
+        attachments: [],
+        reactions: [{ emoji: '👍', by: ['david', 'claude'] }],
+      }],
+    }));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const { code, stdout } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile(process.execPath, [HUB, 'read'], {
+        env: { ...process.env, HUB_URL: `http://127.0.0.1:${port}`, HUB_TOKEN: 'cli-test-token-0123456789abcdef' },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }));
+      child.stdin?.end();
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /\[reactions: 👍 David, Claude\]/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('react needs a message id and an emoji', async () => {
+  assert.equal((await hub('react')).code, 64);
+  assert.equal((await hub('react', '42')).code, 64);
+  assert.equal((await hub('unreact', 'nope', '👍')).code, 64);
+});

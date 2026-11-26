@@ -28,12 +28,13 @@ export const GET = safe(async (request: Request) => {
   // The top-level polls list is opt-in (`?polls=1`). The page asks for it so a since-poll
   // still sees votes on older polls; the CLI, which polls every few seconds, leaves it off.
   const includePolls = params.get('polls') === '1';
-  const [messages, pinned, polls] = await Promise.all([
+  const [messages, pinned, polls, reactions] = await Promise.all([
     store.list({ since, to, limit }),
     store.pinned(),
     includePolls ? store.listPolls() : Promise.resolve(null),
+    store.listReactions(),
   ]);
-  return json(includePolls ? { me, messages, pinned, polls } : { me, messages, pinned });
+  return json(includePolls ? { me, messages, pinned, polls, reactions } : { me, messages, pinned, reactions });
 });
 
 // POST /api/messages {"text": "...", "to": "<name>", "attachments": ["att_…"], "reply_to": 45}

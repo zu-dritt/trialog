@@ -3,11 +3,18 @@
 //
 // There is no LISTEN/NOTIFY: the database is reached through Neon's pooler, which doesn't keep a
 // session. Instead the stream asks the store once a second for a cheap fingerprint (newest id,
-// pinned ids, poll tallies) and only reads messages when that changed. A vote re-sends only the poll whose fingerprint entry changed. The stream ends itself well inside the
+// pinned ids, poll tallies, reaction tallies) and only reads messages when that changed. A vote or a reaction re-sends only the message whose fingerprint entry changed. The stream ends itself well inside the
 // function time limit, and the page reconnects from the last id it has.
 import type { Message, Sender } from './core';
 import { SSE_PING, sseEvent } from './sse';
 import type { Store } from './store';
+
+/** Message ids recorded in a reactions fingerprint (`count|latest|id:n,id:n`). */
+export function messageIdsInReactionsFingerprint(fp: string): number[] {
+  const body = fp.split('|')[2] ?? '';
+  if (!body) return [];
+  return body.split(',').map((part) => Number(part.split(':')[0])).filter((id) => id > 0);
+}
 
 export const INTERVAL_MS = 1_000;
 export const HEARTBEAT_MS = 15_000;
@@ -98,6 +105,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
       let last = since ?? 0;
       let pins = '';
       let polls = '';
+      let reactions = '';
       const sendMessages = (messages: Message[]) => {
         if (!messages.length) return;
         last = messages[messages.length - 1].id;
@@ -110,6 +118,7 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
         const version = await store.version();
         pins = version.pins;
         polls = version.polls;
+        reactions = version.reactions;
         sendMessages(await store.list({ since, limit: BATCH }));
         send('pins', await store.pinned());
       } catch (e) {
@@ -146,6 +155,18 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
               const updated = await store.listMessagesByIds(ids);
               if (updated.length) send('messages', updated);
             }
+            wrote = true;
+          }
+          // Reaction changes do not move last_id, so they need their own fingerprint.
+          // Re-send those messages without moving `last`, or a lower id would make the next tick replay the stream.
+          if (version.reactions !== reactions) {
+            const ids = [...new Set([
+              ...messageIdsInReactionsFingerprint(reactions),
+              ...messageIdsInReactionsFingerprint(version.reactions),
+            ])];
+            reactions = version.reactions;
+            const updated = await store.listMessagesByIds(ids);
+            if (updated.length) send('messages', updated);
             wrote = true;
           }
           if (wrote) lastWrite = now();
