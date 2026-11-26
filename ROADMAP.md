@@ -21,6 +21,8 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 
 - **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the orchestrator talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
 
+- **Sound mode:** each participant has a note of one chord, so a new message is heard as its writer: the human the root, the agents the third and the fifth and then further chord tones, by roster order. A sent message, a reaction on yours, an agreed decision (the whole chord, once) and a new version have sounds of their own. Off by default, a speaker button next to «● live», made with the Web Audio API in the browser. The idea came from the launch video's soundtrack.
+
 ## Next
 
 ### 4. Notifications and a digest

@@ -22,6 +22,7 @@ import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
+import { SoundToggle, useSoundMode } from './sound';
 import { StatusBar } from './status';
 import { TourButton, TourPanel, agreedBy, useTour } from './tour';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
@@ -113,6 +114,8 @@ export default function Page() {
   const jumpAfterSwitch = useRef<{ room: string; id: number } | null>(null); // a message to go to once its room is open
   const keepNotice = useRef(false); // the notice says why this room was opened: it stays through the change
   const [status, setStatus] = useState('connecting…');
+  // The open room's first messages have arrived. What came before is history: sound mode stays quiet for it.
+  const [primed, setPrimed] = useState(false);
   const [serverBuild, setServerBuild] = useState<string | null>(null); // the build the server says it runs
   // The server runs another build than this page was loaded with. The page says so and waits for a click.
   const newVersion = isOtherBuild(BUILD_ID, serverBuild);
@@ -161,11 +164,12 @@ export default function Page() {
   replyToRef.current = replyTo;
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
-  // The latest messages of the open room have arrived (the stream's pins follow them), so the page
-  // can tell whether the person has written here before. The tour is offered only then.
-  const [historyLoaded, setHistoryLoaded] = useState(false);
+  // Sound mode: off until the speaker button next to «● live» switches it on (app/sound.tsx).
+  const sound = useSoundMode({ messages, me, participants, primed, newVersion });
   // Learn by doing: the guided tour. The page reports the person's own actions to it (tour.note).
-  const tour = useTour({ me, participants, loaded: historyLoaded, history: messages });
+  // It is offered only once the latest messages of the open room are in (primed), so the page can
+  // tell whether the person has written here before.
+  const tour = useTour({ me, participants, loaded: primed, history: messages });
   const noteTour = tour.note;
 
   // The address says which room to open. Read together with the token, so the page opens once, in that room.
@@ -271,7 +275,7 @@ export default function Page() {
     setMessages([]);
     setPinned([]);
     setReads([]); // read positions are per room: the other room's say nothing here
-    setHistoryLoaded(false);
+    setPrimed(false);
     stick.current = true;
     // Another token is another participant: forget who took part. Another room changes none of that.
     if (streamToken.current !== token) {
@@ -387,7 +391,7 @@ export default function Page() {
         setPinned((list) => withDecisions(list, data.decisions ?? []));
       }
       if (data.reads) setReads((list) => applyReads(list, data.reads ?? []));
-      setHistoryLoaded(true);
+      setPrimed(true);
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -416,7 +420,8 @@ export default function Page() {
           setStatus('live');
         }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
-        else if (event.event === 'pins') { setPinned(JSON.parse(event.data) as Message[]); setHistoryLoaded(true); }
+        // The stream sends the pins right after its first messages: from here on, what arrives is new.
+        else if (event.event === 'pins') { setPinned(JSON.parse(event.data) as Message[]); setPrimed(true); }
         else if (event.event === 'reads') setReads((list) => applyReads(list, JSON.parse(event.data) as ReadPosition[]));
         else if (event.event === 'rooms') {
           const list = JSON.parse(event.data) as Room[];
@@ -654,6 +659,7 @@ export default function Page() {
       });
       let { message } = (await res.json()) as { message: Message };
       noteTour({ kind: 'sent', message });
+      sound.sent();
       if (typed.decision && !message.pinned_at) {
         try {
           const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
@@ -823,6 +829,7 @@ export default function Page() {
       if (room !== MAIN_ROOM) body.room = room;
       const res = await api('/api/polls', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = (await res.json()) as { message: Message; poll: Poll };
+      sound.sent();
       if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
       setPollOpen(false);
     } catch (e) {
@@ -879,6 +886,7 @@ export default function Page() {
       const res = await api('/api/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = (await res.json()) as { message: Message; decision: DecisionCard };
       if (agreedBy(data.decision, data.message.sender)) noteTour({ kind: 'agreed' });
+      sound.sent();
       if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
       setDecisionOpen(false);
     } catch (e) {
@@ -947,6 +955,7 @@ export default function Page() {
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
+        <SoundToggle on={sound.on} onToggle={sound.toggle} />
         {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
         {/* The "New version available" pill comes directly after the status, so the state of the
