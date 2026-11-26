@@ -1,4 +1,4 @@
-// Keeps docs/how-a-message-travels.html honest: it loads nothing from anywhere, it never handles
+// Keeps docs/site/try.html honest: it loads nothing from anywhere, it never handles
 // the visitor's text as HTML, and its wake rule gives the same answers as the hub's code.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
@@ -7,7 +7,7 @@ import type { Participant } from '../lib/shared';
 import { notToSelf } from '../lib/store';
 import { whoToWake } from '../lib/webhook';
 
-const html = readFileSync(new URL('../docs/how-a-message-travels.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../docs/site/try.html', import.meta.url), 'utf8');
 
 test('explainer page: small and self-contained', () => {
   assert.ok(Buffer.byteLength(html) < 150_000, 'the page stays under 150 KB');
