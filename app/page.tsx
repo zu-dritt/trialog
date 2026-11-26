@@ -23,6 +23,7 @@ import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMar
 import { RoomTabs, addressForRoom, heldBack, markSeen, readSeen, roomFromSearch, seenElsewhere, seenKey, settled, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { StatusBar } from './status';
+import { TourButton, TourPanel, agreedBy, useTour } from './tour';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, isOtherBuild } from '../lib/build';
@@ -160,6 +161,12 @@ export default function Page() {
   replyToRef.current = replyTo;
   const viewportHeight = useViewportHeight();
   draftsRef.current = drafts;
+  // The latest messages of the open room have arrived (the stream's pins follow them), so the page
+  // can tell whether the person has written here before. The tour is offered only then.
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  // Learn by doing: the guided tour. The page reports the person's own actions to it (tour.note).
+  const tour = useTour({ me, participants, loaded: historyLoaded, history: messages });
+  const noteTour = tour.note;
 
   // The address says which room to open. Read together with the token, so the page opens once, in that room.
   useEffect(() => {
@@ -176,7 +183,8 @@ export default function Page() {
     if (id === roomRef.current) return;
     window.history.pushState(null, '', addressForRoom(window.location.href, id));
     setRoom(id);
-  }, []);
+    noteTour({ kind: 'room' });
+  }, [noteTour]);
 
   const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
   const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
@@ -263,6 +271,7 @@ export default function Page() {
     setMessages([]);
     setPinned([]);
     setReads([]); // read positions are per room: the other room's say nothing here
+    setHistoryLoaded(false);
     stick.current = true;
     // Another token is another participant: forget who took part. Another room changes none of that.
     if (streamToken.current !== token) {
@@ -378,6 +387,7 @@ export default function Page() {
         setPinned((list) => withDecisions(list, data.decisions ?? []));
       }
       if (data.reads) setReads((list) => applyReads(list, data.reads ?? []));
+      setHistoryLoaded(true);
     };
 
     /** Reads the stream until it ends. Returns true if it ended the way the server intends (so: reconnect at once). */
@@ -406,7 +416,7 @@ export default function Page() {
           setStatus('live');
         }
         else if (event.event === 'messages') addMessages(JSON.parse(event.data) as Message[]);
-        else if (event.event === 'pins') setPinned(JSON.parse(event.data) as Message[]);
+        else if (event.event === 'pins') { setPinned(JSON.parse(event.data) as Message[]); setHistoryLoaded(true); }
         else if (event.event === 'reads') setReads((list) => applyReads(list, JSON.parse(event.data) as ReadPosition[]));
         else if (event.event === 'rooms') {
           const list = JSON.parse(event.data) as Room[];
@@ -583,6 +593,7 @@ export default function Page() {
       setNotice(quoteNotice(result.refused));
       quotesRef.current = result.quotes; // so a second quote right away counts this one
       setQuotes(result.quotes);
+      if (!result.refused) noteTour({ kind: 'quoted' });
     } else {
       const next = quotesRef.current.map((q) => (q.key === open.key ? withComment(q, comment) : q));
       quotesRef.current = next;
@@ -642,6 +653,7 @@ export default function Page() {
         body: JSON.stringify(body),
       });
       let { message } = (await res.json()) as { message: Message };
+      noteTour({ kind: 'sent', message });
       if (typed.decision && !message.pinned_at) {
         try {
           const pinnedNow = await api(`/api/messages/${message.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true }) });
@@ -774,6 +786,7 @@ export default function Page() {
       const path = `/api/messages/${m.id}/reactions/${encodeURIComponent(emoji)}`;
       const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
       const data = (await res.json()) as { message: Message };
+      if (on) noteTour({ kind: 'reacted' });
       setMessages((list) => merge(list, [data.message]));
       setPinned((list) => replaceMatching(list, [data.message]));
     } catch (e) {
@@ -865,6 +878,7 @@ export default function Page() {
       if (room !== MAIN_ROOM) body.room = room;
       const res = await api('/api/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = (await res.json()) as { message: Message; decision: DecisionCard };
+      if (agreedBy(data.decision, data.message.sender)) noteTour({ kind: 'agreed' });
       if (data.message.room === roomRef.current) setMessages((list) => merge(list, [data.message]));
       setDecisionOpen(false);
     } catch (e) {
@@ -880,6 +894,7 @@ export default function Page() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stance, note }),
       })).json()) as { decision: DecisionCard; message: Message; reply: Message | null };
       applyDecision(data.decision, data.message);
+      if (me && agreedBy(data.decision, me)) noteTour({ kind: 'agreed' });
       if (data.reply) setMessages((list) => merge(list, [data.reply!]));
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
@@ -932,6 +947,8 @@ export default function Page() {
       <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
         <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
         <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
+        {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
         {/* The "New version available" pill comes directly after the status, so the state of the
             page reads in one spot. On a narrow screen it sits on a line of its own, under the
             status. An empty holder takes no room in the row. */}
@@ -947,7 +964,11 @@ export default function Page() {
         <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
-      <div className="border-b border-line px-4 py-1.5 lg:hidden">{tabs('flex')}</div>
+      <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden">
+        {tabs('flex min-w-0 flex-1')}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
+      </div>
+      <TourPanel tour={tour} me={me} participants={participants} />
       <WakeTargetsLine me={me} participants={participants} />
 
       {pinned.length > 0 && (
@@ -1125,6 +1146,7 @@ export default function Page() {
             rows={2}
             value={draft}
             aria-label="Message"
+            data-tour="box"
             placeholder={`Message (Markdown). ${addressHint}, DECISION: to pin. Paste or drop an image to attach it.`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {

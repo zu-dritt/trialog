@@ -82,6 +82,22 @@ export function addressing(names: readonly string[]): { mention: RegExp; decisio
   };
 }
 
+/**
+ * Who a message should wake (the rule is described in lib/webhook.ts). `roster` is GET /api/participants. The hub itself
+ * never wakes anyone. A sender who is not on the roster wakes no one.
+ */
+export function whoToWake(message: { sender: Sender; recipient: Sender | null }, roster: readonly Participant[]): Sender[] {
+  if (message.sender === 'hub') return [];
+  const agents = roster.filter((p) => p.kind === 'agent').map((p) => p.name);
+  const sender = roster.find((p) => p.name === message.sender);
+  if (!sender) return [];
+  if (sender.kind === 'human') return agents;
+  if (sender.kind !== 'agent') return [];
+  if (message.recipient === null) return agents.filter((name) => name !== message.sender);
+  if (message.recipient === message.sender) return [];
+  return agents.includes(message.recipient) ? [message.recipient] : [];
+}
+
 /** How a name is shown: "grok" → "Grok", "ana-maria" → "Ana-Maria". Works for any stored name. */
 export function displayName(name: string): string {
   return name.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('-');

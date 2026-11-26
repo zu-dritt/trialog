@@ -183,7 +183,7 @@ export function RoomTabs({ rooms, current, onPick, onCreate, canCreate = true, c
   return (
     // The strip of tabs scrolls sideways when they don't fit. The "+" stands outside it, so it is
     // always in reach, and the form for a new room opens under the row, where it takes no room from it.
-    <div className={`relative min-w-0 items-center gap-1.5 ${className}`}>
+    <div data-tour="rooms" className={`relative min-w-0 items-center gap-1.5 ${className}`}>
       <nav ref={strip} aria-label="Rooms" className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {rooms.map((room) => {
           const open = room.id === current;

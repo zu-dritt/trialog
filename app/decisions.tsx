@@ -132,6 +132,7 @@ export function DecisionCardView({
               type="button"
               className={`${ANSWER} ${chosen === 'agree' ? 'border-ok bg-ok/20 text-ok' : 'border-line bg-panel'}`}
               aria-pressed={chosen === 'agree'}
+              data-tour="agree"
               onClick={() => submit('agree')}
             >Agree</button>
             <button
