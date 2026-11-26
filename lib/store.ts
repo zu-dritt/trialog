@@ -135,6 +135,29 @@ export interface WakeupClaim {
   count: number;
   previous_id: number;
 }
+/** A participant's registered wake-up URL. The secret is never included. */
+export interface WakeTargetInfo {
+  url: string;
+  updated_at: string;
+}
+export type WakeStatus = 'pending' | 'delivered' | 'failed';
+/** Delivery of one wake-up, for one message and one participant. */
+export interface WakeDelivery {
+  message_id: number;
+  participant: string;
+  status: WakeStatus;
+  attempts: number;
+  error: string | null;
+  updated_at: string;
+}
+/** A pending wake-up, with the message fields the signed payload needs. */
+export interface PendingWake {
+  message_id: number;
+  participant: string;
+  sender: Sender;
+  recipient: Sender | null;
+  text: string;
+}
 /** What the live stream compares once a second to decide whether anything changed. */
 export interface SetStatusInput {
   participant: Sender;
@@ -200,11 +223,33 @@ export interface Store {
   /**
    * Claims every message Grok has not been woken for yet (addressed to Grok or to everyone, not
    * written by Grok or the hub) and moves the watermark past them. Returns null when there is
-   * nothing new, which means another job already covered it.
+   * nothing new, which means another job already covered it. Kept so a database from before
+   * per-agent deliveries still has a watermark; new deliveries use the methods below.
    */
   claimWakeup(): Promise<WakeupClaim | null>;
   /** After a failed delivery: puts the watermark back, unless a later claim has moved it on. */
   releaseWakeup(claim: WakeupClaim): Promise<boolean>;
+  /** Registers or replaces this participant's wake-up URL and secret. The secret is stored, never returned. */
+  setWakeTarget(participant: Sender, url: string, secret: string): Promise<WakeTargetInfo>;
+  /** The registered URL, or null. Never includes the secret. */
+  getWakeTarget(participant: Sender): Promise<WakeTargetInfo | null>;
+  /** The URL and secret, for signing a request only. Null when none is registered. */
+  getWakeCredentials(participant: Sender): Promise<{ url: string; secret: string } | null>;
+  /** Drops this participant's target. Returns true when a row was there. */
+  clearWakeTarget(participant: Sender): Promise<boolean>;
+  /** Queues a pending delivery for each participant, skipping any row that already exists. */
+  enqueueWakes(messageId: number, participants: readonly string[]): Promise<void>;
+  /** Pending deliveries, oldest message first, with the text the payload needs. */
+  listPendingWakes(): Promise<PendingWake[]>;
+  /** Records the outcome of one delivery attempt. */
+  saveWakeDelivery(messageId: number, participant: string, status: WakeStatus, attempts: number, error: string | null): Promise<WakeDelivery>;
+  /** Delivery rows for these messages, in message-id then participant order. */
+  listWakes(messageIds: readonly number[]): Promise<WakeDelivery[]>;
+  /**
+   * Messages with id > `since` that should wake `participant`, oldest first.
+   * `humans` and `agents` are names from the roster. The participant must be one of the agents.
+   */
+  listWakingMessages(options: { participant: Sender; since: number | null; limit: number; humans: readonly string[]; agents: readonly string[] }): Promise<Message[]>;
   /** Sets or replaces the caller's active working status with a TTL in seconds. */
   setStatus(input: SetStatusInput): Promise<ParticipantStatus>;
   /** Clears the caller's working status; returns true if a row existed. */
@@ -478,6 +523,28 @@ const SCHEMA = [
      CONSTRAINT read_positions_up_to_positive CHECK (up_to > 0)
    )`,
   `CREATE INDEX IF NOT EXISTS read_positions_up_to ON read_positions (up_to)`,
+  // Wake-up targets and delivery status (migrations/011-wake-targets.sql).
+  `CREATE TABLE IF NOT EXISTS wake_targets (
+     participant TEXT PRIMARY KEY,
+     url         TEXT NOT NULL,
+     secret      TEXT NOT NULL,
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     CONSTRAINT wake_targets_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     CONSTRAINT wake_targets_url_https CHECK (url ~ '^https://' AND char_length(url) BETWEEN 8 AND 2048),
+     CONSTRAINT wake_targets_secret_length CHECK (char_length(secret) BETWEEN 16 AND 256)
+   )`,
+  `CREATE TABLE IF NOT EXISTS wake_deliveries (
+     message_id  BIGINT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+     participant TEXT NOT NULL,
+     status      TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+     attempts    INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+     error       TEXT,
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (message_id, participant),
+     CONSTRAINT wake_deliveries_participant_shape CHECK (participant ~ ${NAME_SHAPE})
+   )`,
+  `CREATE INDEX IF NOT EXISTS wake_deliveries_participant_message ON wake_deliveries (participant, message_id)`,
+  `CREATE INDEX IF NOT EXISTS wake_deliveries_pending ON wake_deliveries (message_id) WHERE status = 'pending'`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -619,6 +686,15 @@ const toAttachments = (v: unknown): Attachment[] => {
   const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
   return Array.isArray(list) ? (list as Row[]).map(toAttachment) : [];
 };
+const toWakeDelivery = (r: Row): WakeDelivery => ({
+  message_id: Number(r.message_id),
+  participant: String(r.participant),
+  status: r.status as WakeStatus,
+  attempts: Number(r.attempts),
+  error: r.error == null ? null : String(r.error),
+  updated_at: iso(r.updated_at)!,
+});
+
 const toStatus = (r: Row): ParticipantStatus => ({
   participant: r.participant as Sender,
   text: r.text as string,
@@ -919,7 +995,116 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.length > 0;
     },
-    async setStatus({ participant, text, ttlSeconds }) {
+    async setWakeTarget(participant, url, secret) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO wake_targets (participant, url, secret, updated_at)
+         VALUES ($1::text, $2::text, $3::text, now())
+         ON CONFLICT (participant) DO UPDATE
+           SET url = EXCLUDED.url, secret = EXCLUDED.secret, updated_at = now()
+         RETURNING url, updated_at`,
+        [participant, url, secret],
+      );
+      return { url: String(row.url), updated_at: iso(row.updated_at)! };
+    },
+    async getWakeTarget(participant) {
+      await ensure();
+      const [row] = await db.query(`SELECT url, updated_at FROM wake_targets WHERE participant = $1::text`, [participant]);
+      return row ? { url: String(row.url), updated_at: iso(row.updated_at)! } : null;
+    },
+    async getWakeCredentials(participant) {
+      await ensure();
+      const [row] = await db.query(`SELECT url, secret FROM wake_targets WHERE participant = $1::text`, [participant]);
+      return row ? { url: String(row.url), secret: String(row.secret) } : null;
+    },
+    async clearWakeTarget(participant) {
+      await ensure();
+      const rows = await db.query(`DELETE FROM wake_targets WHERE participant = $1::text RETURNING participant`, [participant]);
+      return rows.length > 0;
+    },
+    async enqueueWakes(messageId, participants) {
+      await ensure();
+      for (const name of participants) {
+        await db.query(
+          `INSERT INTO wake_deliveries (message_id, participant, status, attempts)
+           VALUES ($1::bigint, $2::text, 'pending', 0)
+           ON CONFLICT (message_id, participant) DO NOTHING`,
+          [messageId, name],
+        );
+      }
+    },
+    async listPendingWakes() {
+      await ensure();
+      const rows = await db.query(
+        `SELECT d.message_id, d.participant, m.sender, m.recipient, m.text
+         FROM wake_deliveries d JOIN messages m ON m.id = d.message_id
+         WHERE d.status = 'pending'
+         ORDER BY d.message_id, d.participant`,
+        [],
+      );
+      return rows.map((r) => ({
+        message_id: Number(r.message_id),
+        participant: String(r.participant),
+        sender: r.sender as Sender,
+        recipient: (r.recipient as Sender | null) ?? null,
+        text: String(r.text),
+      }));
+    },
+    async saveWakeDelivery(messageId, participant, status, attempts, error) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO wake_deliveries (message_id, participant, status, attempts, error, updated_at)
+         VALUES ($1::bigint, $2::text, $3::text, $4::int, $5::text, now())
+         ON CONFLICT (message_id, participant) DO UPDATE
+           SET status = EXCLUDED.status, attempts = EXCLUDED.attempts, error = EXCLUDED.error, updated_at = now()
+         RETURNING message_id, participant, status, attempts, error, updated_at`,
+        [messageId, participant, status, attempts, error],
+      );
+      return toWakeDelivery(row);
+    },
+    async listWakes(messageIds) {
+      await ensure();
+      if (!messageIds.length) return [];
+      const rows = await db.query(
+        `SELECT message_id, participant, status, attempts, error, updated_at
+         FROM wake_deliveries
+         WHERE message_id = ANY($1::bigint[])
+         ORDER BY message_id, participant`,
+        [messageIds],
+      );
+      return rows.map(toWakeDelivery);
+    },
+    async listWakingMessages({ participant, since, limit, humans, agents }) {
+      await ensure();
+      if (!agents.includes(participant)) return [];
+      const rows = since === null
+        ? await db.query(
+          `SELECT * FROM (SELECT ${COLS} FROM messages
+             WHERE sender <> 'hub'
+               AND sender <> $1::text
+               AND (
+                 sender = ANY($2::text[])
+                 OR (sender = ANY($3::text[]) AND (recipient IS NULL OR recipient = $1::text))
+               )
+             ORDER BY id DESC LIMIT $4::int) t ORDER BY id`,
+          [participant, humans, agents, limit],
+        )
+        : await db.query(
+          `SELECT ${COLS} FROM messages
+           WHERE id > $1::bigint
+             AND sender <> 'hub'
+             AND sender <> $2::text
+             AND (
+               sender = ANY($3::text[])
+               OR (sender = ANY($4::text[]) AND (recipient IS NULL OR recipient = $2::text))
+             )
+           ORDER BY id ASC
+           LIMIT $5::int`,
+          [since, participant, humans, agents, limit],
+        );
+      return rows.map(toMessage);
+    },
+        async setStatus({ participant, text, ttlSeconds }) {
       await ensure();
       const [row] = await db.query(
         `INSERT INTO participant_status (participant, text, expires_at, updated_at)
@@ -1448,6 +1633,8 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by] })),
   });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
+  const wakeTargets = new Map<string, { url: string; secret: string; updated_at: string }>();
+  const wakeDeliveries = new Map<string, WakeDelivery>();
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
@@ -1526,7 +1713,66 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       lastNotifiedId = claim.previous_id;
       return true;
     },
-    async setStatus({ participant, text, ttlSeconds }) {
+    async setWakeTarget(participant, url, secret) {
+      const info = { url, updated_at: timestamp() };
+      wakeTargets.set(participant, { ...info, secret });
+      return { ...info };
+    },
+    async getWakeTarget(participant) {
+      const row = wakeTargets.get(participant);
+      return row ? { url: row.url, updated_at: row.updated_at } : null;
+    },
+    async getWakeCredentials(participant) {
+      const row = wakeTargets.get(participant);
+      return row ? { url: row.url, secret: row.secret } : null;
+    },
+    async clearWakeTarget(participant) {
+      return wakeTargets.delete(participant);
+    },
+    async enqueueWakes(messageId, participants) {
+      const at = timestamp();
+      for (const name of participants) {
+        const key = `${messageId}:${name}`;
+        if (!wakeDeliveries.has(key)) {
+          wakeDeliveries.set(key, { message_id: messageId, participant: name, status: 'pending', attempts: 0, error: null, updated_at: at });
+        }
+      }
+    },
+    async listPendingWakes() {
+      const out: PendingWake[] = [];
+      for (const d of [...wakeDeliveries.values()].sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant))) {
+        if (d.status !== 'pending') continue;
+        const m = rows.find((r) => r.id === d.message_id);
+        if (!m) continue;
+        out.push({ message_id: m.id, participant: d.participant, sender: m.sender, recipient: m.recipient, text: m.text });
+      }
+      return out;
+    },
+    async saveWakeDelivery(messageId, participant, status, attempts, error) {
+      const row: WakeDelivery = { message_id: messageId, participant, status, attempts, error, updated_at: timestamp() };
+      wakeDeliveries.set(`${messageId}:${participant}`, row);
+      return { ...row };
+    },
+    async listWakes(messageIds) {
+      const wanted = new Set(messageIds);
+      return [...wakeDeliveries.values()]
+        .filter((d) => wanted.has(d.message_id))
+        .sort((a, b) => a.message_id - b.message_id || a.participant.localeCompare(b.participant))
+        .map((d) => ({ ...d }));
+    },
+    async listWakingMessages({ participant, since, limit, humans, agents }) {
+      if (!agents.includes(participant)) return [];
+      const humanSet = new Set(humans);
+      const agentSet = new Set(agents);
+      const match = rows.filter((m) => {
+        if (m.sender === 'hub' || m.sender === participant) return false;
+        if (since !== null && m.id <= since) return false;
+        if (humanSet.has(m.sender)) return true;
+        return agentSet.has(m.sender) && (m.recipient === null || m.recipient === participant);
+      });
+      return (since === null ? match.slice(-limit) : match.slice(0, limit)).map(copy);
+    },
+        async setStatus({ participant, text, ttlSeconds }) {
       const current = now();
       const status: ParticipantStatus = {
         participant,

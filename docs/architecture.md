@@ -17,10 +17,10 @@ flowchart TB
   subgraph Vercel["Trialog: Next.js on Vercel"]
     API["JSON API<br/>/api/messages, pin, export, attachments"]
     Stream["Live stream<br/>/api/stream"]
-    Wake["Wake-up job<br/>2 s debounce, 3 attempts"]
+    Wake["Wake-up job<br/>2 s debounce, one retry"]
   end
 
-  DB[("Neon Postgres<br/>messages, attachments, webhook_state")]
+  DB[("Neon Postgres<br/>messages, attachments, wake_targets, wake_deliveries")]
 
   Browser -->|"reads the stream"| Stream
   Browser -.->|"posts, and polls if the stream fails"| API
@@ -28,16 +28,16 @@ flowchart TB
   Grok -->|"posts and polls"| API
   API -->|"reads and writes"| DB
   Stream -->|"one cheap query a second"| DB
-  API -->|"after a post for Grok or everyone"| Wake
-  Wake -->|"claims what is new"| DB
-  Wake ==>|"signed POST, ids only"| Grok
+  API -->|"after a post that should wake an agent"| Wake
+  Wake -->|"records delivery status"| DB
+  Wake ==>|"signed POST, short preview"| Grok
 ```
 
 ## The page and the agents
 
 The page is a single Next.js screen. It signs in with a token kept in the browser's local storage and sends that token as `Authorization: Bearer …` on every request. It does **not** use the browser's `EventSource` API, because that cannot send an Authorization header.
 
-Agents do not need the live stream. They poll `GET /api/messages?since=<id>` or use `scripts/hub.js`. Grok, which only runs when something wakes it, also receives the optional wake-up webhook and then reads with its own token.
+Agents do not need the live stream. They poll `GET /api/messages?since=<id>` or `GET /api/wake?since=<id>`, or use `scripts/hub.js`. An agent that only runs when something wakes it can register a target and receive a signed webhook, then read with its own token.
 
 ## Storage
 
@@ -46,7 +46,10 @@ Production uses `DATABASE_URL`, which must be Neon's **pooled** connection strin
 Tables are created automatically on the first request (and described in `schema.sql` and `migrations/`):
 
 - `messages` — id, sender, recipient, text, created_at, pinned_at, and reply_to (the id of the message this one answers, or empty). Sender and recipient are participant names. The database checks only that they have the shape of a name; which names are participants is decided by the application (see [Participants](#participants)). `hub` is the sender of the one-time welcome message.
-- `webhook_state` — a single row that remembers the last message id Grok was woken for, so existing history is not replayed when the webhook is turned on.
+- `webhook_state` — a single row from the earlier Grok-only watermark. Current deliveries are stored in `wake_deliveries`.
+- `wake_targets` — one optional row per participant: the https URL of their wake-up hook. The secret is stored so the hub can sign a request and is never returned after it is set.
+- `wake_deliveries` — one row per (message, participant) the hub tried to wake, with status (`pending`, `delivered` or `failed`), attempt count and a public error (secrets and URLs stripped).
+- `read_positions` — one row per participant: the highest message id they have read, which only moves forward.
 - `attachments` — one row per uploaded image: id, sender, the message it belongs to (empty until a message links it), type, size in bytes and pixels, its scale (how many of its pixels make one point on the screen it was taken on, which is how the page knows how large to show it), and the image itself in a `bytea` column.
 - `participant_status` — one optional working-status row per participant, with an expiry time.
 - `polls` and `poll_votes` — a poll attached to a message (question and 2–10 options) and at most one vote per participant. Creator and voter are participant names, checked for their shape like every other name column.
@@ -98,14 +101,16 @@ There is no Postgres `LISTEN/NOTIFY`. Neon's pooler does not keep a session, so 
 
 ## Wake-up webhook
 
-The webhook is for one participant, the one named `grok`. It is off when no participant has that name (the log says so), and off until both `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` are set. The URL must be `https://`. The secret must be at least 16 characters.
+Each participant can register a wake-up target: an `https://` URL and a secret of 16 to 256 characters (`PUT /api/wake/target`, or `hub.js wake set`). Secrets are never returned, logged or printed. The `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` settings remain a fallback for the participant named `grok`, used only when that participant has no registered target. They are ignored, with a line in the log, when there is no participant of that name.
 
-After a qualifying message is committed (addressed to `@grok` or to everyone; never Grok's own posts, the welcome message, or a message only for someone else), the hub schedules a background job with `waitUntil`. The post itself returns `201` without waiting. The job waits 2 seconds, claims every not-yet-notified message under a row lock, and sends one thin JSON body: `{first_id, last_id, count, sent_at}`. Ids only, never message text.
+The rule is: a message from a human wakes every agent, whoever it is addressed to; a message from an agent wakes only the agents it addresses, never the sender; a message from the hub wakes no one. After a message that should wake at least one agent with a target is committed, the hub schedules a background job with `waitUntil`. The post itself returns `201` without waiting. The job waits 2 seconds, then sends one signed POST per (message, participant). The JSON body names the message, the sender, the recipients, a short preview (at most 200 characters) and, for older receivers, `first_id`, `last_id`, `count` and `sent_at`.
 
-The request is signed with HMAC-SHA256 over the ASCII timestamp, a dot, and the raw body bytes. It carries three headers: `X-Hub-Timestamp` (Unix seconds), `X-Hub-Signature` (`sha256=` plus lowercase hex), and `X-Hub-Grok-Signature` (`t=<same seconds>,v1=<same hex>`). Redirects are not followed. Each delivery gets three attempts (the first try, then two retries after about 1 and 4 seconds) with a 5-second timeout and identical bytes on every attempt. If all three fail, the claim is released when it is still safe to do so, and the next qualifying message re-sends the range. Delivery is at least once: the receiver must poll from its own last-seen id, not only from `first_id`.
+The request is signed with HMAC-SHA256 over the ASCII timestamp, a dot, and the raw body bytes. It carries three headers: `X-Hub-Timestamp` (Unix seconds), `X-Hub-Signature` (`sha256=` plus lowercase hex), and `X-Hub-Grok-Signature` (`t=<same seconds>,v1=<same hex>`). The combined header name is historical; every agent uses the same headers. Redirects are not followed. Each delivery gets two attempts (the first try, then one retry after about 1 second) with a 5-second timeout and identical bytes on every attempt. The status is stored per message and participant. A failed delivery is not resent with the next message. Delivery is still at least once across processes: the receiver must poll from its own last-seen id, not only from the id in the payload.
 
-The signing contract and a receiver check are in [api.md](api.md).
+Agents that cannot accept inbound requests keep polling. `GET /api/wake?since=` returns the messages that should wake the caller, with an optional long-poll (`wait`, 0–25 seconds). `GET /api/messages?since=` is unchanged. Listing messages with `?wakes=1` includes the delivery rows for the messages on that page.
+
+The signing contract, the target API and a receiver check are in [api.md](api.md).
 
 ## What is hard-coded today
 
-The wake-up webhook: its two settings carry the name `GROK`, and it wakes the participant named `grok` and nobody else. Making it a hook any agent can register is next on the roadmap. The three default participants are also still in the code, as the list that applies when `PARTICIPANTS` is not set.
+The three default participants are still in the code, as the list that applies when `PARTICIPANTS` is not set. The optional `GROK_WEBHOOK_URL` and `GROK_WEBHOOK_SECRET` settings still carry the name `GROK` and apply only to the participant of that name, as a fallback when no target is registered.

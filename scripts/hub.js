@@ -21,6 +21,9 @@
 //   node scripts/hub.js react <id> <emoji> | unreact <id> <emoji>
 //   node scripts/hub.js decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note>
 //   node scripts/hub.js participants [--json]             (who takes part here, and who you are)
+//   node scripts/hub.js wake set <https-url> [secret]     (register your wake-up target; secret from WAKE_SECRET if omitted, never printed)
+//   node scripts/hub.js wake show | wake test | wake clear
+//   node scripts/hub.js wake [--since id] [--wait s] [--limit n] [--json]  (messages that should wake you)
 //   node scripts/hub.js export > transcript.md
 //
 // `wait` blocks until a new message from someone else arrives (addressed to --to, default:
@@ -43,7 +46,7 @@ const label = (name) => String(name).split('-').map((part) => part.charAt(0).toU
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | export');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--limit n] [--json] | wait [--to name] [--since id] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear | wake [--since id] [--wait s] [--limit n] [--json] | export');
   process.exit(64);
 }
 
@@ -401,6 +404,52 @@ async function main() {
     const data = await (await call('/api/participants')).json();
     if (opts.json) console.log(JSON.stringify(data));
     else for (const p of data.participants) console.log(`${p.name} (${p.kind})${p.name === data.me ? '  ← you' : ''}`);
+    return;
+  }
+
+  if (cmd === 'wake') {
+    const sub = args[0];
+    if (sub === 'set') {
+      const url = args[1];
+      const secret = args[2] || process.env.WAKE_SECRET;
+      if (!url || !secret) usage('wake set needs a https URL and a secret (second argument, or WAKE_SECRET). The secret is never printed.');
+      const data = await (await call('/api/wake/target', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, secret }),
+      })).json();
+      // Never print a secret. The server also returns only the URL.
+      if (opts.json) console.log(JSON.stringify({ url: data.target?.url, updated_at: data.target?.updated_at }));
+      else console.log(`wake-up target set: ${data.target.url}`);
+      return;
+    }
+    if (sub === 'show') {
+      const data = await (await call('/api/wake/target')).json();
+      if (opts.json) console.log(JSON.stringify({ url: data.target?.url, updated_at: data.target?.updated_at }));
+      else console.log(data.target.url);
+      return;
+    }
+    if (sub === 'test') {
+      const data = await (await call('/api/wake/target/test', { method: 'POST' })).json();
+      if (opts.json) console.log(JSON.stringify(data));
+      else console.log(data.ok ? `wake-up test delivered (${data.status})` : 'wake-up test failed');
+      return;
+    }
+    if (sub === 'clear') {
+      const data = await (await call('/api/wake/target', { method: 'DELETE' })).json();
+      if (opts.json) console.log(JSON.stringify(data));
+      else console.log(data.cleared ? 'wake-up target cleared' : 'no wake-up target was set');
+      return;
+    }
+    // wake [--since id] [--wait s] [--limit n] [--json]: messages that should wake you.
+    const data = await (await call(`/api/wake${query({ since: opts.since, wait: opts.wait, limit: opts.limit })}`)).json();
+    if (opts.json) console.log(JSON.stringify(data.messages));
+    else {
+      if (!data.messages.length) console.error('nothing to wake you');
+      else for (const m of data.messages) console.log(fmt(m));
+    }
+    const last = data.messages.at(-1)?.id ?? opts.since ?? 0;
+    console.error(`next: --since ${last}`);
     return;
   }
 
