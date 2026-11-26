@@ -12,6 +12,7 @@
 // <img src="…"> can't send that header. So the page fetches the bytes itself and shows them from
 // a blob: URL, which lives in this tab only. No <img> here ever points at the API.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   DOWNSIZE_LONG_EDGE, IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_SCALE_HINT, SCALE_HINT_HEADER,
   downsizePlan, fitWithin, ownSize, pngDensity, scaleFromDensity, validScale, type Attachment,
@@ -80,7 +81,7 @@ export function thumbSize(a: Attachment): { width: number; height: number } {
  * The limits of the image in the full-size view while it fits the window: the window, and the
  * image's own size, whichever is smaller. Width and height stay automatic, so the shape is kept.
  */
-export function fitLimits(a: Attachment): { maxWidth: string; maxHeight: string } {
+export function fitLimits(a: { width: number; height: number; scale?: unknown }): { maxWidth: string; maxHeight: string } {
   const own = ownSize(a);
   return { maxWidth: `min(100%, ${own.width}px)`, maxHeight: `min(100%, ${own.height}px)` };
 }
@@ -128,34 +129,61 @@ function Thumb({ attachment, load, onOpen }: { attachment: Attachment; load: Loa
   );
 }
 
+/** What the full-size view shows. */
+export interface Viewed {
+  url: string;
+  /** The image's pixels and its scale, when they are known. Unknown for a local file until it has loaded. */
+  size?: { width: number; height: number; scale?: unknown };
+  /** For a local file whose pixels the view measures itself: the scale to show them at, when the page knows it. */
+  scale?: number;
+  /** How many bytes it has, when that is known. */
+  bytes?: number;
+  /** The name under which "Save" offers it. Left out: no Save link (it is the reader's own file). */
+  saveAs?: string;
+}
+
+/** The line at the top of the full-size view: pixels, scale and size, as far as they are known. */
+export function viewedInfo(size: Viewed['size'], bytes?: number): string {
+  const parts: string[] = [];
+  if (size) parts.push(`${size.width}×${size.height}${validScale(size.scale) > 1 ? ` at ${validScale(size.scale)}×` : ''}`);
+  if (bytes !== undefined) parts.push(`${Math.max(1, Math.round(bytes / 1024))} KB`);
+  return parts.join(' · ');
+}
+
 /**
  * The full-size view. The image first fits the window, and is not enlarged beyond its own size; a
  * click on it switches to its real size, every pixel of it, and back. A click outside the image,
- * the Close button or Escape closes the view.
+ * the Close button or Escape closes the view. It is the same view for an image in the stream and
+ * for one that is still waiting in the composer.
  */
-function Lightbox({ attachment, url, onClose }: { attachment: Attachment; url: string; onClose: () => void }) {
+function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [realSize, setRealSize] = useState(false);
+  // A local file says how large it is only once it has loaded.
+  const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     closeRef.current?.focus();
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+  const size = viewed.size ?? (measured ? { ...measured, scale: viewed.scale } : undefined);
+  const info = viewedInfo(size, viewed.bytes);
   return (
     <div role="dialog" aria-modal="true" aria-label="Image, full size" onClick={onClose}
       className="fixed inset-0 z-50 flex flex-col bg-black/90">
       <div className="flex items-center gap-3 px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
-        <span>{sizeLabel(attachment)}{validScale(attachment.scale) > 1 ? ` at ${validScale(attachment.scale)}×` : ''} · {Math.max(1, Math.round(attachment.bytes / 1024))} KB</span>
+        <span>{info}</span>
         <span className="flex-1" />
-        <a href={url} download={`${attachment.id}.${EXTENSION[attachment.content_type] ?? 'img'}`}>Save</a>
+        {viewed.saveAs && <a href={viewed.url} download={viewed.saveAs}>Save</a>}
         <button ref={closeRef} type="button" onClick={onClose} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] text-fg hover:bg-[#343a47]">Close</button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        <img src={url} alt={`Attached image, ${sizeLabel(attachment)}`}
+        <img src={viewed.url} alt={size ? `Attached image, ${size.width}×${size.height}` : 'Attached image'}
+          onLoad={(e) => { if (!viewed.size) setMeasured({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight }); }}
           onClick={(e) => { e.stopPropagation(); setRealSize((v) => !v); }}
           title={realSize ? 'Fit to window' : 'Show at real size'}
-          style={realSize ? undefined : fitLimits(attachment)}
+          style={realSize ? undefined : (size ? fitLimits(size) : { maxWidth: '100%', maxHeight: '100%' })}
           className={realSize ? 'mx-auto block max-w-none cursor-zoom-out' : 'mx-auto block cursor-zoom-in object-contain'} />
       </div>
     </div>
@@ -164,13 +192,18 @@ function Lightbox({ attachment, url, onClose }: { attachment: Attachment; url: s
 
 /** The images of one message: thumbnails, and the full-size view of the one that was clicked. */
 export function MessageImages({ attachments, load }: { attachments: Attachment[]; load: LoadImage }) {
-  const [open, setOpen] = useState<{ attachment: Attachment; url: string } | null>(null);
+  const [open, setOpen] = useState<Viewed | null>(null);
   const close = useCallback(() => setOpen(null), []);
   if (!attachments.length) return null;
   return (
     <div className="mt-1.5 flex flex-wrap items-start gap-2">
-      {attachments.map((a) => <Thumb key={a.id} attachment={a} load={load} onOpen={(attachment, url) => setOpen({ attachment, url })} />)}
-      {open && <Lightbox attachment={open.attachment} url={open.url} onClose={close} />}
+      {attachments.map((a) => (
+        <Thumb
+          key={a.id} attachment={a} load={load}
+          onOpen={(attachment, url) => setOpen({ url, size: attachment, bytes: attachment.bytes, saveAs: `${attachment.id}.${EXTENSION[attachment.content_type] ?? 'img'}` })}
+        />
+      ))}
+      {open && <Lightbox viewed={open} onClose={close} />}
     </div>
   );
 }
@@ -183,7 +216,24 @@ export interface Draft {
   state: 'uploading' | 'ready' | 'failed';
   attachment?: Attachment;
   error?: string;
+  /** What the page knows about the file's scale before the server has stored it (see localScale). */
+  scale?: number;
 }
+
+/** What opens the full-size view of an image in the composer: "View image", and the file's name when it has one. */
+export const viewLabel = (d: Pick<Draft, 'name'>): string => (d.name && d.name !== 'image' ? `View image ${d.name}` : 'View image');
+
+/**
+ * What the full-size view shows for an image in the composer. It is the local file, so it can be
+ * looked at before the upload has finished, and also when the upload failed. Once the server has
+ * stored the image, its size on the page is the stored one, the size it will have in the stream;
+ * until then the view measures the file itself and uses what the page knows about its scale.
+ */
+export function viewedDraft(d: Draft): Viewed {
+  if (d.attachment) return { url: d.preview, size: { width: d.attachment.width, height: d.attachment.height, scale: d.attachment.scale }, bytes: d.attachment.bytes };
+  return d.scale ? { url: d.preview, scale: d.scale } : { url: d.preview };
+}
+
 
 /**
  * The drafts that stay in the composer after a message went out with `sent`. Anything added while
@@ -196,6 +246,16 @@ export function withoutSent(drafts: Draft[], sent: Draft[]): Draft[] {
 
 /** The images above the message box, as chips. The page puts them into its one row of chips. */
 export function DraftChips({ drafts, onRemove }: { drafts: Draft[]; onRemove: (key: number) => void }) {
+  // The image whose full-size view is open, and the chip that opened it.
+  const [viewing, setViewing] = useState<number | null>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const close = useCallback(() => {
+    setViewing(null);
+    // Back to where the reader was: the chip. The draft itself was never touched.
+    opener.current?.focus();
+    opener.current = null;
+  }, []);
+  const viewed = drafts.find((d) => d.key === viewing);
   return (
     <>
       {drafts.map((d) => (
@@ -203,12 +263,20 @@ export function DraftChips({ drafts, onRemove }: { drafts: Draft[]; onRemove: (k
           key={d.key} tone={d.state === 'failed' ? 'bad' : 'plain'} title={d.state === 'failed' ? d.error : d.name}
           visual={<img src={d.preview} alt="" className={`h-7 w-7 rounded object-cover ${d.state === 'uploading' ? 'opacity-50' : ''}`} />}
           onRemove={() => onRemove(d.key)} removeLabel={`Remove image ${d.name}`}
+          // A click on the preview shows the image large, from the local file: before it is sent,
+          // while it is still uploading, and when the upload failed.
+          onOpen={(button) => { opener.current = button; setViewing(d.key); }} openLabel={viewLabel(d)}
         >
           {d.state === 'uploading' && <span className="text-muted">uploading…</span>}
           {d.state === 'ready' && d.attachment && <span className="text-muted">{sizeLabel(d.attachment)}</span>}
           {d.state === 'failed' && <span className="text-bad">{d.error}</span>}
         </Chip>
       ))}
+      {/* The view lies over the whole page, so it is put at the end of the page, not into the row of chips. */}
+      {viewed && typeof document !== 'undefined' && createPortal(
+        <Lightbox viewed={viewedDraft(viewed)} onClose={close} />,
+        document.body,
+      )}
     </>
   );
 }
@@ -230,6 +298,19 @@ export function scaleOf(recorded: number | null, pasted: boolean, screen: number
 }
 
 /**
+ * The scale of a local file as far as the page can tell (scaleOf), from the density the file
+ * records and from where it came. Null when the page knows nothing. The upload sends it along,
+ * and the full-size view of an image in the composer uses it until the server has stored the image.
+ */
+export async function localScale(file: Blob, pasted = false): Promise<number | null> {
+  let recorded: number | null = null;
+  try {
+    recorded = pngDensity(new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer()));
+  } catch { /* unreadable here: the server will say so */ }
+  return scaleOf(recorded, pasted, screenScale());
+}
+
+/**
  * The request that uploads one image: POST /api/attachments with the bytes as the body.
  *
  * The scale hint goes along when the page knows something the server can't read from the bytes:
@@ -237,11 +318,7 @@ export function scaleOf(recorded: number | null, pasted: boolean, screen: number
  * recorded). The server prefers a density in the file itself, and uses the hint for display only.
  */
 export async function uploadRequest(file: Blob, pasted = false): Promise<{ method: 'POST'; headers: Record<string, string>; body: Blob }> {
-  let recorded: number | null = null;
-  try {
-    recorded = pngDensity(new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer()));
-  } catch { /* unreadable here: the server will say so */ }
-  const scale = scaleOf(recorded, pasted, screenScale());
+  const scale = await localScale(file, pasted);
   const prepared = await prepareForUpload(file, scale ?? 1);
   const headers: Record<string, string> = { 'Content-Type': prepared.blob.type || 'application/octet-stream' };
   if (pasted || prepared.blob !== file) headers[SCALE_HINT_HEADER] = String(Math.min(MAX_SCALE_HINT, prepared.scale));

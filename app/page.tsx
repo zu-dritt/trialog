@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } fr
 import type { Message, Poll, Sender } from '../lib/core';
 import { MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, displayName, firstLine, type Attachment, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { ACCEPT, DraftChips, MessageImages, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
+import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ExpandButton, draftFor, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
 import { EmojiPicker, insertAtCursor } from './emoji';
@@ -165,6 +165,8 @@ export default function Page() {
     setDrafts((list) => [...list, ...added]);
     const update = (key: number, change: Partial<Draft>) => setDrafts((list) => list.map((d) => (d.key === key ? { ...d, ...change } : d)));
     added.forEach((d, i) => {
+      // For the full-size view of the chip: at which scale the file is shown, as far as the page can tell.
+      void localScale(taken[i], pasted).then((scale) => { if (scale) update(d.key, { scale }); }, () => {});
       void (async () => {
         try {
           const res = await api('/api/attachments', await uploadRequest(taken[i], pasted));
