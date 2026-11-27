@@ -59,10 +59,9 @@ const ownerOf = (v: unknown, names: readonly string[]): string | null | Fail => 
   return v;
 };
 
-/** POST: {column, title, note?, owner?}. */
-/** POST: {column, title, note?, owner?, description?, attachments?: ["att_…"], top?: true}. */
+/** POST: {column, title, note?, owner?, reviewer?, description?, attachments?: ["att_…"], top?: true}. */
 export function parseNewItem(body: unknown, names: readonly string[]): { ok: true; column: RoadmapColumn; title: string; note: string; owner: string | null; description: string; attachments: string[]; top: boolean; reviewer: string | null } | Fail {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note": "...", "owner": "claude"}.' };
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note"?, "owner"?, "reviewer"?, "description"?, "attachments"?, "top"?}.' };
   const b = body as Record<string, unknown>;
   if (!isColumn(b.column)) return { ok: false, status: 400, error: `"column" must be one of ${ROADMAP_COLUMNS.join(', ')}.` };
   const title = line(b.title, 'title', 1, ROADMAP_TITLE_MAX);

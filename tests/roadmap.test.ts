@@ -239,6 +239,8 @@ async function detailRules(store: Store) {
   const edited = (await store.updateRoadmapItem(card.id, { description: 'Shorter.' }, 'david'))!;
   assert.equal(edited.description, 'Shorter.');
   assert.equal(edited.attachments.length, 2, 'editing the text keeps the pictures');
+  assert.equal(await store.deleteRoadmapItem(card.id), true);
+  assert.equal(await store.getAttachment(a.id), null, 'a deleted card takes its pictures with it, at once');
 }
 
 test('card details (memory): a description, pictures in order, at the top; only your own unlinked uploads', async () => { await detailRules(createMemoryStore()); });

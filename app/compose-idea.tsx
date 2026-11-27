@@ -34,6 +34,9 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
   const [description, setDescription] = useState('');
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const nextKey = useRef(1);
+  // How many pictures there are, also between renders: two quick pastes must not both see room for 6.
+  const count = useRef(0);
+  count.current = drafts.length;
   const titleRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -46,7 +49,9 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
   }, [open]);
 
   const addImages = (files: File[], pasted: boolean) => {
-    for (const file of files.slice(0, Math.max(0, ROADMAP_PICTURES_MAX - drafts.length))) {
+    const room = Math.max(0, ROADMAP_PICTURES_MAX - count.current);
+    count.current += Math.min(room, files.length);
+    for (const file of files.slice(0, room)) {
       const key = nextKey.current++;
       setDrafts((d) => [...d, { key, name: file.name || 'image', preview: URL.createObjectURL(file), state: 'uploading' }]);
       upload(file, pasted)
