@@ -208,3 +208,20 @@ test('the progress line: «just now», 0 %, no status, hours as «2 h 05 min ago
   assert.match(html({ progress: 40, status: 'see https://github.com/zu-dritt/trialog/pull/95' }), /<a href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/95"/);
   assert.match(html({ progress: 40 }), /<div aria-hidden="true" class="mt-0\.5 text-\[11px\] text-muted">/, 'the screen reader hears the progressbar label only');
 });
+
+test('a card says who raised it first, so David knows whom to ask (playground #670)', async () => {
+  const { cardRoles } = await import('../app/roadmap-board');
+  const P = [{ name: 'david', kind: 'human' as const }, { name: 'claude', kind: 'agent' as const }, { name: 'grok', kind: 'agent' as const }];
+  const says = (c: Parameters<typeof cardRoles>[0]) => cardRoles(c, P).map((r) => `${r.name} ${r.verb}`.trim());
+  assert.deepEqual(says({ column: 'now', owner: 'claude', reviewer: 'grok', raised_by: 'david' }), ['david raised', 'claude builds', 'grok reviews']);
+  assert.deepEqual(says({ column: 'now', owner: 'claude', reviewer: 'grok', raised_by: 'claude' }), ['claude raised, builds', 'grok reviews'], 'not the name twice');
+  assert.deepEqual(says({ column: 'done', owner: 'grok', reviewer: null, raised_by: 'grok' }), ['grok raised, built']);
+  assert.deepEqual(says({ column: 'next', owner: 'david', reviewer: null, raised_by: 'david' }), ['david raised']);
+  assert.deepEqual(says({ column: 'next', owner: null, reviewer: null, raised_by: 'grok' }), ['grok raised'], 'an unclaimed card still says whom to ask');
+  assert.deepEqual(says({ column: 'next', owner: null, reviewer: null, raised_by: null }), [], 'older cards: nothing');
+  assert.deepEqual(says({ column: 'now', owner: 'grok', reviewer: 'claude', raised_by: 'claude' }), ['claude raised', 'grok builds', 'claude reviews'], 'one name in two roles');
+  const twice = renderToStaticMarkup(<RoadmapBoard items={[card('rm_twice000', 'now', 0, { owner: 'grok', reviewer: 'claude', raised_by: 'claude' })]} />);
+  assert.equal([...twice.matchAll(/data-role="(raiser|reviewer)"/g)].length, 2, 'both shown (keys by role and name, Grok’s nit)');
+  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_raise000', 'next', 0, { raised_by: 'david', note: '#670' })]} participants={[{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' }] as never} />);
+  assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · #670/);
+});
