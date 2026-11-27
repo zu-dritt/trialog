@@ -24,6 +24,11 @@ export const POST = safe(async (request: Request) => {
   if (bad) return bad;
   const input = parseNewItem(body, names());
   if (!input.ok) return error(input.status, input.error);
+  // The claim lock has no side door here either (Grok's nit on PR 78): an agent may add a card for
+  // itself or for no one; only a human hands a new card to someone else.
+  if (input.owner && input.owner !== me && loadRoster().participants.find((p) => p.name === me)?.kind !== 'human') {
+    return error(403, 'Agents add cards for themselves or for no one. Leave "owner" out, and the owner claims it.');
+  }
   let item;
   try {
     item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top, reviewer: input.reviewer });

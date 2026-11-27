@@ -315,3 +315,19 @@ test('a card from before migration 019 reads raised_by null (PGlite)', async () 
   assert.equal((await store.listRoadmap()).find((i) => i.id === c.id)!.raised_by, null);
   assert.equal((await store.updateRoadmapItem(c.id, { note: 'x' }, 'claude'))!.raised_by, null, 'an edit does not invent one');
 });
+
+test('Grok\'s nits on PR 78: no side door for owners on POST; a claim that keeps losing a race is «busy», not 404; the page says why', async () => {
+  const forGrok = await list.POST(req('claude', 'POST', { column: 'next', title: 'For Grok', owner: 'grok' }));
+  assert.equal(forGrok.status, 403, 'an agent cannot hand a new card to someone else');
+  assert.equal((await list.POST(req('claude', 'POST', { column: 'next', title: 'Mine', owner: 'claude' }))).status, 201);
+  assert.equal((await list.POST(req('claude', 'POST', { column: 'next', title: 'Nobody' }))).status, 201);
+  assert.equal((await list.POST(req('david', 'POST', { column: 'next', title: 'Handed over', owner: 'grok' }))).status, 201, 'the orchestrator may');
+  const { readFileSync } = await import('node:fs');
+  const store = readFileSync(new URL('../lib/store.ts', import.meta.url), 'utf8');
+  assert.match(store, /if \(attempt === 1\) return \{ status: 'busy', item \};/);
+  const claim = readFileSync(new URL('../app/api/roadmap/[id]/claim/route.ts', import.meta.url), 'utf8');
+  assert.match(claim, /result\.status === 'busy'\) return json\(\{ error: 'The card changed while you claimed it\. Try again\.'/);
+  const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /\[\.\.\.note\]\.length > ROADMAP_NOTE_MAX/, 'a too-long note is refused before the round trip');
+  assert.match(page, /res\.status === 409 && data\.owner\)[^]*else if \(res\.status === 409\) setError\(data\.error/, 'a done card says so, not «Already …’s»');
+});
