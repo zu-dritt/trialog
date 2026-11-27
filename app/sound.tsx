@@ -7,12 +7,13 @@
 //   a message you sent               a short, soft confirmation
 //   a reaction on your message       a tiny high tick
 //   a decision card everyone agreed  the whole chord, once
-//   «New version available»          a gentle two-note rise
+//   «New version available»          a gentle two-note rise, also in a hidden tab, and once more
+//                                    after 30 minutes if the page still has not been reloaded
 //
 // It is off until switched on with the speaker button next to «● live», and the choice is kept in
 // this browser. Browsers allow sound only after a click on the page, and that click is the button.
 // At most one sound plays per second; what comes in between is skipped. While the tab is hidden,
-// only a message addressed to you and an agreed decision are heard.
+// only a message addressed to you, an agreed decision and a new version are heard.
 //
 // The open rooms are heard in full. From a room that is not open, only a message addressed to you
 // rings: the page reads what is new there when the list of rooms says a room has grown.
@@ -57,12 +58,13 @@ export type Cue =
   | { kind: 'version' }; // «New version available»
 
 /** Which cue wins when several arrive together (an agreement comes with the message that completed it). */
-const RANK: Record<Cue['kind'], number> = { agreed: 4, note: 2, sent: 2, reaction: 1, version: 1 };
+// A new version outranks an ordinary message, so it is not lost when both come at once.
+const RANK: Record<Cue['kind'], number> = { agreed: 4, version: 3, note: 2, sent: 2, reaction: 1 };
 const rank = (cue: Cue) => RANK[cue.kind] + (cue.kind === 'note' && cue.addressed ? 1 : 0);
 
-/** While the tab is hidden, only a message addressed to you and an agreed decision are heard. */
+/** While the tab is hidden, only a message addressed to you, an agreed decision and a new version are heard. */
 export function audible(cue: Cue, hidden: boolean): boolean {
-  return !hidden || cue.kind === 'agreed' || (cue.kind === 'note' && cue.addressed);
+  return !hidden || cue.kind === 'agreed' || cue.kind === 'version' || (cue.kind === 'note' && cue.addressed);
 }
 
 /** What the sounds need to know about the messages on the page, to tell what is new. */
@@ -295,6 +297,9 @@ const makeBrowserContext = (): AudioContextLike | null => {
  * Sound mode for the page. `primed` is false while a room's first messages are still coming in:
  * those are history, and are taken in without a sound.
  */
+/** When the new-version chime sounds a second time, if the page has not been reloaded. */
+export const VERSION_REMINDER_MS = 30 * 60 * 1000;
+
 export function useSoundMode({ messages, me, participants, primed, newVersion }: {
   messages: readonly Message[];
   me: Sender | null;
@@ -354,7 +359,13 @@ export function useSoundMode({ messages, me, participants, primed, newVersion }:
   }, [messages, me, names, participants, primed]);
 
   // The pill appeared while the page was open.
-  useEffect(() => { if (newVersion) player.current!.offer({ kind: 'version' }); }, [newVersion]);
+  // The chime when a new version is out, and once more after 30 minutes if the page is still old.
+  useEffect(() => {
+    if (!newVersion) return undefined;
+    player.current!.offer({ kind: 'version' });
+    const again = setTimeout(() => player.current!.offer({ kind: 'version' }), VERSION_REMINDER_MS);
+    return () => clearTimeout(again);
+  }, [newVersion]);
 
   /** Your own message went out. */
   const sent = useCallback(() => {
