@@ -6,7 +6,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RoadmapBoard, columnOf, placeAt } from '../roadmap-board';
 import type { RoadmapColumn, RoadmapItem } from '../../lib/roadmap';
-import type { Participant } from '../../lib/shared';
+import type { Attachment, Participant } from '../../lib/shared';
+import { uploadRequest, useImageLoader } from '../attachments';
+import type { NewIdea } from '../compose-idea';
 
 const TOKEN_KEY = 'collabHubToken';
 const POLL_MS = 20_000;
@@ -83,14 +85,24 @@ export default function RoadmapPage() {
     }
   }, [token, participants, load]);
 
+  // A picture for the Compose window: the same upload as a message's (resized, scale noted).
+  const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {
+    const request = await uploadRequest(file, pasted);
+    const res = await fetch('/api/attachments', { ...request, headers: { ...request.headers, Authorization: `Bearer ${token}` } });
+    if (res.status === 401) { setToken(''); throw new Error('unauthorized'); }
+    const data = (await res.json().catch(() => ({}))) as Attachment & { error?: string };
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }, [token]);
+  const loadImage = useImageLoader(token, () => setToken(''));
+
   // An idea: a card at the top of «Later», noted as whose idea it is. No message: nobody is woken.
-  const addIdea = useCallback(async (title: string) => {
+  const addIdea = useCallback(async ({ title, description, attachments }: NewIdea) => {
     setBusy(true);
     try {
       const who = participants.find((p) => p.name === me)?.label ?? me ?? '';
-      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: 'later', title, note: `💡 idea from ${who}`.slice(0, 120) }) })) as { item: RoadmapItem };
-      const ids = [item.id, ...columnOf(items, 'later').map((i) => i.id)];
-      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column: 'later', ids }) });
+      // «top»: the hub puts it first in Later in the same step, so no second request can race it.
+      await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: 'later', title, note: `💡 idea from ${who}`.slice(0, 120), description, attachments, top: true }) });
       setError('');
       return true;
     } catch (e) {
@@ -119,7 +131,7 @@ export default function RoadmapPage() {
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea }} />
+      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload }} loadImage={loadImage} />
     </main>
   );
 }
