@@ -16,6 +16,7 @@ import {
 import { decisionSqlPattern, isDecision } from './decision';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { isDemo } from './demo';
+import type { StreakBreak } from './streak';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 import type { ActivityRow } from './guard';
 
@@ -336,6 +337,10 @@ export interface Store {
   setFlight(input: { participant: Sender; state: FlightState; text: string }): Promise<Flight>;
   /** Everyone's work in flight, with when each last wrote (within a day), by name. */
   listFlights(): Promise<Flight[]>;
+  /** Ends the streak: who stepped in or asked for help, and why (lib/streak.ts). */
+  addStreakBreak(input: { participant: Sender; reason: string }): Promise<StreakBreak>;
+  /** Every break, oldest first. */
+  listStreakBreaks(): Promise<StreakBreak[]>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -708,6 +713,13 @@ const SCHEMA = [
      since       TIMESTAMPTZ NOT NULL DEFAULT now(),
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
+  // The streak (migrations/015-streak-breaks.sql): when the orchestrator had to step in, and why.
+  `CREATE TABLE IF NOT EXISTS streak_breaks (
+     id          BIGSERIAL PRIMARY KEY,
+     participant TEXT NOT NULL CONSTRAINT streak_breaks_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     reason      TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -893,6 +905,12 @@ const toFlight = (r: Row): Flight => ({
   since: iso(r.since) as string,
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
+});
+const toBreak = (r: Row): StreakBreak => ({
+  id: Number(r.id),
+  participant: String(r.participant),
+  reason: String(r.reason),
+  created_at: iso(r.created_at) as string,
 });
 const toStatus = (r: Row): ParticipantStatus => ({
   participant: r.participant as Sender,
@@ -1449,6 +1467,18 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         [participant, state, text],
       );
       return toFlight(row);
+    },
+    async addStreakBreak({ participant, reason }) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO streak_breaks (participant, reason) VALUES ($1::text, $2::text) RETURNING id, participant, reason, created_at`,
+        [participant, reason],
+      );
+      return toBreak(row);
+    },
+    async listStreakBreaks() {
+      await ensure();
+      return (await db.query(`SELECT id, participant, reason, created_at FROM streak_breaks ORDER BY created_at, id`, [])).map(toBreak);
     },
     async listFlights() {
       await ensure();
@@ -2025,6 +2055,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
   const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
+  const streakBreaks: StreakBreak[] = [];
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -2231,6 +2262,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const same = before && before.state === state && before.text === text;
       flights.set(shaped(participant), { participant, state, text, since: same ? before.since : at, updated_at: at });
       return flightOf(participant);
+    },
+    async addStreakBreak({ participant, reason }) {
+      const row: StreakBreak = { id: streakBreaks.length + 1, participant: shaped(participant), reason, created_at: new Date(now()).toISOString() };
+      streakBreaks.push(row);
+      return { ...row };
+    },
+    async listStreakBreaks() {
+      return streakBreaks.map((b) => ({ ...b }));
     },
     async listFlights() {
       return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
