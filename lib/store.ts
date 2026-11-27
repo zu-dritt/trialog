@@ -353,6 +353,8 @@ export interface Store {
   claimRoadmapItem(id: string, by: Sender, note: string | null): Promise<ClaimResult>;
   /** Lets go of a card: only its owner can; the owner goes back to none. */
   releaseRoadmapItem(id: string, by: Sender): Promise<ClaimResult>;
+  /** The owner says how far it is (0–100, null to clear) and how, in a short line. Someone else's card: «taken». */
+  setRoadmapProgress(id: string, by: Sender, progress: number | null, status: string | null, human?: boolean): Promise<ClaimResult>;
   /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
   reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
   /**
@@ -746,6 +748,10 @@ const SCHEMA = [
      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS roadmap_items_col_position ON roadmap_items (col, position)`,
+  // Progress on roadmap cards (migrations/017-roadmap-progress.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (progress IS NULL OR progress BETWEEN 0 AND 100)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -933,7 +939,7 @@ const toFlight = (r: Row): Flight => ({
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
 });
-const ROADMAP_COLS = 'id, col, position, title, note, owner, updated_by, updated_at';
+const ROADMAP_COLS = 'id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at';
 const toRoadmap = (r: Row): RoadmapItem => ({
   id: String(r.id),
   column: r.col as RoadmapColumn,
@@ -943,6 +949,9 @@ const toRoadmap = (r: Row): RoadmapItem => ({
   owner: r.owner == null ? null : String(r.owner),
   updated_by: String(r.updated_by),
   updated_at: iso(r.updated_at) as string,
+  progress: r.progress == null ? null : Number(r.progress),
+  status: String(r.status ?? ''),
+  progress_at: iso(r.progress_at) ?? null,
 });
 const toBreak = (r: Row): StreakBreak => ({
   id: Number(r.id),
@@ -1570,6 +1579,19 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item };
       }
       return { status: 'not_found' };
+    },
+    async setRoadmapProgress(id, by, progress, status, human = false) {
+      await ensure();
+      const [row] = await db.query(
+        `UPDATE roadmap_items SET progress = $3::smallint, status = COALESCE($4::text, status), progress_at = now(), updated_by = $2::text, updated_at = now()
+         WHERE id = $1::text AND ($5::boolean OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
+        [id, by, progress, status, human],
+      );
+      if (row) return { status: 'ok', item: toRoadmap(row) };
+      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+      if (!cur) return { status: 'not_found' };
+      const item = toRoadmap(cur);
+      return { status: 'taken', owner: item.owner ?? '', item };
     },
     async releaseRoadmapItem(id, by) {
       await ensure();
@@ -2404,6 +2426,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const item: RoadmapItem = {
         id: newRoadmapId(), column, position: inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
         title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
+        progress: null, status: '', progress_at: null,
       };
       roadmap.set(item.id, item);
       return { ...item };
@@ -2435,6 +2458,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (note !== null) item.note = note;
       item.updated_by = by;
       item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok', item: { ...item } };
+    },
+    async setRoadmapProgress(id, by, progress, status, human = false) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (!human && item.owner !== by) return { status: 'taken', owner: item.owner ?? '', item: { ...item } };
+      const at = new Date(now()).toISOString();
+      Object.assign(item, { progress, status: status ?? item.status, progress_at: at, updated_by: shaped(by), updated_at: at });
       return { status: 'ok', item: { ...item } };
     },
     async releaseRoadmapItem(id, by) {
