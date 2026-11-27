@@ -33,7 +33,7 @@ Docs-only is a fallback if the button or the Neon integration cannot be wired wi
 
 ## What the button must not do
 
-- Must not use, mention, or pre-fill **our** accounts: Amberleaf, zu-dritt, David, or any shared Vercel/Neon team, project id, or org slug.
+- Must not use, mention, or pre-fill the maintainers' accounts: any of our Vercel/Neon teams, project ids, or org slugs.
 - Must not copy or embed **our** tokens, `DATABASE_URL`, webhook secrets, GitHub tokens, or billing instruments. Prompts are empty; the visitor pastes values they generate (`openssl rand -hex 32`, as the doc already says).
 - Must not spend money on our side: no API call that creates a Vercel project, Neon branch, or domain under our orgs; no «deploy this for me» path that runs with our CLI tokens.
 - Must not point `TRIALOG_REPO` at `zu-dritt/trialog` as if it were the visitor's repo; if the field is prompted, the description should say «your fork, `owner/name`».
@@ -69,4 +69,4 @@ Risk that would stretch it: Vercel's Neon integration id or Deploy Button `store
 - A hosted «provisioner» service.
 - One-click custom domains, SSO, or billing plans.
 - Changing how our playground or the live hub is deployed.
-- Shipping this plan as a chat post; David reviews it first.
+- Shipping this plan as a chat post; the owner reviews it first.
