@@ -97,3 +97,32 @@ test('«+ Idee» sits at the top of Later when the page can add, and nowhere els
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
 });
+
+test('card LEDs: red and blinking when a card waits on the orchestrator, amber in review, green or grey in Now', async () => {
+  const { cardStatus } = await import('../lib/roadmap');
+  const T = Date.parse('2026-11-27T12:00:00Z');
+  const c = (column: RoadmapItem['column'], note: string, over: Partial<RoadmapItem> = {}) => ({ column, note, owner: 'claude', updated_at: '2026-11-27T11:30:00Z', ...over });
+  assert.equal(cardStatus(c('now', '⛔ WAITING ON DAVID: merge apartment-finder PR 37'), T)?.tone, 'blocked');
+  assert.equal(cardStatus(c('next', 'David: your call on the first breaks'), T)?.tone, 'blocked', 'in Next too: «Name: step», as in a flight');
+  assert.equal(cardStatus(c('later', 'waiting on the orchestrator'), T)?.tone, 'blocked');
+  assert.equal(cardStatus(c('now', 'Orchestrator: go for the demo'), T)?.tone, 'blocked', 'by label as well');
+  assert.equal(cardStatus(c('now', 'PR 86, in review'), T)?.tone, 'review');
+  assert.equal(cardStatus(c('now', 'new: from the pace'), T)?.tone, 'working');
+  assert.deepEqual(cardStatus(c('now', 'new', { updated_at: '2026-11-27T07:00:00Z' }), T), { tone: 'stale', label: 'no change for 5 h' });
+  assert.equal(cardStatus(c('now', 'nobody has it', { owner: null }), T), null, 'no owner, no work');
+  assert.equal(cardStatus(c('next', 'queued'), T), null, 'queued cards stay quiet');
+  assert.equal(cardStatus(c('done', '⛔ old note'), T), null, 'done is done');
+  assert.equal(cardStatus(c('now', 'Davidson: not him'), T)?.tone, 'working', 'whole names only');
+  assert.equal(cardStatus(c('next', 'your call: clean start or today’s breaks', { owner: 'david' }), T)?.tone, 'blocked', 'the orchestrator’s own card waits on him');
+  assert.equal(cardStatus(c('now', 'trying the demo', { owner: 'david' }), T)?.tone, 'working', 'his own card in Now: he is on it, no blink');
+
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_blocked00', 'now', 0, { owner: 'claude', note: 'David: merge apartment-finder PR 37', updated_at: new Date(T - 60_000).toISOString() }), card('rm_review000', 'now', 1, { owner: 'grok', note: 'PR 87, in review' }), card('rm_done00000', 'done', 0, { owner: 'claude', note: 'live (PR 85)' })];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
+  assert.match(html, /data-led="blocked"[^>]*><span aria-hidden="true" class="[^"]*blink-red[^"]*" style="background:#f85149"><\/span>waiting on you/);
+  assert.match(html, /data-led="review"/);
+  const done = html.slice(html.indexOf('data-column="done"'), html.indexOf('data-column="now"'));
+  assert.ok(!done.includes('<select') && !done.includes('data-led'), 'Done: no column menu, no LED');
+  assert.ok(done.includes('draggable="true"'), 'a done card can still be dragged back');
+  assert.equal(html.match(/<select/g)?.length, 2, 'the menu stays on the cards in Now');
+});
