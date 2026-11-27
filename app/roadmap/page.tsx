@@ -19,7 +19,7 @@ export default function RoadmapPage() {
   const [busy, setBusy] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
-  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Roadmap · Trialog'; }, []);
+  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Trialog Roadmap'; }, []);
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     const res = await fetch(path, { ...init, cache: 'no-store', headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
