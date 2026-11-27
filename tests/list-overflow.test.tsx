@@ -9,4 +9,5 @@ test('the list hides sideways overflow; long words wrap; wide tables scroll in t
   const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
   assert.match(css, /\.md \{ overflow-wrap: anywhere; \}/);
   assert.match(css, /\.md table \{[^}]*display: block; max-width: 100%; overflow-x: auto; \}/);
+  assert.match(css, /\.md th, \.md td \{[^}]*overflow-wrap: normal; \}/, 'table cells wrap at spaces only; the table scrolls');
 });
