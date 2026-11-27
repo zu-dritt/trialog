@@ -41,7 +41,7 @@ test('GitHub is asked once per five minutes; a missing PR is null', async () => 
 
 test('only links to a pull request of this hub\'s repository get a card', () => {
   assert.equal(prNumberOf('https://github.com/zu-dritt/trialog/pull/84', 'zu-dritt/trialog'), 84);
-  assert.equal(prNumberOf('https://github.com/amberleaf-gmbh/apartment-finder/pull/36', 'zu-dritt/trialog'), null, 'another repo: a plain link');
+  assert.equal(prNumberOf('https://github.com/example-org/other-app/pull/36', 'zu-dritt/trialog'), null, 'another repo: a plain link');
   assert.equal(prNumberOf('https://github.com/zu-dritt/trialog/issues/5', 'zu-dritt/trialog'), null);
   assert.equal(prNumberOf('https://github.com/zu-dritt/trialog/pull/84', null), null);
 });

@@ -11,7 +11,7 @@ export const OPEN_RECHECK_MS = 2 * 60_000;
 
 /**
  * The PRs of this hub a text names. Another repository's PR is not ours (Grok's review of PR 108): an
- * address of another repo, or a repo name in front, «apartment-finder PR 36», is left out.
+ * address of another repo, or a repo name in front, «other-app PR 36», is left out.
  */
 export function ownPrs(text: string, repo: string | null = REPO, prefixes: Readonly<Record<string, string>> = REPO_PREFIXES): number[] {
   const ours = repo ? repo.toLowerCase() : '';
