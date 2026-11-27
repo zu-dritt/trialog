@@ -3,9 +3,13 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { Fragment, useState, type DragEvent, type FormEvent } from 'react';
-import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
+import { Fragment, useState, type DragEvent } from 'react';
+import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
+import { FlightText, flightLinkLabel } from './flight';
+import { MessageImages, type LoadImage } from './attachments';
+import { ComposeIdea, type NewIdea } from './compose-idea';
+import type { Attachment } from '../lib/shared';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
 const COLUMN_COLORS: Record<RoadmapColumn, string> = { done: '#3fb950', now: '#4fb3ff', next: '#d29922', later: '#c792ea' };
@@ -50,32 +54,26 @@ export interface BoardActions {
   /** Claim a card with no owner (the first claim wins), or let go of your own. */
   claim?: (id: string, take: boolean) => void;
   /** Adds an idea at the top of «Later»: a card, not a message, so it wakes no one. */
-  addIdea?: (title: string) => Promise<boolean>;
+  addIdea?: (idea: NewIdea) => Promise<boolean>;
+  /** Uploads a picture for an idea (the Compose window); without it, ideas have no pictures. */
+  upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
 }
 
-/**
- * «+ Idee»: one line, Enter, and it is a card at the top of «Later». No message is sent, so nobody
- * is woken; the agents pick ideas up when they are between tasks (playground #596).
- */
-export function IdeaBox({ onAdd, busy = false }: { onAdd: (title: string) => Promise<boolean>; busy?: boolean }) {
-  const [text, setText] = useState('');
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const title = text.trim();
-    if (!title || busy) return;
-    if (await onAdd(title)) setText('');
-  };
+/** A card's description and pictures, folded: the first line shows, the rest opens on a click. */
+export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'description' | 'attachments'>; load?: LoadImage }) {
+  if (!card.description && !card.attachments.length) return null;
+  const first = card.description.split('\n')[0];
   return (
-    <form onSubmit={(e) => { void submit(e); }} className="mx-2 mb-1 flex gap-1.5" data-idea-box="">
-      <input value={text} onChange={(e) => setText(e.target.value)} maxLength={80} placeholder="+ Idee: eine Zeile, Enter"
-        aria-label="Add an idea to Later (no message, wakes no one)" title="Adds a card to «Later». No message, so it wakes no one."
-        className="min-w-0 flex-1 rounded-md border border-dashed border-line bg-bg px-2 py-1 text-sm placeholder:text-muted" />
-      <button type="submit" disabled={!text.trim() || busy} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-2 text-sm disabled:opacity-40">+</button>
-    </form>
+    <details className="mt-1 text-xs text-muted" data-details="">
+      <summary className="cursor-pointer select-none truncate">{card.attachments.length > 0 && `🖼 ${card.attachments.length} · `}{first || 'Pictures'}</summary>
+      {card.description && <p className="m-0 mt-1 whitespace-pre-wrap text-fg/90">{card.description}</p>}
+      {load && card.attachments.length > 0 && <MessageImages attachments={card.attachments} load={load} />}
+    </details>
   );
 }
 
-export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date }) {
+
+export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now, loadImage }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date; loadImage?: LoadImage }) {
   const today = todayLine(items, now);
   const at = (now ?? new Date()).getTime();
   const humans = participants.filter((p) => p.kind === 'human').flatMap((p) => [p.name, p.label ?? '']).filter(Boolean);
@@ -99,7 +97,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
           >
             <div className="h-1.5 rounded-t-xl" style={{ background: COLUMN_COLORS[column] }} />
             <h2 className="m-0 px-3 pb-1 pt-2 text-base font-bold" style={{ color: COLUMN_COLORS[column] }}>{COLUMN_TITLES[column]} <span className="text-xs font-normal text-muted">{cards.length}</span></h2>
-            {column === 'later' && actions?.addIdea && <IdeaBox onAdd={actions.addIdea} busy={busy} />}
+            {column === 'later' && actions?.addIdea && actions.upload && <ComposeIdea onAdd={actions.addIdea} upload={actions.upload} busy={busy} />}
             <ol className="m-0 flex flex-1 list-none flex-col gap-2 p-2 pt-1">
               {cards.map((card, index) => (<Fragment key={card.id}>
                 {column === 'next' && today && today.fits === index && <TodayMark line={today} cards={cards.length} onDragOver={(e) => { if (!actions) return; e.preventDefault(); e.stopPropagation(); if (over?.column !== column || over.index !== Math.max(0, index - 1)) setOver({ column, index: Math.max(0, index - 1) }); }} onDrop={(e) => { e.stopPropagation(); drop(e, column, Math.max(0, index - 1)); }} />}
@@ -118,9 +116,20 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       {(card.note || card.owner) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {card.owner && <span className="font-semibold" style={{ color: colorOf(card.owner, participants) }}>{labelOf(card.owner, participants)}</span>}
-                          {card.owner && card.note && ' · '}{card.note}
+                          {card.owner && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
+                      <CardDetails card={card} load={loadImage} />
+                      {(() => {
+                        // A card that waits on a human, with an address in its note: one click to where it is unblocked.
+                        const href = unblockHref(card, cardStatus(card, at, humans.length ? humans : undefined));
+                        return href && (
+                          <a href={href} target="_blank" rel="noopener noreferrer" data-unblock="" draggable={false} title={href}
+                            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-[#f85149] bg-[#f85149]/15 px-2 py-0.5 text-xs font-semibold text-[#ff7b72] no-underline hover:bg-[#f85149]/25">
+                            Unblock → {flightLinkLabel(href)}
+                          </a>
+                        );
+                      })()}
                     </div>
                     {actions && (
                       <span className="flex flex-none flex-col gap-0.5">

@@ -7,7 +7,7 @@ import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
 import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
-  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, ...over });
+  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: null, ...over });
 
 test('a card lands where it is put, from its own column or another', () => {
   assert.deepEqual(placeAt(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
@@ -88,14 +88,32 @@ test('the «likely today» line: today’s pace times the hours left, less the c
   assert.match(few, /▲ all of Next likely today/, 'when everything fits, the line sits at the end');
 });
 
-test('«+ Idee» sits at the top of Later when the page can add, and nowhere else', () => {
-  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />);
-  assert.equal(html.match(/data-idea-box=""/g)?.length, 1);
-  assert.match(html, /data-column="later"[^]*data-idea-box=""/);
-  assert.match(html, /aria-label="Add an idea to Later \(no message, wakes no one\)"/);
-  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {} }} />).includes('data-idea-box'));
+test('«✎ Compose» sits at the top of Later when the page can add and upload, and opens a full window', async () => {
+  const add = { place: () => {}, addIdea: async () => true, upload: async () => ({ id: 'att_x', content_type: 'image/png' as const, width: 1, height: 1, bytes: 1, scale: 1 }) };
+  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={add} />);
+  assert.equal(html.match(/data-compose=""/g)?.length, 1);
+  assert.match(html, /data-column="later"[^]*data-compose=""[^>]*>[^]*Compose/);
+  assert.ok(!html.includes('data-idea-box'), 'the one-line field is gone (playground #638)');
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />).includes('data-compose'), 'no upload, no Compose');
+  const { composeState } = await import('../app/compose-idea');
+  assert.deepEqual(composeState('', [], false), { ready: false, label: 'Add to Later' }, 'a title is needed');
+  assert.deepEqual(composeState('Idea', [{ state: 'uploading' }], false), { ready: false, label: 'Uploading…' });
+  assert.deepEqual(composeState('Idea', [{ state: 'failed' }], false).ready, false, 'a failed picture must be removed first');
+  assert.deepEqual(composeState('Idea', [{ state: 'ready' }], false), { ready: true, label: 'Add to Later' });
+  assert.deepEqual(composeState('Idea', [], true), { ready: false, label: 'Adding…' });
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
+  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`\.slice\(0, 120\), description, attachments, top: true/);
+  const compose = readFileSync(new URL('../app/compose-idea.tsx', import.meta.url), 'utf8');
+  assert.match(compose, /onPaste=\{paste\}/, 'pictures can be pasted');
+});
+
+test('a card with a description and pictures shows the first line, and opens to the rest', () => {
+  const pic = { id: 'att_one', content_type: 'image/png' as const, width: 40, height: 20, bytes: 9, scale: 1 };
+  const items = [card('rm_details00', 'later', 0, { description: 'Like Gmail Compose\nwith pictures', attachments: [pic] }), card('rm_plain0000', 'later', 1)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} loadImage={async () => 'blob:x'} />);
+  assert.equal(html.match(/data-details=""/g)?.length, 1, 'only the card that has details');
+  assert.match(html, /<summary[^>]*>🖼 1 · Like Gmail Compose<\/summary>/);
+  assert.match(html, /whitespace-pre-wrap[^>]*>Like Gmail Compose\nwith pictures<\/p>/);
 });
 
 test('the today label keeps «7 h left» and «4 done in 4 h» together, so a narrow column wraps between them', async () => {
@@ -131,4 +149,21 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   assert.ok(!done.includes('<select') && !done.includes('data-led'), 'Done: no column menu, no LED');
   assert.ok(done.includes('draggable="true"'), 'a done card can still be dragged back');
   assert.equal(html.match(/<select/g)?.length, 2, 'the menu stays on the cards in Now');
+});
+
+test('a red card with an address in its note gets «Unblock →», and every address in a note is a link', async () => {
+  const { unblockHref, cardStatus } = await import('../lib/roadmap');
+  const url = 'https://github.com/amberleaf-gmbh/apartment-finder/pull/37';
+  const T = Date.parse('2026-11-27T12:00:00Z');
+  const blocked = { column: 'now' as const, note: `⛔ WAITING ON DAVID: merge ${url}.`, owner: 'claude', updated_at: '2026-11-27T11:50:00Z' };
+  assert.equal(unblockHref(blocked, cardStatus(blocked, T)), url, 'the address, without the full stop');
+  assert.equal(unblockHref({ note: `PR 88, in review: ${url}` }, { tone: 'review', label: 'in review' }), null, 'only red cards');
+  assert.equal(unblockHref({ note: '⛔ your call on the breaks' }, { tone: 'blocked', label: 'waiting on you' }), null, 'no address, no button');
+
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_unblock00', 'now', 0, { owner: 'claude', note: blocked.note, updated_at: blocked.updated_at }), card('rm_review000', 'now', 1, { owner: 'claude', note: 'PR 88, in review: https://github.com/zu-dritt/trialog/pull/88' })];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
+  assert.equal(html.match(/data-unblock=""/g)?.length, 1);
+  assert.match(html, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" data-unblock="" draggable="false"[^>]*>Unblock → apartment-finder PR 37</a>`));
+  assert.match(html, /<a href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/88"[^>]*>(?:trialog )?PR 88<\/a>/, 'the review card’s address is a link too');
 });
