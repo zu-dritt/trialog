@@ -45,9 +45,29 @@ test('a quiet flight says so', () => {
   assert.equal(flightSentence(flight({ since: ago(40), last_message_at: ago(30) }), T, 'Claude'), 'Claude: quiet, last on «Journal 01» · 40 min');
 });
 
-test('the page shows the strip under the header, with the token', () => {
+test('the page shows the strip once: under the header, or above the message box (never in split view)', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /<FlightBar token=\{token\} onUnauthorized=\{refuseToken\} participants=\{participants\} \/>/);
+  assert.match(page, /<FlightBar token=\{token\} onUnauthorized=\{refuseToken\} participants=\{participants\} position=/);
+  assert.match(page, /const flightAtBottom = flightPosition === 'bottom' && !splitVisible;/);
+  assert.match(page, /\{flightAtBottom && flightBar\}/);
+  assert.match(page, /\{!flightAtBottom && flightBar\}/);
+});
+
+test('«⇅» moves the strip; the choice is kept in this browser; the minutes are never cut off', async () => {
+  const { readFlightPosition, writeFlightPosition, FLIGHT_POSITION_KEY } = await import('../app/flight');
+  const store = new Map<string, string>();
+  const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+  assert.equal(readFlightPosition(storage), 'top');
+  writeFlightPosition(storage, 'bottom');
+  assert.equal(store.get(FLIGHT_POSITION_KEY), 'bottom');
+  assert.equal(readFlightPosition(storage), 'bottom');
+  assert.equal(readFlightPosition({ getItem: () => 'sideways' }), 'top');
+  assert.equal(readFlightPosition({ getItem: () => { throw new Error('private mode'); } }), 'top');
+  const html = renderToStaticMarkup(<FlightStrip now={T} flights={[flight({})]} position="bottom" onFlip={() => {}} />);
+  assert.match(html, /data-position="bottom"[^>]*border-t/);
+  assert.match(html, /aria-label="Move the work-in-flight strip to the top"[^>]*>⇅</);
+  assert.match(html, /<span class="flex-none text-muted max-sm:hidden">· 5 min<\/span>/, 'the age sits outside the part that shortens');
+  assert.ok(!renderToStaticMarkup(<FlightStrip now={T} flights={[flight({})]} />).includes('data-flip'), 'no ⇅ without a way to flip');
 });
 
 test('screen readers hear each whole sentence, also on a phone where the words are hidden', () => {
