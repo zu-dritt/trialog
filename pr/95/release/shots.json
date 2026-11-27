@@ -1,0 +1,34 @@
+{
+  "desktop": {
+    "barCount": 1,
+    "bars": [
+      {
+        "pct": "90",
+        "text": "90% · PR 95, in review · 26 min ago",
+        "col": "now",
+        "visible": true,
+        "aria": "90% done: PR 95, in review"
+      }
+    ],
+    "doneHasBar": false
+  },
+  "desktopErrors": [],
+  "phone": {
+    "barTexts": [
+      "90% · PR 95, in review · 26 min ago"
+    ],
+    "col": {
+      "x": 16,
+      "y": 209.75,
+      "w": 358,
+      "h": 423
+    }
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 6,
+    "y": 199,
+    "width": 378,
+    "height": 444
+  }
+}
