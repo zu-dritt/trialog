@@ -4,8 +4,9 @@
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
 import { Fragment, useState, type DragEvent, type FormEvent } from 'react';
-import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
+import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
+import { FlightText, flightLinkLabel } from './flight';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
 const COLUMN_COLORS: Record<RoadmapColumn, string> = { done: '#3fb950', now: '#4fb3ff', next: '#d29922', later: '#c792ea' };
@@ -117,9 +118,19 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       {(card.note || card.owner) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {card.owner && <span className="font-semibold" style={{ color: colorOf(card.owner, participants) }}>{labelOf(card.owner, participants)}</span>}
-                          {card.owner && card.note && ' · '}{card.note}
+                          {card.owner && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
+                      {(() => {
+                        // A card that waits on a human, with an address in its note: one click to where it is unblocked.
+                        const href = unblockHref(card, cardStatus(card, at, humans.length ? humans : undefined));
+                        return href && (
+                          <a href={href} target="_blank" rel="noopener noreferrer" data-unblock="" draggable={false} title={href}
+                            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-[#f85149] bg-[#f85149]/15 px-2 py-0.5 text-xs font-semibold text-[#ff7b72] no-underline hover:bg-[#f85149]/25">
+                            Unblock → {flightLinkLabel(href)}
+                          </a>
+                        );
+                      })()}
                     </div>
                     {actions && (
                       <span className="flex flex-none flex-col gap-0.5">
