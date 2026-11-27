@@ -8,8 +8,8 @@ import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from
 const NAMES = ['david', 'claude', 'grok'];
 
 test('a new card needs a column and a title; note and owner are optional, and the owner must be a participant', () => {
-  assert.deepEqual(parseNewItem({ column: 'next', title: '  Deploy\nbutton ' }, NAMES), { ok: true, column: 'next', title: 'Deploy button', note: '', owner: null });
-  assert.deepEqual(parseNewItem({ column: 'now', title: 'x', note: 'y', owner: 'grok' }, NAMES), { ok: true, column: 'now', title: 'x', note: 'y', owner: 'grok' });
+  assert.deepEqual(parseNewItem({ column: 'next', title: '  Deploy\nbutton ' }, NAMES), { ok: true, column: 'next', title: 'Deploy button', note: '', owner: null, description: '', attachments: [], top: false, reviewer: null });
+  assert.deepEqual(parseNewItem({ column: 'now', title: 'x', note: 'y', owner: 'grok' }, NAMES), { ok: true, column: 'now', title: 'x', note: 'y', owner: 'grok', description: '', attachments: [], top: false, reviewer: null });
   for (const bad of [null, {}, { column: 'soon', title: 'x' }, { column: 'next' }, { column: 'next', title: '' }, { column: 'next', title: 'x'.repeat(81) },
     { column: 'next', title: 'x', note: 'n'.repeat(121) }, { column: 'next', title: 'x', owner: 'ana' }]) {
     assert.equal(parseNewItem(bad, NAMES).ok, false, JSON.stringify(bad));
@@ -215,4 +215,81 @@ test('API: progress is 400 for a bad body, 404 for no card, 409 before the claim
   assert.equal(byHuman.status, 'checked', 'a human may');
   const cleared = ((await (await put('grok', { progress: null })).json()) as { item: RoadmapItem }).item;
   assert.deepEqual([cleared.progress, cleared.status], [null, '']);
+});
+
+async function detailRules(store: Store) {
+  const png = (n: string) => ({ content_type: 'image/png' as const, width: 4, height: 3, data: Buffer.from(`picture ${n}`) });
+  const a = (await store.addAttachment({ sender: 'david', ...png('a') }))!;
+  const b = (await store.addAttachment({ sender: 'david', ...png('b') }))!;
+  const theirs = (await store.addAttachment({ sender: 'grok', ...png('c') }))!;
+  await store.addRoadmapItem({ column: 'later', title: 'Older idea', note: '', owner: null, by: 'david' });
+  const card = (await store.addRoadmapItem({ column: 'later', title: 'Compose window', note: '', owner: null, by: 'david', description: 'Like Gmail:\nCompose opens a window.', attachments: [b.id, a.id], top: true }))!;
+  assert.equal(card.description, 'Like Gmail:\nCompose opens a window.');
+  assert.deepEqual(card.attachments.map((x) => x.id), [b.id, a.id], 'pictures in the order given');
+  assert.equal(card.position, 0, 'top: first in its column');
+  const later = (await store.listRoadmap()).filter((i) => i.column === 'later');
+  assert.deepEqual(later.map((i) => i.title), ['Compose window', 'Older idea']);
+  assert.deepEqual(later[0].attachments.map((x) => x.id), [b.id, a.id], 'the list carries the pictures too');
+  assert.equal((await store.getAttachment(a.id))?.attachment.roadmap_item_id, card.id, 'the picture knows its card');
+  await assert.rejects(store.addRoadmapItem({ column: 'later', title: 'x', note: '', owner: null, by: 'david', attachments: [a.id] }), /already belongs/);
+  await assert.rejects(store.addRoadmapItem({ column: 'later', title: 'x', note: '', owner: null, by: 'david', attachments: [theirs.id] }), /someone else/);
+  await assert.rejects(store.addRoadmapItem({ column: 'later', title: 'x', note: '', owner: null, by: 'david', attachments: ['att_00000000000000000000000000'] }), /does not exist/);
+  assert.equal((await store.listRoadmap()).length, 2, 'a refused picture adds no card');
+  await assert.rejects(store.add({ sender: 'david', recipient: null, text: 'reuse', attachments: [a.id] }), /already belongs/, 'a card picture cannot also go on a message');
+  const edited = (await store.updateRoadmapItem(card.id, { description: 'Shorter.' }, 'david'))!;
+  assert.equal(edited.description, 'Shorter.');
+  assert.equal(edited.attachments.length, 2, 'editing the text keeps the pictures');
+  assert.equal(await store.deleteRoadmapItem(card.id), true);
+  assert.equal(await store.getAttachment(a.id), null, 'a deleted card takes its pictures with it, at once');
+}
+
+test('card details (memory): a description, pictures in order, at the top; only your own unlinked uploads', async () => { await detailRules(createMemoryStore()); });
+test('card details (PGlite): the same', async () => {
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await detailRules(store);
+});
+
+test('description: line breaks stay, other control characters and more than 4000 characters do not', async () => {
+  const ok = parseNewItem({ column: 'later', title: 'Idea', description: ' line one\r\nline two\n\n\n\n\nend ', attachments: ['att_abc123'], top: true }, NAMES);
+  assert.deepEqual(ok, { ok: true, column: 'later', title: 'Idea', note: '', owner: null, description: 'line one\nline two\n\n\nend', attachments: ['att_abc123'], top: true, reviewer: null });
+  assert.equal(parseNewItem({ column: 'later', title: 'x', description: 'bell\x07' }, NAMES).ok, false);
+  assert.equal(parseNewItem({ column: 'later', title: 'x', description: 'x'.repeat(4001) }, NAMES).ok, false);
+  assert.equal(parseNewItem({ column: 'later', title: 'x', attachments: ['att_a', 'att_a'] }, NAMES).ok, false, 'no duplicates');
+  assert.equal(parseNewItem({ column: 'later', title: 'x', attachments: Array.from({ length: 7 }, (_, i) => `att_${i}`) }, NAMES).ok, false, 'at most six');
+  assert.equal(parseNewItem({ column: 'later', title: 'x', top: 'yes' }, NAMES).ok, false);
+  assert.deepEqual(parseItemChange({ description: 'a\nb' }, NAMES), { ok: true, change: { description: 'a\nb' } });
+});
+
+test('API: a card with pictures; a stranger’s upload is 403; everyone signed in can see a card’s picture', async () => {
+  const uploads = (await import('../app/api/attachments/route')) as unknown as { POST: Handler };
+  const picture = (await import('../app/api/attachments/[id]/route')) as unknown as { GET: Handler };
+  const sharp = (await import('sharp')).default;
+  const bytes = await sharp({ create: { width: 8, height: 6, channels: 3, background: '#f85149' } }).png().toBuffer();
+  const up = async (who: string) => ((await (await uploads.POST(new Request('http://hub.test/api/attachments', { method: 'POST', headers: { Authorization: `Bearer ${TOKENS[who]}` }, body: new Uint8Array(bytes) }))).json()) as { id: string }).id;
+  const mine = await up('david');
+  const grokS = await up('grok');
+  assert.equal((await list.POST(req('david', 'POST', { column: 'later', title: 'With a stranger’s picture', attachments: [grokS] }))).status, 403);
+  const res = await list.POST(req('david', 'POST', { column: 'later', title: 'Compose like Gmail', description: 'A window\nwith pictures', attachments: [mine], top: true }));
+  assert.equal(res.status, 201);
+  const item = ((await res.json()) as { item: RoadmapItem }).item;
+  assert.deepEqual([item.description, item.attachments.map((a) => a.id)], ['A window\nwith pictures', [mine]]);
+  const seen = await picture.GET(new Request(`http://hub.test/api/attachments/${mine}`, { headers: { Authorization: `Bearer ${TOKENS.claude}` } }), { params: Promise.resolve({ id: mine }) });
+  assert.equal(seen.status, 200, 'on a card, so not only its uploader can see it');
+  assert.equal((await list.POST(req('david', 'POST', { column: 'later', title: 'Again', attachments: [mine] }))).status, 409);
+});
+
+test('a reviewer on a card: set when adding or later, any participant or none; «Claude builds · Grok reviews»', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'now', title: 'Reviewed', note: '', owner: 'claude', by: 'claude', reviewer: 'grok' }))!;
+    assert.deepEqual([c.owner, c.reviewer], ['claude', 'grok']);
+    assert.equal((await store.updateRoadmapItem(c.id, { reviewer: null }, 'grok'))!.reviewer, null);
+    assert.equal((await store.updateRoadmapItem(c.id, { reviewer: 'david' }, 'claude'))!.reviewer, 'david');
+    assert.equal((await store.updateRoadmapItem(c.id, { note: 'x' }, 'claude'))!.reviewer, 'david', 'other changes keep it');
+  }
+  assert.equal(parseNewItem({ column: 'now', title: 'x', reviewer: 'nobody' }, NAMES).ok, false);
+  assert.match((parseNewItem({ column: 'now', title: 'x', reviewer: 'nobody' }, NAMES) as { error: string }).error, /"reviewer"/);
+  assert.deepEqual(parseItemChange({ reviewer: 'grok' }, NAMES), { ok: true, change: { reviewer: 'grok' } });
+  const res = await one.PATCH(req('claude', 'PATCH', { reviewer: 'grok' }, '/api/roadmap/rm_00000000'), { params: Promise.resolve({ id: 'rm_00000000' }) });
+  assert.equal(res.status, 404);
 });

@@ -47,7 +47,7 @@ for (const [name, make] of KITS) {
     assert.match(a.id, ATTACHMENT_ID);
     assert.deepEqual(a, { id: a.id, content_type: 'image/webp', width: 1170, height: 2532, bytes: bytes('a').length, scale: 1 });
     const found = must(await store.getAttachment(a.id));
-    assert.deepEqual(found.attachment, { ...a, sender: 'david', message_id: null });
+    assert.deepEqual(found.attachment, { ...a, sender: 'david', message_id: null, roadmap_item_id: null });
     assert.ok(found.data.equals(bytes('a')));
     assert.equal(await store.getAttachment('att_0123456789abcdef01234567'), null);
     const b = must(await store.addAttachment(shot('david', 'b')));

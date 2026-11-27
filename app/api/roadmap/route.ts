@@ -1,7 +1,7 @@
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
 import { parseNewItem, parseOrder } from '../../../lib/roadmap';
-import { getStore } from '../../../lib/store';
+import { AttachmentLinkError, getStore } from '../../../lib/store';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -24,7 +24,13 @@ export const POST = safe(async (request: Request) => {
   if (bad) return bad;
   const input = parseNewItem(body, names());
   if (!input.ok) return error(input.status, input.error);
-  const item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me });
+  let item;
+  try {
+    item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top, reviewer: input.reviewer });
+  } catch (e) {
+    if (e instanceof AttachmentLinkError) return error(e.reason === 'already linked' ? 409 : e.reason === 'not yours' ? 403 : 404, e.message);
+    throw e;
+  }
   return item ? json({ item }, 201) : error(409, 'The roadmap is full (200 cards). Remove some done cards first.');
 });
 

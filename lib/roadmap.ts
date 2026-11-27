@@ -2,12 +2,16 @@
 // orchestrator drags cards in «Next» and «Later» to say what matters most; the agents add, move and
 // finish cards with hub.js. Stored in the hub (migrations/016-roadmap.sql).
 
+import type { Attachment } from './shared';
+
 export const ROADMAP_COLUMNS = ['done', 'now', 'next', 'later'] as const;
 export type RoadmapColumn = (typeof ROADMAP_COLUMNS)[number];
 export const ROADMAP_TITLE_MAX = 80;
 export const ROADMAP_NOTE_MAX = 120;
 export const ROADMAP_MAX_ITEMS = 200;
 export const ROADMAP_ID = /^rm_[a-z0-9]{8,32}$/;
+export const ROADMAP_DESCRIPTION_MAX = 4000;
+export const ROADMAP_PICTURES_MAX = 6;
 
 export interface RoadmapItem {
   id: string;
@@ -24,6 +28,12 @@ export interface RoadmapItem {
   status: string;
   /** When progress or status was last set. */
   progress_at: string | null;
+  /** The idea in full, with line breaks (0–4000 characters; migrations/018). */
+  description: string;
+  /** Pictures on the card, in order (served by GET /api/attachments/<id>). */
+  attachments: Attachment[];
+  /** Who reviews it: a participant, or null (migrations/018). «Claude builds · Grok reviews». */
+  reviewer: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };
@@ -34,6 +44,14 @@ const line = (v: unknown, label: string, min: number, max: number): string | Fai
   if (/[\x00-\x1f\x7f]/.test(t) || [...t].length < min || [...t].length > max) return { ok: false, status: 400, error: `"${label}" must be plain text, ${min}–${max} characters.` };
   return t;
 };
+/** Longer text: line breaks kept (at most two blank lines in a row), other control characters refused. */
+const longText = (v: unknown, label: string, max: number): string | Fail => {
+  if (typeof v !== 'string') return { ok: false, status: 400, error: `"${label}" must be text (0–${max} characters).` };
+  const t = v.replace(/\r\n?/g, '\n').replace(/\t/g, '  ').replace(/\n{4,}/g, '\n\n\n').trim();
+  if (/[\x00-\x09\x0b-\x1f\x7f]/.test(t) || [...t].length > max) return { ok: false, status: 400, error: `"${label}" must be plain text, at most ${max} characters.` };
+  return t;
+};
+const ATTACHMENT_ID = /^att_[a-z0-9]+$/;
 const isColumn = (v: unknown): v is RoadmapColumn => typeof v === 'string' && (ROADMAP_COLUMNS as readonly string[]).includes(v);
 const ownerOf = (v: unknown, names: readonly string[]): string | null | Fail => {
   if (v === undefined || v === null || v === '') return null;
@@ -41,9 +59,9 @@ const ownerOf = (v: unknown, names: readonly string[]): string | null | Fail => 
   return v;
 };
 
-/** POST: {column, title, note?, owner?}. */
-export function parseNewItem(body: unknown, names: readonly string[]): { ok: true; column: RoadmapColumn; title: string; note: string; owner: string | null } | Fail {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note": "...", "owner": "claude"}.' };
+/** POST: {column, title, note?, owner?, reviewer?, description?, attachments?: ["att_…"], top?: true}. */
+export function parseNewItem(body: unknown, names: readonly string[]): { ok: true; column: RoadmapColumn; title: string; note: string; owner: string | null; description: string; attachments: string[]; top: boolean; reviewer: string | null } | Fail {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note"?, "owner"?, "reviewer"?, "description"?, "attachments"?, "top"?}.' };
   const b = body as Record<string, unknown>;
   if (!isColumn(b.column)) return { ok: false, status: 400, error: `"column" must be one of ${ROADMAP_COLUMNS.join(', ')}.` };
   const title = line(b.title, 'title', 1, ROADMAP_TITLE_MAX);
@@ -52,19 +70,30 @@ export function parseNewItem(body: unknown, names: readonly string[]): { ok: tru
   if (typeof note !== 'string') return note;
   const owner = ownerOf(b.owner, names);
   if (owner !== null && typeof owner !== 'string') return owner;
-  return { ok: true, column: b.column, title, note, owner };
+  const description = b.description === undefined ? '' : longText(b.description, 'description', ROADMAP_DESCRIPTION_MAX);
+  if (typeof description !== 'string') return description;
+  const attachments = b.attachments === undefined ? [] : b.attachments;
+  if (!Array.isArray(attachments) || attachments.length > ROADMAP_PICTURES_MAX || !attachments.every((a) => typeof a === 'string' && ATTACHMENT_ID.test(a)) || new Set(attachments).size !== attachments.length) {
+    return { ok: false, status: 400, error: `"attachments" must be up to ${ROADMAP_PICTURES_MAX} different upload ids ("att_…" from POST /api/attachments).` };
+  }
+  if (b.top !== undefined && typeof b.top !== 'boolean') return { ok: false, status: 400, error: '"top" must be true or false.' };
+  const reviewer = ownerOf(b.reviewer, names);
+  if (reviewer !== null && typeof reviewer !== 'string') return { ...reviewer, error: reviewer.error.replace('"owner"', '"reviewer"') };
+  return { ok: true, column: b.column, title, note, owner, description, attachments: attachments as string[], top: b.top === true, reviewer };
 }
 
-/** PATCH: any of {column, title, note, owner}; at least one. */
-export function parseItemChange(body: unknown, names: readonly string[]): { ok: true; change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner'>> } | Fail {
+/** PATCH: any of {column, title, note, owner, description, reviewer}; at least one. */
+export function parseItemChange(body: unknown, names: readonly string[]): { ok: true; change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description' | 'reviewer'>> } | Fail {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be a JSON object with column, title, note or owner.' };
   const b = body as Record<string, unknown>;
-  const change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner'>> = {};
+  const change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description' | 'reviewer'>> = {};
   if (b.column !== undefined) { if (!isColumn(b.column)) return { ok: false, status: 400, error: `"column" must be one of ${ROADMAP_COLUMNS.join(', ')}.` }; change.column = b.column; }
   if (b.title !== undefined) { const t = line(b.title, 'title', 1, ROADMAP_TITLE_MAX); if (typeof t !== 'string') return t; change.title = t; }
   if (b.note !== undefined) { const n = line(b.note, 'note', 0, ROADMAP_NOTE_MAX); if (typeof n !== 'string') return n; change.note = n; }
   if (b.owner !== undefined) { const o = ownerOf(b.owner, names); if (o !== null && typeof o !== 'string') return o; change.owner = o; }
-  if (!Object.keys(change).length) return { ok: false, status: 400, error: 'Nothing to change: give column, title, note or owner.' };
+  if (b.description !== undefined) { const d = longText(b.description, 'description', ROADMAP_DESCRIPTION_MAX); if (typeof d !== 'string') return d; change.description = d; }
+  if (b.reviewer !== undefined) { const r = ownerOf(b.reviewer, names); if (r !== null && typeof r !== 'string') return { ...r, error: r.error.replace('"owner"', '"reviewer"') }; change.reviewer = r; }
+  if (!Object.keys(change).length) return { ok: false, status: 400, error: 'Nothing to change: give column, title, note, owner, description or reviewer.' };
   return { ok: true, change };
 }
 
