@@ -307,3 +307,9 @@ CREATE TABLE IF NOT EXISTS roadmap_items (
    );
 
 CREATE INDEX IF NOT EXISTS roadmap_items_col_position ON roadmap_items (col, position);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (progress IS NULL OR progress BETWEEN 0 AND 100);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ;
