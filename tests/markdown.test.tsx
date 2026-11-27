@@ -48,7 +48,7 @@ test('raw HTML is shown as text, including an <img> tag', () => {
 
 test('links open in a new tab without a referrer, and javascript: links are dropped', () => {
   const out = html('[docs](https://example.com/docs) and [bad](javascript:alert(1)) and [worse](data:text/html,<b>x</b>)');
-  assert.match(out, /<a href="https:\/\/example\.com\/docs" target="_blank" rel="noopener noreferrer nofollow" title="https:\/\/example\.com\/docs"><svg aria-hidden="true" data-globe=""[^]*?<\/svg>docs<\/a>/);
+  assert.match(out, /<a href="https:\/\/example\.com\/docs" target="_blank" rel="noopener noreferrer nofollow" data-card="example\.com · \/docs" class="hovercard"><svg aria-hidden="true" data-globe=""[^]*?<\/svg>docs<\/a>/);
   assert.ok(!out.includes('javascript:'), out);
   assert.ok(!out.includes('data:'), out);
   // A link whose address was unsafe keeps its text and is no link at all (not a link to nowhere).
@@ -77,7 +77,7 @@ test('«PR 62» links the pull request when the hub knows its repository; #62 st
 
 test('a bare address to a pull request or issue on GitHub reads short, others as written; both carry the globe', () => {
   const out = html('https://github.com/zu-dritt/trialog/pull/62 and https://github.com/zu-dritt/trialog/issues/5 and https://example.com/a');
-  assert.match(out, /href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/62"[^>]*title="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/62"><svg[^]*?<\/svg>PR 62<\/a>/);
+  assert.match(out, /href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/62"[^>]*data-card="github\.com · zu-dritt\/trialog · pull request 62" class="hovercard"><svg[^]*?<\/svg>PR 62<\/a>/);
   assert.match(out, /<svg[^]*?<\/svg>issue 5<\/a>/);
   assert.match(out, /<svg[^]*?<\/svg>https:\/\/example\.com\/a<\/a>/);
   assert.equal(out.match(/data-globe/g)?.length, 3);
@@ -87,4 +87,18 @@ test('repoOf takes only owner/name', async () => {
   const { repoOf } = await import('../app/links');
   assert.equal(repoOf(' zu-dritt/trialog '), 'zu-dritt/trialog');
   for (const v of [undefined, '', 'trialog', 'a/b/c', 'https://github.com/a/b', 'a/..', 'a b/c']) assert.equal(repoOf(v), null, String(v));
+});
+
+test('the hovercard says the site and the rest of the address, and only links that leave the hub get one', async () => {
+  const { cardText } = await import('../app/links');
+  assert.equal(cardText('https://github.com/zu-dritt/trialog/pull/62'), 'github.com · zu-dritt/trialog · pull request 62');
+  assert.equal(cardText('https://github.com/zu-dritt/trialog/issues/5'), 'github.com · zu-dritt/trialog · issue 5');
+  assert.equal(cardText('https://github.com/zu-dritt/trialog'), 'github.com · zu-dritt/trialog');
+  assert.equal(cardText('https://www.example.com/'), 'example.com');
+  assert.equal(cardText('https://trialog-demo.vercel.app/?x=1'), 'trialog-demo.vercel.app · ?x=1');
+  assert.match(cardText(`https://example.com/${'a'.repeat(80)}`), /…$/);
+  const out = html('[demo hub](https://trialog-demo.vercel.app) and [here](#m-5)');
+  assert.match(out, /data-card="trialog-demo\.vercel\.app" class="hovercard"/);
+  assert.equal(out.match(/data-card=/g)?.length, 1, 'a link within the page has no card');
+  assert.ok(!out.includes('title="https'), 'no native tooltip on top of the card');
 });

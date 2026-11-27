@@ -90,3 +90,18 @@
   [data-tour-target] { animation: tour-ring 1.6s ease-in-out infinite; }
   .tour-path { stroke-dasharray: 10 6; animation: tour-flow 0.9s linear infinite; }
 }
+
+/* The hovercard on a link that leaves the hub (app/markdown.tsx): where the link goes, drawn from
+   data-card, on hover and on keyboard focus. CSS only, so the text is not part of the message. */
+.hovercard { position: relative; }
+.hovercard::after {
+  content: attr(data-card);
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 30;
+  width: max-content; max-width: min(26rem, 80vw); white-space: normal;
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--color-line);
+  background: var(--color-panel); color: var(--color-muted); font-size: 12px; line-height: 1.35;
+  text-decoration: none; box-shadow: 0 6px 18px rgb(0 0 0 / 0.45);
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms ease 250ms;
+}
+.hovercard:hover::after, .hovercard:focus-visible::after { opacity: 1; visibility: visible; }
+@media (hover: none) { .hovercard::after { display: none; } }
