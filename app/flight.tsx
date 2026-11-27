@@ -62,13 +62,44 @@ export function flightSentence(f: Flight, now: number, shown: string): string {
  * by itself when the agent moves on (a new flight), so nothing has to be cleared by hand.
  */
 export interface WaitOnHuman { by: string; text: string; since: string }
+/**
+ * A flight's text split into its steps: «David: merge PR 37; Grok: review PR 96» → one step for
+ * David, one for Grok. A step starts with «Name:» (optionally «waiting for/on Name:»). The colon
+ * must be followed by a space, so an address (https://…) never starts a step. Text without a name
+ * is one step with name null.
+ */
+export function flightSteps(text: string): { name: string | null; text: string }[] {
+  const named = /^\s*(?:waiting\s+(?:for|on)\s+)?@?([A-Za-z][\w .'-]{0,39}):\s+(.+)$/is;
+  return text.split(/;\s+(?=(?:waiting\s+(?:for|on)\s+)?@?[A-Za-z][\w .'-]{0,39}:\s)/i).map((part) => {
+    const m = named.exec(part);
+    return m ? { name: m[1].trim(), text: m[2].trim() } : { name: null, text: part.trim() };
+  }).filter((step) => step.text);
+}
+
 export function waitingOn(flights: readonly Flight[], human: Pick<Participant, 'name' | 'label'>): WaitOnHuman[] {
   const names = [human.name, human.label].filter(Boolean).map((n) => String(n).toLowerCase());
   return flights.flatMap((f) => {
     if (f.state !== 'waiting' || f.participant === human.name) return [];
-    const m = /^\s*(?:waiting\s+(?:for|on)\s+)?@?([^:]{1,40}):\s*(.+)$/i.exec(f.text);
-    return m && names.includes(m[1].trim().toLowerCase()) ? [{ by: f.participant, text: m[2].trim(), since: f.since }] : [];
+    // Only the steps addressed to this human wait on them; «Grok: review PR 96» in the same flight does not (#743).
+    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()))
+      .map((step) => ({ by: f.participant, text: step.text, since: f.since }));
   });
+}
+
+/** A participant named in a step, by name or label, for its colour. */
+const named = (name: string, participants: readonly Participant[]): Participant | undefined =>
+  participants.find((p) => p.name.toLowerCase() === name.toLowerCase() || (p.label ?? '').toLowerCase() === name.toLowerCase());
+
+/** The flight's text with each «Name:» in that participant's colour (#743: Grok's step in his colour, not red). */
+export function FlightStepsText({ text, participants = [], hidden = false }: { text: string; participants?: readonly Participant[]; hidden?: boolean }) {
+  return <>{flightSteps(text).map((step, i) => {
+    const who = step.name ? named(step.name, participants) : undefined;
+    return (
+      <Fragment key={i}>{i > 0 && '; '}{step.name && (who
+        ? <span className="font-semibold" data-step-for={who.name} style={{ color: colorOf(who.name, participants) }}>{labelOf(who.name, participants)}: </span>
+        : `${step.name}: `)}<FlightText text={step.text} hidden={hidden} /></Fragment>
+    );
+  })}</>;
 }
 
 /** A GitHub address as a short name: «PR 36» in this repo, «apartment-finder PR 36» in another. */
@@ -133,7 +164,7 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
             <span className="font-semibold" style={{ color: colorOf(f.participant, participants) }}>{shown}</span>
             {tone !== 'idle' && (
               <>
-                <span className="max-w-[32ch] truncate text-fg/90 max-sm:hidden">{WORD[tone]} «<FlightText text={f.text} hidden />»</span>
+                <span className="max-w-[32ch] truncate text-fg/90 max-sm:hidden">{WORD[tone]} «<FlightStepsText text={f.text} participants={participants} hidden />»</span>
                 <span className="flex-none text-muted max-sm:hidden">· {flightAge(f.since, now)}</span>
               </>
             )}

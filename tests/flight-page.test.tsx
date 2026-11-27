@@ -130,3 +130,18 @@ test('«waiting for David: …» and «waiting on the orchestrator: …» count 
   assert.match(src, /font-semibold text-\[#ff7b72\] sm:max-w-\[60ch\] sm:truncate/, 'truncated only from sm up');
   assert.match(src, /max-sm:w-\[calc\(100vw-4\.5rem\)\] max-sm:whitespace-normal/, 'on a phone a wait takes the width and wraps');
 });
+
+test('a flight with several steps: only «David: …» waits on him (red); «Grok: …» shows in Grok’s colour (#743)', async () => {
+  const { flightSteps, waitingOn, FlightStepsText } = await import('../app/flight');
+  assert.deepEqual(flightSteps('David: Ship it on PR 95; Grok: review PR 96'), [{ name: 'David', text: 'Ship it on PR 95' }, { name: 'Grok', text: 'review PR 96' }]);
+  assert.deepEqual(flightSteps('David: merge https://github.com/a/b/pull/1; then deploy'), [{ name: 'David', text: 'merge https://github.com/a/b/pull/1; then deploy' }], 'an address never starts a step, nor does text without a name');
+  assert.deepEqual(flightSteps('review of PR 96'), [{ name: null, text: 'review of PR 96' }]);
+  const human = { name: 'david', label: 'Orchestrator' };
+  const f = (text: string) => ({ participant: 'claude', state: 'waiting', text, since: '2026-11-27T14:00:00Z' }) as Flight;
+  assert.deepEqual(waitingOn([f('David: Ship it on PR 95; Grok: review PR 96')], human).map((w) => w.text), ['Ship it on PR 95'], 'only his step');
+  assert.deepEqual(waitingOn([f('Grok: review PR 96')], human), [], 'nothing for him: no red');
+  assert.deepEqual(waitingOn([f('Grok: review PR 96; Orchestrator: go for the demo')], human).map((w) => w.text), ['go for the demo'], 'his step anywhere in the flight');
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+  const html = renderToStaticMarkup(<FlightStepsText text="David: Ship it on PR 95; Grok: review PR 96" participants={P} />);
+  assert.match(html, /data-step-for="david"[^>]*>Orchestrator: <\/span>Ship it on PR 95; <span class="font-semibold" data-step-for="grok"[^>]*>Grok: <\/span>review PR 96/);
+});
