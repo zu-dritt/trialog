@@ -24,6 +24,7 @@ import {
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
+import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
 import { SHIP_EMOJI, ShipIt } from './ship';
 import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -162,6 +163,9 @@ export function RoomPane({
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const cursorAfterInsert = useRef<number | null>(null);
   const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Keyboard shortcuts (app/shortcuts.tsx): the message chosen with j / k, and the «?» list.
+  const [selected, setSelected] = useState<number | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const replyToRef = useRef<Message | null>(null);
@@ -617,6 +621,40 @@ export function RoomPane({
     markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
 
+  // Only the leading pane listens, so in Split view one key press moves one selection.
+  useShortcuts(lead, (action) => {
+    switch (action) {
+      case 'next':
+      case 'previous': {
+        const id = stepTo(messages.map((m) => m.id), selected, action);
+        if (id === null) return false;
+        setSelected(id);
+        const el = listRef.current?.querySelector(`#m-${id}`);
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return true;
+      }
+      case 'reply': {
+        const m = messages.find((x) => x.id === selected);
+        if (!m) return false;
+        startReply(m);
+        return true;
+      }
+      case 'compose': boxRef.current?.focus(); return true;
+      case 'search': {
+        const field = document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]');
+        if (!field) return false;
+        field.focus();
+        return true;
+      }
+      case 'help': setHelpOpen((v) => !v); return true;
+      case 'escape':
+        if (helpOpen) { setHelpOpen(false); return true; }
+        if (selected !== null) { setSelected(null); return true; }
+        return false;
+      default: return false;
+    }
+  });
+
   const goToMessage = async (id: number) => {
     if (listRef.current?.querySelector(`#m-${id}`) || document.getElementById(`m-${id}`)) { jumpTo(id); onJumped?.(); return; }
     const oldest = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
@@ -839,7 +877,7 @@ export function RoomPane({
               <article
                 id={`m-${m.id}`}
                 tabIndex={-1}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id || selected === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`} data-selected={selected === m.id ? '' : undefined}
                 style={{ borderLeftColor: own }}
               >
                 <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
@@ -935,6 +973,7 @@ export function RoomPane({
       </MentionColors.Provider>
 
       {statusBar}
+      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
 
       <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-accent bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
