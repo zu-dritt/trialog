@@ -1,0 +1,19 @@
+{
+  "head": "23131e267d7a8e460000676f3a80cce103c5139e",
+  "viewports": [
+    "1280x800",
+    "390x844"
+  ],
+  "files": [
+    "desktop-1280x800-boxed.png",
+    "desktop-1280x800.png",
+    "desktop-hub-strip-1280x800-boxed.png",
+    "desktop-hub-strip-1280x800.png",
+    "phone-390x844-boxed.png",
+    "phone-390x844-cards.png",
+    "phone-390x844.png",
+    "phone-hub-strip-390x844-boxed.png",
+    "phone-hub-strip-390x844.png"
+  ],
+  "notes": "Local production demo build. /api/pr stubbed: 106 and 98 merged, others open. Cards: Ship it on PR 106 (green merged, no button), Ship it on PR 107 (red, button), PR 106 in review (green merged, no button), PR 107 in review (amber, button), Agree #791 (red). Strip waits on Agree and PR 107 only."
+}
