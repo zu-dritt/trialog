@@ -55,7 +55,10 @@ export function FlightStrip({ flights, now, participants = [] }: { flights: read
         const sentence = flightSentence(f, now, shown);
         return (
           <span key={f.participant} data-flight={tone} title={sentence} className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
-            <span aria-hidden="true" className="inline-block h-2 w-2 flex-none rounded-full" style={{ background: DOT[tone] }} />
+            {/* The whole sentence for screen readers, also on a phone where the words are hidden. */}
+            <span className="sr-only">{sentence}</span>
+            <span aria-hidden="true" className="contents">
+            <span className="inline-block h-2 w-2 flex-none rounded-full" style={{ background: DOT[tone] }} />
             <span className="font-semibold" style={{ color: colorOf(f.participant, participants) }}>{shown}</span>
             {tone !== 'idle' && (
               <span className="max-w-[44ch] truncate text-fg/90 max-sm:hidden">
@@ -63,6 +66,7 @@ export function FlightStrip({ flights, now, participants = [] }: { flights: read
               </span>
             )}
             {tone === 'idle' && <span className="text-muted max-sm:hidden">idle</span>}
+            </span>
           </span>
         );
       })}
