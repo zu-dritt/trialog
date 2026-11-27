@@ -48,7 +48,8 @@
   /* A long word or address wraps; a wide table scrolls inside its own box, not the whole list (#857). */
   .md { overflow-wrap: anywhere; }
   .md table { border-collapse: collapse; margin: 6px 0; display: block; max-width: 100%; overflow-x: auto; }
-  .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; }
+  /* Cells wrap at spaces only: «anywhere» from .md would shred a wide table into one-letter columns on a phone; the table scrolls instead (Grok's review of PR 109). */
+  .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; overflow-wrap: normal; }
   .md th { font-weight: 700; }
   .md blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--color-line); color: var(--color-muted); }
 }
