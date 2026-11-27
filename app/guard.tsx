@@ -6,9 +6,10 @@
 //
 // The ring is green, amber from 80% of the daily limit, and red while the guard holds wake-ups
 // back. The chart is drawn by hand in SVG: the page loads nothing from elsewhere.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { headsUpAt, type GuardLimit, type GuardReport } from '../lib/guard';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
+import { StreakSection } from './streak';
 
 /** How often the ring asks GET /api/guard. */
 export const GUARD_RING_MS = 60_000;
@@ -190,7 +191,8 @@ export function GuardFigure({ label, value, of }: { label: string; value: number
  * The Guard panel: what holds wake-ups back, the chart and the three figures. Escape or the
  * Close button closes it, and the focus goes back to the ring.
  */
-export function GuardPanel({ id, report, error, participants, onClose }: {
+export function GuardPanel({ id, report, error, participants, onClose, children }: {
+  children?: ReactNode;
   id?: string;
   report: GuardReport | null;
   error: string;
@@ -205,7 +207,7 @@ export function GuardPanel({ id, report, error, participants, onClose }: {
   return (
     <div
       id={id} role="dialog" aria-label="Guard"
-      className="absolute bottom-full right-2 z-20 mb-2 w-[min(22rem,calc(100vw-1rem))] rounded-lg border border-line bg-panel p-3 shadow-lg"
+      className="absolute bottom-full right-2 z-20 mb-2 max-h-[75dvh] w-[min(22rem,calc(100vw-1rem))] overflow-y-auto rounded-lg border border-line bg-panel p-3 shadow-lg"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="m-0 text-sm font-semibold">Guard</h2>
@@ -225,6 +227,7 @@ export function GuardPanel({ id, report, error, participants, onClose }: {
             <GuardFigure label="In a row without a human" value={report.now.inARow} of={report.limits.inARow} />
             <GuardFigure label="Pauses, last 24 hours" value={report.pausesToday} />
           </div>
+          {children}
         </>
       ) : !error && <p className="m-0 text-xs text-muted">Loading…</p>}
     </div>
@@ -272,7 +275,7 @@ export function Guard({ api, participants }: { api: ApiFn | null; participants: 
   return (
     <span ref={rootRef} className="contents">
       <GuardRing report={report} open={open} onToggle={() => setOpen((v) => !v)} controls={panelId} />
-      {open && <GuardPanel id={panelId} report={report} error={error} participants={participants} onClose={close} />}
+      {open && <GuardPanel id={panelId} report={report} error={error} participants={participants} onClose={close}>{api && <StreakSection api={api} participants={participants} />}</GuardPanel>}
     </span>
   );
 }
