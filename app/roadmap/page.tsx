@@ -5,6 +5,7 @@
 // stays current while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
 import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
+import { useMergedPrs } from '../merged';
 import { ROADMAP_NOTE_MAX, type RoadmapColumn, type RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
 import { uploadRequest, useImageLoader } from '../attachments';
@@ -98,6 +99,9 @@ export default function RoadmapPage() {
 
   // «🚀 Ship it!» from a card (playground #617): a message to the card's reviewer, with the 🚀 on it,
   // the same go as pressing Ship it on a message. The reviewer merges, as always.
+  // PRs named on cards that are not done yet: once merged, their cards stop being red (#813).
+  const merged = useMergedPrs(token, items.filter((i) => i.column !== 'done').map((i) => i.note));
+
   const ship = useCallback(async (card: RoadmapItem, prs: readonly number[]): Promise<boolean> => {
     setBusy(true);
     try {
@@ -162,7 +166,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship }} loadImage={loadImage} />
     </main>
   );
 }

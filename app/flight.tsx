@@ -8,6 +8,7 @@
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { REPO, shortLabel } from './links';
+import { settledByMerge, useMergedPrs } from './merged';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
@@ -76,12 +77,13 @@ export function flightSteps(text: string): { name: string | null; text: string }
   }).filter((step) => step.text);
 }
 
-export function waitingOn(flights: readonly Flight[], human: Pick<Participant, 'name' | 'label'>): WaitOnHuman[] {
+export function waitingOn(flights: readonly Flight[], human: Pick<Participant, 'name' | 'label'>, merged: ReadonlySet<number> = new Set(), repo: string | null = REPO): WaitOnHuman[] {
   const names = [human.name, human.label].filter(Boolean).map((n) => String(n).toLowerCase());
   return flights.flatMap((f) => {
     if (f.state !== 'waiting' || f.participant === human.name) return [];
     // Only the steps addressed to this human wait on them; «Grok: review PR 96» in the same flight does not (#743).
-    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()))
+    // A step about PRs that are all merged is done, whatever the note still says (#813).
+    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()) && !settledByMerge(step.text, merged, repo))
       .map((step) => ({ by: f.participant, text: step.text, since: f.since }));
   });
 }
@@ -125,7 +127,7 @@ export function humanSentence(shown: string, waits: readonly WaitOnHuman[], part
 }
 
 /** The strip. Nothing at all when nobody has set a flight. */
-export function FlightStrip({ flights, now, participants = [], position = 'top', onFlip }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void }) {
+export function FlightStrip({ flights, now, participants = [], position = 'top', onFlip, merged }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void; merged?: ReadonlySet<number> }) {
   if (!flights.length) return null;
   return (
     <div data-position={position} className={`flex min-w-0 items-center gap-3 bg-[#1a1d25] px-4 py-1 text-[13px] ${position === 'top' ? 'border-b border-line' : 'border-t border-line'}`}>
@@ -136,7 +138,7 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
       <div role="status" aria-label="Work in flight" className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* The humans first: red and blinking while an agent waits on them (playground #578). */}
       {participants.filter((p) => p.kind === 'human').map((h) => {
-        const waits = waitingOn(flights, h);
+        const waits = waitingOn(flights, h, merged);
         const shown = labelOf(h.name, participants);
         const sentence = humanSentence(shown, waits, participants);
         return (
@@ -221,5 +223,6 @@ export function FlightBar({ token, onUnauthorized, participants = [], position =
     };
   }, [token]);
 
-  return <FlightStrip flights={flights} now={now} participants={participants} position={position} onFlip={onFlip} />;
+  const merged = useMergedPrs(token, flights.filter((f) => f.state === 'waiting').map((f) => f.text));
+  return <FlightStrip flights={flights} now={now} participants={participants} position={position} onFlip={onFlip} merged={merged} />;
 }
