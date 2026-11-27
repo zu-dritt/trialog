@@ -36,7 +36,8 @@ export function typing(target: EventTarget | null | undefined): boolean {
 export function shortcutFor(e: KeyLike): ShortcutAction | null {
   if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return null;
   if (typing(e.target)) return null;
-  switch (e.key) {
+  // Caps Lock or Shift gives «J»: the same key (Grok's nit on PR 79). «?» is Shift+/ and stays itself.
+  switch (e.key.length === 1 ? e.key.toLowerCase() : e.key) {
     case 'j': return 'next';
     case 'k': return 'previous';
     case 'r': return 'reply';
@@ -77,13 +78,32 @@ export function useShortcuts(enabled: boolean, handle: (action: ShortcutAction) 
 
 /** The «?» list. */
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
+  // A real dialog (Grok's nits on PR 79): focus moves into it and stays there, and Esc closes it
+  // even while the message box has focus, where the page's shortcuts don't listen.
+  const close = useRef<HTMLButtonElement>(null);
+  const before = useRef<Element | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    before.current = document.activeElement;
+    close.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeRef.current(); }
+      else if (e.key === 'Tab') { e.preventDefault(); close.current?.focus(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      (before.current as HTMLElement | null)?.focus?.();
+    };
+  }, []);
   return (
-    <div role="dialog" aria-modal="false" aria-label="Keyboard shortcuts" onClick={onClose}
+    <div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={onClose}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div onClick={(e) => e.stopPropagation()} className="w-[min(26rem,100%)] rounded-xl border border-line bg-panel p-4 shadow-xl">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="m-0 text-base font-semibold">Keyboard shortcuts</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
+          <button ref={close} type="button" onClick={onClose} aria-label="Close" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
         </div>
         <table className="w-full text-sm">
           <tbody>

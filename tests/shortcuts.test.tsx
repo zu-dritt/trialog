@@ -49,3 +49,20 @@ test('the leading pane listens, marks the selected message, and shows the list',
   assert.match(pane, /selected === m\.id \? 'shadow-\[inset_0_0_0_2px_var\(--color-accent\)\]'|marked === m\.id \|\| selected === m\.id/);
   assert.match(pane, /\{helpOpen && <ShortcutsHelp onClose=/);
 });
+
+test('Grok\'s nits on PR 79: J with Caps Lock or Shift, a real dialog, and «/» finds the search field by a data attribute', async () => {
+  const page = { tagName: 'DIV' } as unknown as EventTarget;
+  assert.deepEqual(['J', 'K', 'R', 'N'].map((key) => shortcutFor({ key, target: page })), ['next', 'previous', 'reply', 'compose']);
+  assert.equal(shortcutFor({ key: '?', target: page }), 'help');
+  const html = renderToStaticMarkup(<ShortcutsHelp onClose={() => {}} />);
+  assert.match(html, /role="dialog" aria-modal="true"/);
+  const { readFileSync } = await import('node:fs');
+  const pane = readFileSync(new URL('../app/pane.tsx', import.meta.url), 'utf8');
+  assert.match(pane, /querySelector<HTMLInputElement>\('input\[data-search-field\]'\)/);
+  assert.match(pane, /button\[data-search-opener\]'\)\?\.click\(\)/, 'on a phone «/» opens the folded search bar');
+  const search = readFileSync(new URL('../app/search.tsx', import.meta.url), 'utf8');
+  assert.match(search, /data-search-opener=""/);
+  assert.match(search, /data-search-field=""/);
+  const shortcuts = readFileSync(new URL('../app/shortcuts.tsx', import.meta.url), 'utf8');
+  assert.match(shortcuts, /if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); closeRef\.current\(\); \}/, 'Esc closes it from the message box too');
+});

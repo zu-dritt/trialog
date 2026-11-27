@@ -1644,6 +1644,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const item = toRoadmap(cur);
         if (item.column === 'done') return { status: 'done', item };
         if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item };
+        if (attempt === 1) return { status: 'busy', item };
       }
       return { status: 'not_found' };
     },

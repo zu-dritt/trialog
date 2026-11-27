@@ -29,6 +29,7 @@ export const PATCH = safe(async (request: Request, ctx: Ctx) => {
     if (result.status === 'not_found') return error(404, 'No such card.');
     if (result.status === 'taken') return json({ error: `Already ${result.owner}'s. Nothing changed.`, owner: result.owner, item: result.item }, 409);
     if (result.status === 'done' && owner === me) return json({ error: 'This card is done; there is nothing to claim.', item: result.item }, 409);
+    if (result.status === 'busy') return json({ error: 'The card changed while you claimed it. Try again.', item: result.item }, 409);
     if (!Object.keys(rest).length) return json({ item: result.item });
   }
   const change = owner !== undefined && roster.find((p) => p.name === me)?.kind === 'human' ? input.change : rest;
