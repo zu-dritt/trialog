@@ -3,8 +3,8 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { useState, type DragEvent, type FormEvent } from 'react';
-import { ROADMAP_COLUMNS, type RoadmapColumn, type RoadmapItem } from '../lib/roadmap';
+import { Fragment, useState, type DragEvent, type FormEvent } from 'react';
+import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
@@ -19,6 +19,29 @@ export function placeAt(ids: readonly string[], id: string, index: number): stri
 
 export const columnOf = (items: readonly RoadmapItem[], column: RoadmapColumn): RoadmapItem[] =>
   items.filter((i) => i.column === column).sort((a, b) => a.position - b.position);
+
+/** The LED colours, the same as the work-in-flight strip's dots. */
+const LED: Record<CardStatus['tone'], string> = { blocked: '#f85149', review: '#d29922', working: '#3fb950', stale: '#6e7681' };
+
+/** A card's LED and its word: red and blinking when it waits on the orchestrator. */
+export function CardLed({ status }: { status: CardStatus }) {
+  return (
+    <span data-led={status.tone} className={`ml-1.5 inline-flex items-center gap-1 align-middle text-[11px] font-semibold ${status.tone === 'blocked' ? 'text-[#ff7b72]' : 'text-muted'}`}>
+      <span aria-hidden="true" className={`inline-block flex-none rounded-full ${status.tone === 'blocked' ? 'h-2.5 w-2.5 blink-red' : 'h-2 w-2'}`} style={{ background: LED[status.tone] }} />
+      {status.label}
+    </span>
+  );
+}
+
+const hoursText = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${Math.round(h * 10) / 10} h`);
+
+/** The words on the line: what is above it, and why there. */
+export function todayLineText(line: TodayLine, cards: number): string {
+  const pace = `${line.done} done in ${hoursText(line.hours)}`;
+  if (line.left <= 0) return `▲ the day is over · ${pace}`;
+  if (line.fits >= cards) return `▲ all of Next likely today · ${pace}, ${hoursText(line.left)} left`;
+  return `▲ likely today: ${line.fits === 0 ? 'nothing more from Next' : `the ${line.fits} above`} · ${pace}, ${hoursText(line.left)} left`;
+}
 
 export interface BoardActions {
   /** Put `id` into `column` at `index`: a move (if the column changes) and the column's new order. */
@@ -51,7 +74,10 @@ export function IdeaBox({ onAdd, busy = false }: { onAdd: (title: string) => Pro
   );
 }
 
-export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null }) {
+export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date }) {
+  const today = todayLine(items, now);
+  const at = (now ?? new Date()).getTime();
+  const humans = participants.filter((p) => p.kind === 'human').flatMap((p) => [p.name, p.label ?? '']).filter(Boolean);
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<{ column: RoadmapColumn; index: number } | null>(null);
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
@@ -74,8 +100,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
             <h2 className="m-0 px-3 pb-1 pt-2 text-base font-bold" style={{ color: COLUMN_COLORS[column] }}>{COLUMN_TITLES[column]} <span className="text-xs font-normal text-muted">{cards.length}</span></h2>
             {column === 'later' && actions?.addIdea && <IdeaBox onAdd={actions.addIdea} busy={busy} />}
             <ol className="m-0 flex flex-1 list-none flex-col gap-2 p-2 pt-1">
-              {cards.map((card, index) => (
-                <li key={card.id} data-card-id={card.id}
+              {cards.map((card, index) => (<Fragment key={card.id}>
+                {column === 'next' && today && today.fits === index && <TodayMark line={today} cards={cards.length} onDragOver={(e) => { if (!actions) return; e.preventDefault(); e.stopPropagation(); if (over?.column !== column || over.index !== Math.max(0, index - 1)) setOver({ column, index: Math.max(0, index - 1) }); }} onDrop={(e) => { e.stopPropagation(); drop(e, column, Math.max(0, index - 1)); }} />}
+                <li data-card-id={card.id}
                   draggable={Boolean(actions)}
                   onDragStart={(e) => { setDragged(card.id); e.dataTransfer.setData('text/plain', card.id); e.dataTransfer.effectAllowed = 'move'; }}
                   onDragEnd={() => { setDragged(null); setOver(null); }}
@@ -86,7 +113,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                   <div className="flex items-start gap-2">
                     <span className="w-5 flex-none pt-0.5 text-right text-xs tabular-nums text-muted">{index + 1}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold leading-snug">{card.title}</div>
+                      <div className="text-sm font-semibold leading-snug">{card.title}{(() => { const st = cardStatus(card, at, humans.length ? humans : undefined); return st && <CardLed status={st} />; })()}</div>
                       {(card.note || card.owner) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {card.owner && <span className="font-semibold" style={{ color: colorOf(card.owner, participants) }}>{labelOf(card.owner, participants)}</span>}
@@ -101,27 +128,41 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       </span>
                     )}
                   </div>
-                  {actions && (
+                  {/* Done is done: no column menu (drag or ↑ ↓ still move a card back). */}
+                  {actions && column !== 'done' && (
                     <label className="mt-1 flex items-center gap-1 pl-7 text-[11px] text-muted">
                       <span className="sr-only">Column of «{card.title}»</span>
                       <select value={column} disabled={busy} onChange={(e) => actions.place(card.id, e.target.value as RoadmapColumn, Number.MAX_SAFE_INTEGER)} className="rounded border border-line bg-bg px-1 py-0.5 text-[11px] text-muted">
                         {ROADMAP_COLUMNS.map((c) => <option key={c} value={c}>{COLUMN_TITLES[c]}</option>)}
                       </select>
-                      {actions.claim && me && column !== 'done' && card.owner === null && (
+                      {actions.claim && me && card.owner === null && (
                         <button type="button" disabled={busy} data-claim={card.id} onClick={() => actions.claim!(card.id, true)} title="Take this card. The first claim wins." className="ml-auto cursor-pointer rounded border border-line bg-[#2a2f3a] px-2 py-0.5 text-[11px] text-fg hover:bg-[#343a47]">Claim</button>
                       )}
-                      {actions.claim && me && card.owner === me && column !== 'done' && (
+                      {actions.claim && me && card.owner === me && (
                         <button type="button" disabled={busy} data-release={card.id} onClick={() => actions.claim!(card.id, false)} title="Let go of this card" className="ml-auto cursor-pointer rounded border border-line bg-transparent px-2 py-0.5 text-[11px] text-muted hover:text-fg">Release</button>
                       )}
                     </label>
                   )}
                 </li>
-              ))}
+              </Fragment>))}
+              {column === 'next' && today && cards.length > 0 && today.fits >= cards.length && <TodayMark line={today} cards={cards.length} />}
               {!cards.length && <li className="px-2 py-4 text-center text-xs text-muted">{actions ? 'Drop a card here' : 'Nothing here'}</li>}
             </ol>
           </section>
         );
       })}
     </div>
+  );
+}
+
+/** The dashed «likely today» line in «Next». A card dropped on it becomes the last one above it. */
+function TodayMark({ line, cards, onDragOver, onDrop }: { line: TodayLine; cards: number; onDragOver?: (e: DragEvent) => void; onDrop?: (e: DragEvent) => void }) {
+  return (
+    <li role="separator" data-today-line={line.fits} onDragOver={onDragOver} onDrop={onDrop}
+      className="flex items-center gap-2 py-1 text-[11px] font-semibold text-[#ffd166]"
+      title={`Today's pace: cards in Done changed today, per hour since ${DAY_START_HOUR}:00 (or the first change, if earlier; a late start makes the pace look slower), times the hours left until ${DAY_END_HOUR}:00, less the cards in Now. Drag a card above the line to do it today.`}>
+      <span className="h-0 w-4 flex-none border-t-2 border-dashed border-[#ffd166]" />
+      <span className="min-w-0 flex-1 leading-snug">{todayLineText(line, cards)}</span>
+    </li>
   );
 }

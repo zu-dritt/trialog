@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
-import type { RoadmapItem } from '../lib/roadmap';
+import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
-  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', ...over });
+  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, ...over });
 
 test('a card lands where it is put, from its own column or another', () => {
   assert.deepEqual(placeAt(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
@@ -57,6 +57,37 @@ test('the roadmap tab is named «Trialog Roadmap»', async () => {
   assert.match(readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8'), /document\.title = 'Trialog Roadmap'/);
 });
 
+test('the «likely today» line: today’s pace times the hours left, less the cards in Now', () => {
+  const at = (h: number, m = 0) => { const d = new Date(2026, 10, 27, h, m); return d; };
+  const iso = (h: number, m = 0) => at(h, m).toISOString();
+  // Four cards done between 08:00 and 12:00: one an hour. 12:00 → 19:00 leaves 7 h, so 7 cards;
+  // one is still in Now, so 6 from Next.
+  const done = [9, 10, 11, 12].map((h, n) => card(`rm_done000${n}`, 'done', n, { updated_at: iso(h) }));
+  const yesterday = card('rm_old00000', 'done', 9, { updated_at: new Date(2026, 10, 26, 15).toISOString() });
+  const next = Array.from({ length: 9 }, (_, n) => card(`rm_next000${n}`, 'next', n));
+  const items = [...done, yesterday, card('rm_now00000', 'now', 0), ...next];
+  assert.deepEqual(todayLine(items, at(12)), { fits: 6, done: 4, hours: 4, left: 7 });
+  assert.equal(todayLine([yesterday, ...next], at(12)), null, 'no pace before the first card done today');
+  assert.equal(todayLine(items, at(19, 30))?.fits, 0, 'after 19:00 nothing more');
+  assert.equal(todayLine(items, at(12), 13)?.fits, 0, 'one hour left, one card in Now: nothing from Next');
+
+  const view = renderToStaticMarkup(<RoadmapBoard items={items} now={at(12)} actions={{ place: () => {} }} />);
+  const nextColumn = view.slice(view.indexOf('data-column="next"'), view.indexOf('data-column="later"'));
+  const order = [...nextColumn.matchAll(/data-card-id="([a-z0-9_]+)"|data-today-line="(\d+)"/g)].map((m) => m[1] ?? 'LINE');
+  assert.deepEqual(order.slice(5, 8), ['rm_next0005', 'LINE', 'rm_next0006'], 'the line after the sixth card');
+  assert.match(nextColumn, /▲ likely today: the 6 above · 4 done in 4 h, 7 h left/);
+  assert.ok(!view.slice(0, view.indexOf('data-column="next"')).includes('data-today-line'), 'only in Next');
+
+  // Reordered: the line stays after six cards, whichever they are.
+  const moved = items.map((i) => (i.id === 'rm_next0008' ? { ...i, position: -1 } : i));
+  const after = renderToStaticMarkup(<RoadmapBoard items={moved} now={at(12)} />);
+  const ids = [...after.slice(after.indexOf('data-column="next"')).matchAll(/data-card-id="([a-z0-9_]+)"|data-today-line="(\d+)"/g)].map((m) => m[1] ?? 'LINE');
+  assert.deepEqual(ids.slice(0, 7), ['rm_next0008', 'rm_next0000', 'rm_next0001', 'rm_next0002', 'rm_next0003', 'rm_next0004', 'LINE']);
+
+  const few = renderToStaticMarkup(<RoadmapBoard items={[...done, ...next.slice(0, 2)]} now={at(12)} />);
+  assert.match(few, /▲ all of Next likely today/, 'when everything fits, the line sits at the end');
+});
+
 test('«+ Idee» sits at the top of Later when the page can add, and nowhere else', () => {
   const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />);
   assert.equal(html.match(/data-idea-box=""/g)?.length, 1);
@@ -65,4 +96,33 @@ test('«+ Idee» sits at the top of Later when the page can add, and nowhere els
   assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {} }} />).includes('data-idea-box'));
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
+});
+
+test('card LEDs: red and blinking when a card waits on the orchestrator, amber in review, green or grey in Now', async () => {
+  const { cardStatus } = await import('../lib/roadmap');
+  const T = Date.parse('2026-11-27T12:00:00Z');
+  const c = (column: RoadmapItem['column'], note: string, over: Partial<RoadmapItem> = {}) => ({ column, note, owner: 'claude', updated_at: '2026-11-27T11:30:00Z', ...over });
+  assert.equal(cardStatus(c('now', '⛔ WAITING ON DAVID: merge apartment-finder PR 37'), T)?.tone, 'blocked');
+  assert.equal(cardStatus(c('next', 'David: your call on the first breaks'), T)?.tone, 'blocked', 'in Next too: «Name: step», as in a flight');
+  assert.equal(cardStatus(c('later', 'waiting on the orchestrator'), T)?.tone, 'blocked');
+  assert.equal(cardStatus(c('now', 'Orchestrator: go for the demo'), T)?.tone, 'blocked', 'by label as well');
+  assert.equal(cardStatus(c('now', 'PR 86, in review'), T)?.tone, 'review');
+  assert.equal(cardStatus(c('now', 'new: from the pace'), T)?.tone, 'working');
+  assert.deepEqual(cardStatus(c('now', 'new', { updated_at: '2026-11-27T07:00:00Z' }), T), { tone: 'stale', label: 'no change for 5 h' });
+  assert.equal(cardStatus(c('now', 'nobody has it', { owner: null }), T), null, 'no owner, no work');
+  assert.equal(cardStatus(c('next', 'queued'), T), null, 'queued cards stay quiet');
+  assert.equal(cardStatus(c('done', '⛔ old note'), T), null, 'done is done');
+  assert.equal(cardStatus(c('now', 'Davidson: not him'), T)?.tone, 'working', 'whole names only');
+  assert.equal(cardStatus(c('next', 'your call: clean start or today’s breaks', { owner: 'david' }), T)?.tone, 'blocked', 'the orchestrator’s own card waits on him');
+  assert.equal(cardStatus(c('now', 'trying the demo', { owner: 'david' }), T)?.tone, 'working', 'his own card in Now: he is on it, no blink');
+
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_blocked00', 'now', 0, { owner: 'claude', note: 'David: merge apartment-finder PR 37', updated_at: new Date(T - 60_000).toISOString() }), card('rm_review000', 'now', 1, { owner: 'grok', note: 'PR 87, in review' }), card('rm_done00000', 'done', 0, { owner: 'claude', note: 'live (PR 85)' })];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
+  assert.match(html, /data-led="blocked"[^>]*><span aria-hidden="true" class="[^"]*blink-red[^"]*" style="background:#f85149"><\/span>waiting on you/);
+  assert.match(html, /data-led="review"/);
+  const done = html.slice(html.indexOf('data-column="done"'), html.indexOf('data-column="now"'));
+  assert.ok(!done.includes('<select') && !done.includes('data-led'), 'Done: no column menu, no LED');
+  assert.ok(done.includes('draggable="true"'), 'a done card can still be dragged back');
+  assert.equal(html.match(/<select/g)?.length, 2, 'the menu stays on the cards in Now');
 });
