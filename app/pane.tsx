@@ -8,6 +8,7 @@ import type { Message, Poll, Sender } from '../lib/core';
 import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } from '../lib/shared';
 import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
+import { watchNap } from './nap';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision } from './decision';
@@ -241,6 +242,9 @@ export function RoomPane({
     if (!token) return undefined;
     let stopped = false;
     const abort = new AbortController();
+    // The open stream's own switch: a nap (the tab hidden for 15 minutes) ends it, so the database can sleep.
+    let conn = new AbortController();
+    const nap = watchNap(document, () => conn.abort());
     lastId.current = 0;
     setMessages([]);
     setPinned([]);
@@ -360,7 +364,8 @@ export function RoomPane({
       toldStream = seenOfOthers();
       let firstRooms = true;
       const query = params.toString() ? `?${params}` : '';
-      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
+      conn = new AbortController();
+      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: AbortSignal.any([abort.signal, conn.signal]) });
       if (!res.body) throw new Error('no stream');
       const opened = Date.now();
       let goodbye = false;
@@ -398,6 +403,11 @@ export function RoomPane({
 
     const run = async () => {
       while (!stopped) {
+        if (nap.napping) {
+          if (lead) setStatus?.('live · napping while hidden');
+          await nap.awake(abort.signal);
+          if (stopped) return;
+        }
         let clean = false;
         try {
           await loadParticipants();
@@ -407,9 +417,9 @@ export function RoomPane({
           if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
         }
         if (stopped) return;
-        if (clean) continue;
+        if (clean || nap.napping) continue;
         const until = Date.now() + FALLBACK_MS;
-        while (!stopped && Date.now() < until) {
+        while (!stopped && !nap.napping && Date.now() < until) {
           try {
             await pollOnce();
             if (!stopped && lead) setStatus?.('live · polling');
@@ -422,7 +432,7 @@ export function RoomPane({
       }
     };
     void run();
-    return () => { stopped = true; abort.abort(); if (lead) window.removeEventListener('storage', onStorage); };
+    return () => { stopped = true; abort.abort(); nap.stop(); if (lead) window.removeEventListener('storage', onStorage); };
   }, [token, api, room, lead, onMissingRoom, setMe, setParticipants, setRooms, setSeenChanged, setServerBuild, setSetupError, setStatus]);
 
   useEffect(() => { onHeard?.(messages, primed); }, [messages, primed, onHeard]);
