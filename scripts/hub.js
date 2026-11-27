@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | claim <id> [--note t] | release <id> | progress <id> <0-100|-> [status] | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | claim <id> [--note t] | release <id> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -389,6 +389,14 @@ async function main() {
       console.log(opts.json ? JSON.stringify(data.item) : `${id}: ${data.item.progress ?? '–'}%${data.item.status ? ` · ${data.item.status}` : ''}`);
       return;
     }
+    if (sub === 'reviewer') {
+      // roadmap reviewer <rm_id> <name|->   who reviews the card: «Claude builds · Grok reviews»; «-» clears it
+      const [id, who] = rest;
+      if (!id || !who) usage('roadmap reviewer <rm_id> <name|->');
+      const data = await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ reviewer: who === '-' ? null : who }) });
+      console.log(opts.json ? JSON.stringify(data.item) : `${id}: reviewer ${data.item.reviewer ?? '–'}`);
+      return;
+    }
     if (sub === 'drop') {
       const [id] = rest;
       if (!id) usage('roadmap drop <rm_id>');
@@ -396,7 +404,7 @@ async function main() {
       console.log(`removed ${id}`);
       return;
     }
-    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap release <id> | roadmap move <id> <column> | roadmap drop <id>');
+    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap release <id> | roadmap reviewer <id> <name|-> | roadmap move <id> <column> | roadmap drop <id>');
   }
 
 
