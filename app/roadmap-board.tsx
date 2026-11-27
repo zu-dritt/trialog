@@ -3,7 +3,7 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { useState, type DragEvent } from 'react';
+import { useState, type DragEvent, type FormEvent } from 'react';
 import { ROADMAP_COLUMNS, type RoadmapColumn, type RoadmapItem } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 
@@ -25,6 +25,30 @@ export interface BoardActions {
   place: (id: string, column: RoadmapColumn, index: number) => void;
   /** Claim a card with no owner (the first claim wins), or let go of your own. */
   claim?: (id: string, take: boolean) => void;
+  /** Adds an idea at the top of «Later»: a card, not a message, so it wakes no one. */
+  addIdea?: (title: string) => Promise<boolean>;
+}
+
+/**
+ * «+ Idee»: one line, Enter, and it is a card at the top of «Later». No message is sent, so nobody
+ * is woken; the agents pick ideas up when they are between tasks (playground #596).
+ */
+export function IdeaBox({ onAdd, busy = false }: { onAdd: (title: string) => Promise<boolean>; busy?: boolean }) {
+  const [text, setText] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const title = text.trim();
+    if (!title || busy) return;
+    if (await onAdd(title)) setText('');
+  };
+  return (
+    <form onSubmit={(e) => { void submit(e); }} className="mx-2 mb-1 flex gap-1.5" data-idea-box="">
+      <input value={text} onChange={(e) => setText(e.target.value)} maxLength={80} placeholder="+ Idee: eine Zeile, Enter"
+        aria-label="Add an idea to Later (no message, wakes no one)" title="Adds a card to «Later». No message, so it wakes no one."
+        className="min-w-0 flex-1 rounded-md border border-dashed border-line bg-bg px-2 py-1 text-sm placeholder:text-muted" />
+      <button type="submit" disabled={!text.trim() || busy} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-2 text-sm disabled:opacity-40">+</button>
+    </form>
+  );
 }
 
 export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null }) {
@@ -48,6 +72,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
           >
             <div className="h-1.5 rounded-t-xl" style={{ background: COLUMN_COLORS[column] }} />
             <h2 className="m-0 px-3 pb-1 pt-2 text-base font-bold" style={{ color: COLUMN_COLORS[column] }}>{COLUMN_TITLES[column]} <span className="text-xs font-normal text-muted">{cards.length}</span></h2>
+            {column === 'later' && actions?.addIdea && <IdeaBox onAdd={actions.addIdea} busy={busy} />}
             <ol className="m-0 flex flex-1 list-none flex-col gap-2 p-2 pt-1">
               {cards.map((card, index) => (
                 <li key={card.id} data-card-id={card.id}

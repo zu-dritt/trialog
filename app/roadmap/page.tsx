@@ -19,7 +19,7 @@ export default function RoadmapPage() {
   const [busy, setBusy] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
-  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Roadmap · Trialog'; }, []);
+  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Trialog Roadmap'; }, []);
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     const res = await fetch(path, { ...init, cache: 'no-store', headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
@@ -83,6 +83,25 @@ export default function RoadmapPage() {
     }
   }, [token, participants, load]);
 
+  // An idea: a card at the top of «Later», noted as whose idea it is. No message: nobody is woken.
+  const addIdea = useCallback(async (title: string) => {
+    setBusy(true);
+    try {
+      const who = participants.find((p) => p.name === me)?.label ?? me ?? '';
+      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: 'later', title, note: `💡 idea from ${who}`.slice(0, 120) }) })) as { item: RoadmapItem };
+      const ids = [item.id, ...columnOf(items, 'later').map((i) => i.id)];
+      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column: 'later', ids }) });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not saved: ${e.message}`);
+      return false;
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [api, items, me, participants, load]);
+
   if (token === null) return null;
   if (!token) {
     return (
@@ -100,7 +119,7 @@ export default function RoadmapPage() {
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); } }} />
+      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea }} />
     </main>
   );
 }

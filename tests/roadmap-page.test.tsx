@@ -50,3 +50,19 @@ test('a card with no owner offers «Claim»; your own offers «Release»; done c
   assert.deepEqual([...html.matchAll(/data-release="([^"]+)"/g)].map((m) => m[1]), ['rm_dddddddd']);
   assert.ok(!renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, claim: () => {} }} />).includes('data-claim'), 'no claim without knowing who you are');
 });
+
+test('the roadmap tab is named «Trialog Roadmap»', async () => {
+  const { metadata } = await import('../app/roadmap/layout');
+  assert.equal(metadata.title, 'Trialog Roadmap');
+  assert.match(readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8'), /document\.title = 'Trialog Roadmap'/);
+});
+
+test('«+ Idee» sits at the top of Later when the page can add, and nowhere else', () => {
+  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />);
+  assert.equal(html.match(/data-idea-box=""/g)?.length, 1);
+  assert.match(html, /data-column="later"[^]*data-idea-box=""/);
+  assert.match(html, /aria-label="Add an idea to Later \(no message, wakes no one\)"/);
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {} }} />).includes('data-idea-box'));
+  const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
+});

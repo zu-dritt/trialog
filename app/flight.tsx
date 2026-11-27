@@ -6,7 +6,8 @@
 //   🟢 working · 🟡 waiting · ⚪ idle · 🔴 quiet: «working», but no message for 20 minutes.
 // On a phone only the dots and names fit; a tap on a name shows its text as a tooltip (title).
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { REPO, shortLabel } from './links';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
@@ -70,6 +71,22 @@ export function waitingOn(flights: readonly Flight[], human: Pick<Participant, '
   });
 }
 
+/** A GitHub address as a short name: «PR 36» in this repo, «apartment-finder PR 36» in another. */
+export function flightLinkLabel(href: string, repo: string | null = REPO): string {
+  const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(pull|issues)\/(\d+)\/?$/.exec(href);
+  if (!m) return shortLabel(href);
+  const kind = m[3] === 'pull' ? 'PR' : 'issue';
+  return repo && `${m[1]}/${m[2]}`.toLowerCase() === repo.toLowerCase() ? `${kind} ${m[4]}` : `${m[2]} ${kind} ${m[4]}`;
+}
+
+/** Flight text with its http(s) addresses as links, so «David: merge https://…/pull/36» opens that PR. */
+export function FlightText({ text, hidden = false }: { text: string; hidden?: boolean }) {
+  const parts = text.split(/(https?:\/\/[^\s<>«»"]+[^\s<>«»".,;:!?)])/);
+  return <>{parts.map((p, i) => (i % 2
+    ? <a key={i} href={p} tabIndex={hidden ? -1 : undefined} target="_blank" rel="noopener noreferrer" title={p} className="underline decoration-dotted underline-offset-2">{flightLinkLabel(p)}</a>
+    : p))}</>;
+}
+
 /** The words for a human's entry: what waits on them, or that nothing does. */
 export function humanSentence(shown: string, waits: readonly WaitOnHuman[], participants: readonly Participant[] = []): string {
   if (!waits.length) return `${shown}: nothing waiting on you`;
@@ -92,14 +109,13 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
         return (
           <span key={`human-${h.name}`} data-human={h.name} data-waiting={waits.length ? '' : undefined} title={sentence}
             className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
-            <span className="sr-only">{sentence}</span>
-            <span aria-hidden="true" className="contents">
-              <span className={`inline-block flex-none rounded-full ${waits.length ? 'h-2.5 w-2.5 blink-red' : 'h-2 w-2'}`} style={{ background: waits.length ? '#f85149' : DOT.idle }} />
-              <span className="font-semibold" style={{ color: colorOf(h.name, participants) }}>{shown}</span>
-              {waits.length
-                ? <span className="max-w-[40ch] truncate font-semibold text-[#ff7b72]">waiting on you ({waits.length}): {waits.map((w) => w.text).join(' · ')}</span>
-                : <span className="text-muted max-sm:hidden">nothing waiting on you</span>}
-            </span>
+            {/* Waiting: the words are read as shown, so their links can be reached by keyboard too. */}
+            {!waits.length && <span className="sr-only">{sentence}</span>}
+            <span aria-hidden="true" className={`inline-block flex-none rounded-full ${waits.length ? 'h-2.5 w-2.5 blink-red' : 'h-2 w-2'}`} style={{ background: waits.length ? '#f85149' : DOT.idle }} />
+            <span aria-hidden={waits.length ? undefined : true} className="font-semibold" style={{ color: colorOf(h.name, participants) }}>{shown}</span>
+            {waits.length
+              ? <span className="max-w-[60ch] truncate font-semibold text-[#ff7b72]">waiting on you ({waits.length}): {waits.map((w, i) => <Fragment key={i}>{i > 0 && ' · '}<FlightText text={w.text} /></Fragment>)}</span>
+              : <span aria-hidden="true" className="text-muted max-sm:hidden">nothing waiting on you</span>}
           </span>
         );
       })}
@@ -116,7 +132,7 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
             <span className="font-semibold" style={{ color: colorOf(f.participant, participants) }}>{shown}</span>
             {tone !== 'idle' && (
               <>
-                <span className="max-w-[32ch] truncate text-fg/90 max-sm:hidden">{WORD[tone]} «{f.text}»</span>
+                <span className="max-w-[32ch] truncate text-fg/90 max-sm:hidden">{WORD[tone]} «<FlightText text={f.text} hidden />»</span>
                 <span className="flex-none text-muted max-sm:hidden">· {flightAge(f.since, now)}</span>
               </>
             )}

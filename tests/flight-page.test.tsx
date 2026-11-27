@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { FlightStrip, flightAge, flightSentence, flightTone } from '../app/flight';
+import { FlightStrip, flightAge, flightLinkLabel, flightSentence, flightTone } from '../app/flight';
 import type { Flight } from '../lib/shared';
 
 const T = Date.parse('2026-11-27T08:00:00.000Z');
@@ -104,4 +104,17 @@ test('a human entry: red and blinking while an agent waits on them, grey otherwi
   assert.match(calm, /data-human="david"/);
   assert.doesNotMatch(calm, /blink-red/);
   assert.match(calm, /nothing waiting on you/);
+});
+
+test('an address in a flight is a link: the waiting pill opens the right pull request, in any repo', () => {
+  assert.equal(flightLinkLabel('https://github.com/amberleaf-gmbh/apartment-finder/pull/36', 'zu-dritt/trialog'), 'apartment-finder PR 36');
+  assert.equal(flightLinkLabel('https://github.com/zu-dritt/trialog/pull/83', 'zu-dritt/trialog'), 'PR 83');
+  const url = 'https://github.com/amberleaf-gmbh/apartment-finder/pull/36';
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const html = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={[flight({ participant: 'claude', state: 'waiting', text: `David: merge ${url}.`, since: ago(2) })]} />);
+  const human = html.slice(html.indexOf('data-human='), html.indexOf('data-flight='));
+  assert.match(human, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" title="${url}"[^>]*>apartment-finder PR 36</a>\\.`), 'a real link, the full sentence stop outside it');
+  assert.doesNotMatch(human.slice(human.indexOf('<a ')), /aria-hidden/, 'the link is not hidden from screen readers');
+  const agent = html.slice(html.indexOf('data-flight='));
+  assert.match(agent, /<a href="https:\/\/github\.com\/amberleaf-gmbh\/apartment-finder\/pull\/36" tabindex="-1"/, 'in the agent’s own (hidden) text: clickable, not a tab stop');
 });
