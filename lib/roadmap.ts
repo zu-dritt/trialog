@@ -138,18 +138,20 @@ export const CARD_STALE_HOURS = 3;
 
 /**
  * The LED for a card, from its own words, so it needs nothing else to load:
- * - red, blinking: it waits on a human. A human owns it, or the note says «⛔ …», «waiting on David/the orchestrator/you»
+ * - red, blinking: it waits on a human. A human owns it outside «Now» (it waits for their pick),
+ *   or the note says «⛔ …», «waiting on David/the orchestrator/you»
  *   or starts with «David: …» / «Orchestrator: …» (the same «Name: step» as a flight).
  * - amber: «in review» (a pull request waits for the other agent).
  * - green: in «Now» with an owner, changed within the last CARD_STALE_HOURS.
  * - grey: in «Now», but no change for longer.
- * Cards in Done, and queued cards in Next and Later, have no LED unless they wait on a human.
+ * A human's own card in «Now» is work they are doing: green like anyone's. Done cards never have an
+ * LED; queued cards in Next and Later have one only when they wait on a human.
  */
 export function cardStatus(item: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number = Date.now(), humans: readonly string[] = ['david', 'orchestrator']): CardStatus | null {
   if (item.column === 'done') return null;
   const note = item.note.trim();
   const names = humans.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const human = item.owner !== null && humans.some((h) => h.toLowerCase() === item.owner!.toLowerCase());
+  const human = item.column !== 'now' && item.owner !== null && humans.some((h) => h.toLowerCase() === item.owner!.toLowerCase());
   if (human || /⛔/.test(note) || new RegExp(`waiting on (the )?(${names}|you)\\b`, 'i').test(note) || new RegExp(`^@?(${names})\\s*:`, 'i').test(note)) return { tone: 'blocked', label: 'waiting on you' };
   if (/\bin review\b/i.test(note)) return { tone: 'review', label: 'in review' };
   if (item.column !== 'now' || !item.owner) return null;

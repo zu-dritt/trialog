@@ -114,6 +114,7 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   assert.equal(cardStatus(c('done', '⛔ old note'), T), null, 'done is done');
   assert.equal(cardStatus(c('now', 'Davidson: not him'), T)?.tone, 'working', 'whole names only');
   assert.equal(cardStatus(c('next', 'your call: clean start or today’s breaks', { owner: 'david' }), T)?.tone, 'blocked', 'the orchestrator’s own card waits on him');
+  assert.equal(cardStatus(c('now', 'trying the demo', { owner: 'david' }), T)?.tone, 'working', 'his own card in Now: he is on it, no blink');
 
   const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
   const items = [card('rm_blocked00', 'now', 0, { owner: 'claude', note: 'David: merge apartment-finder PR 37', updated_at: new Date(T - 60_000).toISOString() }), card('rm_review000', 'now', 1, { owner: 'grok', note: 'PR 87, in review' }), card('rm_done00000', 'done', 0, { owner: 'claude', note: 'live (PR 85)' })];
