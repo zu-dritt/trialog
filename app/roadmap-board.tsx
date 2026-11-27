@@ -3,8 +3,8 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { useState, type DragEvent } from 'react';
-import { ROADMAP_COLUMNS, type RoadmapColumn, type RoadmapItem } from '../lib/roadmap';
+import { Fragment, useState, type DragEvent } from 'react';
+import { DAY_END_HOUR, ROADMAP_COLUMNS, todayLine, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
@@ -20,6 +20,16 @@ export function placeAt(ids: readonly string[], id: string, index: number): stri
 export const columnOf = (items: readonly RoadmapItem[], column: RoadmapColumn): RoadmapItem[] =>
   items.filter((i) => i.column === column).sort((a, b) => a.position - b.position);
 
+const hoursText = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${Math.round(h * 10) / 10} h`);
+
+/** The words on the line: what is above it, and why there. */
+export function todayLineText(line: TodayLine, cards: number): string {
+  const pace = `${line.done} done in ${hoursText(line.hours)}`;
+  if (line.left <= 0) return `▲ the day is over (${pace})`;
+  if (line.fits >= cards) return `▲ all of Next likely today (${pace}, ${hoursText(line.left)} left)`;
+  return `▲ likely today: ${line.fits === 0 ? 'nothing more from Next' : `the ${line.fits} above`} (${pace}, ${hoursText(line.left)} left until ${DAY_END_HOUR}:00)`;
+}
+
 export interface BoardActions {
   /** Put `id` into `column` at `index`: a move (if the column changes) and the column's new order. */
   place: (id: string, column: RoadmapColumn, index: number) => void;
@@ -27,7 +37,8 @@ export interface BoardActions {
   claim?: (id: string, take: boolean) => void;
 }
 
-export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null }) {
+export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date }) {
+  const today = todayLine(items, now);
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<{ column: RoadmapColumn; index: number } | null>(null);
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
@@ -49,8 +60,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
             <div className="h-1.5 rounded-t-xl" style={{ background: COLUMN_COLORS[column] }} />
             <h2 className="m-0 px-3 pb-1 pt-2 text-base font-bold" style={{ color: COLUMN_COLORS[column] }}>{COLUMN_TITLES[column]} <span className="text-xs font-normal text-muted">{cards.length}</span></h2>
             <ol className="m-0 flex flex-1 list-none flex-col gap-2 p-2 pt-1">
-              {cards.map((card, index) => (
-                <li key={card.id} data-card-id={card.id}
+              {cards.map((card, index) => (<Fragment key={card.id}>
+                {column === 'next' && today && today.fits === index && <TodayMark line={today} cards={cards.length} onDragOver={(e) => { if (!actions) return; e.preventDefault(); e.stopPropagation(); if (over?.column !== column || over.index !== index) setOver({ column, index }); }} onDrop={(e) => { e.stopPropagation(); drop(e, column, index); }} />}
+                <li data-card-id={card.id}
                   draggable={Boolean(actions)}
                   onDragStart={(e) => { setDragged(card.id); e.dataTransfer.setData('text/plain', card.id); e.dataTransfer.effectAllowed = 'move'; }}
                   onDragEnd={() => { setDragged(null); setOver(null); }}
@@ -91,12 +103,26 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                     </label>
                   )}
                 </li>
-              ))}
+              </Fragment>))}
+              {column === 'next' && today && cards.length > 0 && today.fits >= cards.length && <TodayMark line={today} cards={cards.length} />}
               {!cards.length && <li className="px-2 py-4 text-center text-xs text-muted">{actions ? 'Drop a card here' : 'Nothing here'}</li>}
             </ol>
           </section>
         );
       })}
     </div>
+  );
+}
+
+/** The dashed «likely today» line in «Next». Dropping a card on it puts the card right above it. */
+function TodayMark({ line, cards, onDragOver, onDrop }: { line: TodayLine; cards: number; onDragOver?: (e: DragEvent) => void; onDrop?: (e: DragEvent) => void }) {
+  return (
+    <li role="separator" data-today-line={line.fits} onDragOver={onDragOver} onDrop={onDrop}
+      className="flex items-center gap-2 py-1 text-[11px] font-semibold text-[#ffd166]"
+      title="Today's pace: cards done per hour so far, times the hours left, less the cards in Now. Drag a card above the line to do it today.">
+      <span className="h-0 flex-1 border-t-2 border-dashed border-[#ffd166]" />
+      <span className="flex-none">{todayLineText(line, cards)}</span>
+      <span className="h-0 w-3 flex-none border-t-2 border-dashed border-[#ffd166]" />
+    </li>
   );
 }

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
-import type { RoadmapItem } from '../lib/roadmap';
+import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
   ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', ...over });
@@ -55,4 +55,35 @@ test('the roadmap tab is named «Trialog Roadmap»', async () => {
   const { metadata } = await import('../app/roadmap/layout');
   assert.equal(metadata.title, 'Trialog Roadmap');
   assert.match(readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8'), /document\.title = 'Trialog Roadmap'/);
+});
+
+test('the «likely today» line: today’s pace times the hours left, less the cards in Now', () => {
+  const at = (h: number, m = 0) => { const d = new Date(2026, 10, 27, h, m); return d; };
+  const iso = (h: number, m = 0) => at(h, m).toISOString();
+  // Four cards done between 08:00 and 12:00: one an hour. 12:00 → 19:00 leaves 7 h, so 7 cards;
+  // one is still in Now, so 6 from Next.
+  const done = [9, 10, 11, 12].map((h, n) => card(`rm_done000${n}`, 'done', n, { updated_at: iso(h) }));
+  const yesterday = card('rm_old00000', 'done', 9, { updated_at: new Date(2026, 10, 26, 15).toISOString() });
+  const next = Array.from({ length: 9 }, (_, n) => card(`rm_next000${n}`, 'next', n));
+  const items = [...done, yesterday, card('rm_now00000', 'now', 0), ...next];
+  assert.deepEqual(todayLine(items, at(12)), { fits: 6, done: 4, hours: 4, left: 7 });
+  assert.equal(todayLine([yesterday, ...next], at(12)), null, 'no pace before the first card done today');
+  assert.equal(todayLine(items, at(19, 30))?.fits, 0, 'after 19:00 nothing more');
+  assert.equal(todayLine(items, at(12), 13)?.fits, 0, 'one hour left, one card in Now: nothing from Next');
+
+  const view = renderToStaticMarkup(<RoadmapBoard items={items} now={at(12)} actions={{ place: () => {} }} />);
+  const nextColumn = view.slice(view.indexOf('data-column="next"'), view.indexOf('data-column="later"'));
+  const order = [...nextColumn.matchAll(/data-card-id="([a-z0-9_]+)"|data-today-line="(\d+)"/g)].map((m) => m[1] ?? 'LINE');
+  assert.deepEqual(order.slice(5, 8), ['rm_next0005', 'LINE', 'rm_next0006'], 'the line after the sixth card');
+  assert.match(nextColumn, /▲ likely today: the 6 above \(4 done in 4 h, 7 h left until 19:00\)/);
+  assert.ok(!view.slice(0, view.indexOf('data-column="next"')).includes('data-today-line'), 'only in Next');
+
+  // Reordered: the line stays after six cards, whichever they are.
+  const moved = items.map((i) => (i.id === 'rm_next0008' ? { ...i, position: -1 } : i));
+  const after = renderToStaticMarkup(<RoadmapBoard items={moved} now={at(12)} />);
+  const ids = [...after.slice(after.indexOf('data-column="next"')).matchAll(/data-card-id="([a-z0-9_]+)"|data-today-line="(\d+)"/g)].map((m) => m[1] ?? 'LINE');
+  assert.deepEqual(ids.slice(0, 7), ['rm_next0008', 'rm_next0000', 'rm_next0001', 'rm_next0002', 'rm_next0003', 'rm_next0004', 'LINE']);
+
+  const few = renderToStaticMarkup(<RoadmapBoard items={[...done, ...next.slice(0, 2)]} now={at(12)} />);
+  assert.match(few, /▲ all of Next likely today/, 'when everything fits, the line sits at the end');
 });
