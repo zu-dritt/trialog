@@ -19,7 +19,7 @@ export type MoreItem = RowLook & (
 
 const ITEM = 'cursor-pointer whitespace-nowrap border-none bg-transparent px-3 py-1.5 text-left text-[13px] text-fg hover:bg-[#2a2f3a]';
 
-/** The «⋯» button and, when open, its list. `className` decides where it shows (e.g. only below sm). */
+/** The «⋯» button and, when open, its list. It shows on every width; `className` adds classes to its wrapper. */
 export function MoreMenu({ items, heading, className = '', initiallyOpen = false }: { items: readonly MoreItem[]; /** Shown on top, e.g. «Signed in as …». */ heading?: ReactNode; className?: string; initiallyOpen?: boolean }) {
   const [open, setOpen] = useState(initiallyOpen);
   const menuId = useId();
@@ -58,7 +58,7 @@ export function MoreMenu({ items, heading, className = '', initiallyOpen = false
           {heading && <div role="none" className="border-b border-line px-3 pb-2 pt-1 text-[13px] text-muted">{heading}</div>}
           {items.map((item) => {
             const look = `${item.divider ? 'mt-1 border-t border-line pt-2' : ''} ${item.className ?? ''}`.trim();
-            if (item.info) return <div key={item.label} role="none" className={`whitespace-nowrap px-3 py-1.5 text-[13px] text-muted ${look}`.trimEnd()}>{item.label}</div>;
+            if (item.info) return <div key={item.label} role="none" className={`max-w-[20rem] px-3 py-1.5 text-[13px] text-muted ${look}`.trimEnd()}>{item.label}</div>;
             return item.href !== undefined ? (
               <a
                 key={item.label} role="menuitem" href={item.href} target={item.target ?? '_blank'} rel="noopener noreferrer"

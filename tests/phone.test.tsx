@@ -34,7 +34,7 @@ test('the viewport reaches the screen edges, so the page can pad itself by the s
 test('the header keeps Roadmap and «?» out of the phone row, and «⋯» shows on every screen', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /no-underline hover:opacity-90 max-sm:hidden" href="\/roadmap"/);
-  assert.match(page, /<TourButton [^>]*className="max-sm:hidden" \/>/);
+  assert.match(page, /<TourButton [^>]*className="mx-1 max-sm:hidden" \/>/);
   assert.match(page, /<MoreMenu\s+heading=/, 'no sm:hidden on the menu any more');
   // The page is as tall as what is visible, and padded by the safe area.
   assert.match(page, /h-dvh/);

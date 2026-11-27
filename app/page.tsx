@@ -289,7 +289,7 @@ export default function Page() {
         {/* By how often they are used (playground #539): the roadmap, the tour's «?», then «⋯» with the
             rest. On a phone the roadmap goes into «⋯» too, and «?» to the end of the rooms' row. */}
         <a className="flex-none cursor-pointer rounded-md border border-accent bg-accent px-3 py-[5px] font-semibold text-[#0f1115] no-underline hover:opacity-90 max-sm:hidden" href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
-        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="mx-1 max-sm:hidden" />}
         <MoreMenu
           heading={me ? <>Signed in as <span className="font-semibold text-accent">{shown(me)}</span></> : undefined}
           items={[
