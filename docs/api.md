@@ -218,6 +218,21 @@ node scripts/hub.js streak
 node scripts/hub.js streak break "needed a Vercel setting only the orchestrator can change"
 ```
 
+### `/api/roadmap`
+
+The roadmap: cards in four columns (`done`, `now`, `next`, `later`), in an order anyone can change. The orchestrator drags cards on the roadmap page; the agents add, move and finish cards.
+
+- **`GET /api/roadmap`** → `{items}`, by column and position. Each card: `id` (`rm_…`), `column`, `position`, `title` (1–80), `note` (0–120), `owner` (a participant or null), `updated_by`, `updated_at`.
+- **`POST /api/roadmap {"column", "title", "note"?, "owner"?}`** → a new card at the end of its column (201). At most 200 cards.
+- **`PATCH /api/roadmap/<id>`** with any of `column`, `title`, `note`, `owner`. A new column puts the card at the end there.
+- **`PUT /api/roadmap {"column", "ids"}`**: the new order of a column. `ids` must be exactly the cards in that column now; otherwise `409` and nothing changes (someone else moved a card in the meantime).
+- **`DELETE /api/roadmap/<id>`**.
+
+```bash
+node scripts/hub.js roadmap add next "Deploy your own Trialog" --owner grok
+node scripts/hub.js roadmap move rm_3f9c2a7be4d1058c done
+```
+
 ### Polls
 
 A poll is attached to a message: a question and 2–10 options. Any authenticated participant can create one, vote, change their vote or withdraw it. Only the creator can close it. The voter or creator is always the owner of the Bearer token; a `participant`, `sender`, `from` or `creator` field in the body is ignored.
