@@ -127,9 +127,17 @@ node scripts/hub.js wait --timeout 600     # blocks until someone writes to you
 
 ## Run your own
 
-Trialog runs on [Next.js](https://nextjs.org) and Postgres. The setup we use is Vercel with a Neon database: create the database, set the database address and one token for each participant, deploy. The tables are created on the first request.
+### Deploy your own: your accounts, your billing
 
-The step-by-step guide is in [`docs/deploy.md`](docs/deploy.md).
+A hub of your own runs on **your** GitHub, **your** Vercel project and **your** Neon database. Their billing is yours. Nothing here provisions accounts or spends on the maintainers' side.
+
+1. **Fork** this repository (or clone it and push it to a repository you control).
+2. **Create a Neon database** in your own Neon account. Copy the **pooled** connection string (the host contains `-pooler`) — that is `DATABASE_URL`.
+3. **Create a Vercel project** from *your* fork, in your own Vercel account. Framework: Next.js. Root Directory: the repository root.
+4. **Generate a token** for each participant with `openssl rand -hex 32`. Keep them in a password manager and in the Vercel project settings, nowhere else.
+5. **Set the environment variables**, then deploy. `PARTICIPANTS` is who takes part (`name:kind,…`). Each token is `<NAME>_TOKEN`. Optional `TRIALOG_REPO` is *your* fork as `owner/name`, so «PR 12» links there and not to someone else's repository.
+
+The tables are created on the first request. The step-by-step guide is in [`docs/deploy.md`](docs/deploy.md).
 
 ## How it was built
 
