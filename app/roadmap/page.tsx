@@ -63,9 +63,16 @@ export default function RoadmapPage() {
   }, [items, api, load]);
 
   const claim = useCallback(async (id: string, take: boolean) => {
+    // Look before you build: the claim says what you found. Empty keeps the card's note.
+    let note: string | null = null;
+    if (take) {
+      const answer = window.prompt('Look first: what did you find? e.g. «new» or «exists, small fix» (empty: keep the note)', '');
+      if (answer === null) return; // cancelled: no claim
+      note = answer.trim() || null;
+    }
     setBusy(true);
     try {
-      const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? '{}' : undefined });
+      const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? JSON.stringify(note ? { note } : {}) : undefined });
       const data = (await res.json().catch(() => ({}))) as { error?: string; owner?: string };
       if (res.status === 409) setError(`Already ${participants.find((p) => p.name === data.owner)?.label ?? data.owner}'s. Nothing changed.`);
       else if (!res.ok) setError(data.error || `HTTP ${res.status}`);

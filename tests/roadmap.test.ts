@@ -148,3 +148,22 @@ test('API: a claim on someone else\'s card is a 409 with the owner', async () =>
   assert.equal((await claimRoute.DELETE(req('claude', 'DELETE', undefined, path), ctx)).status, 409);
   assert.equal((await claimRoute.DELETE(req('grok', 'DELETE', undefined, path), ctx)).status, 200);
 });
+
+test('the lock has no back door: an agent cannot move a claim with PATCH; the orchestrator can hand a card over; done cards are not claimed', async () => {
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler };
+  const c = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Back door' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: c.id }) };
+  const path = `/api/roadmap/${c.id}`;
+  assert.equal((await claimRoute.POST(req('grok', 'POST', {}, `${path}/claim`), ctx)).status, 200);
+  const steal = await one.PATCH(req('claude', 'PATCH', { owner: 'claude' }, path), ctx);
+  assert.equal(steal.status, 409, 'a claim cannot be overwritten');
+  assert.equal(((await steal.json()) as { owner: string }).owner, 'grok');
+  assert.equal((await one.PATCH(req('claude', 'PATCH', { owner: 'grok' }, path), ctx)).status, 403, 'agents take cards for themselves only');
+  const handed = await one.PATCH(req('david', 'PATCH', { owner: 'claude' }, path), ctx);
+  assert.equal(((await handed.json()) as { item: RoadmapItem }).item.owner, 'claude', 'the orchestrator may hand a card to anyone');
+  assert.equal((await one.PATCH(req('claude', 'PATCH', { owner: null, title: 'Back door, closed' }, path), ctx)).status, 200, 'letting go of your own works');
+  await one.PATCH(req('david', 'PATCH', { column: 'done' }, path), ctx);
+  const late = await claimRoute.POST(req('grok', 'POST', {}, `${path}/claim`), ctx);
+  assert.equal(late.status, 409);
+  assert.match(((await late.json()) as { error: string }).error, /done/);
+});

@@ -1554,15 +1554,22 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async claimRoadmapItem(id, by, note) {
       await ensure();
-      // One statement decides: it only writes when the card is free or already the caller's.
-      const [row] = await db.query(
-        `UPDATE roadmap_items SET owner = $2::text, note = coalesce($3::text, note), updated_by = $2::text, updated_at = now()
-         WHERE id = $1::text AND (owner IS NULL OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
-        [id, by, note],
-      );
-      if (row) return { status: 'ok', item: toRoadmap(row) };
-      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
-      return cur ? { status: 'taken', owner: String(cur.owner), item: toRoadmap(cur) } : { status: 'not_found' };
+      // One statement decides: it only writes when the card is free or already the caller's, and not
+      // done. If it wrote nothing but the card is free when read (released in between), try once more.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const [row] = await db.query(
+          `UPDATE roadmap_items SET owner = $2::text, note = coalesce($3::text, note), updated_by = $2::text, updated_at = now()
+           WHERE id = $1::text AND col <> 'done' AND (owner IS NULL OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
+          [id, by, note],
+        );
+        if (row) return { status: 'ok', item: toRoadmap(row) };
+        const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return { status: 'not_found' };
+        const item = toRoadmap(cur);
+        if (item.column === 'done') return { status: 'done', item };
+        if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item };
+      }
+      return { status: 'not_found' };
     },
     async releaseRoadmapItem(id, by) {
       await ensure();
@@ -2422,6 +2429,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async claimRoadmapItem(id, by, note) {
       const item = roadmap.get(id);
       if (!item) return { status: 'not_found' };
+      if (item.column === 'done') return { status: 'done', item: { ...item } };
       if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item: { ...item } };
       item.owner = shaped(by);
       if (note !== null) item.note = note;

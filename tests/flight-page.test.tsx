@@ -74,3 +74,10 @@ test('screen readers hear each whole sentence, also on a phone where the words a
   const html = renderToStaticMarkup(<FlightStrip now={T} flights={[flight({ participant: 'grok', state: 'waiting', text: 'CI', since: ago(4) })]} />);
   assert.match(html, /<span class="sr-only">Grok: waiting for «CI» · 4 min<\/span><span aria-hidden="true" class="contents">/);
 });
+
+test('only the entries are the live region; «⇅» sits outside it and shows a focus ring', () => {
+  const html = renderToStaticMarkup(<FlightStrip now={T} flights={[flight({})]} onFlip={() => {}} />);
+  const live = /<div role="status" aria-label="Work in flight"[^>]*>([^]*?)<\/div><button/.exec(html);
+  assert.ok(live, 'the button comes after the live region, not inside it');
+  assert.match(html, /<button[^>]*focus-visible:outline-2[^>]*>⇅<\/button>/);
+});
