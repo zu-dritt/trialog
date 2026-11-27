@@ -3,7 +3,7 @@
 // The hovercard on a «PR 84» link (playground #603): the pull request's title, state, author, the
 // first lines of its description and its picture, from GET /api/pr/<n> (loaded on first hover, then
 // kept for the page's life). The picture comes through the hub, never straight from GitHub.
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { PrSummary } from '../lib/pr-summary';
 import { REPO, pullRequestUrl } from './links';
 
@@ -67,7 +67,14 @@ export function PrCardView({ summary, picture }: { summary: PrSummary; picture: 
   );
 }
 
-/** A PR link with its hovercard: loaded after a short pause on hover or on keyboard focus. */
+/** True on a touch screen without hover, where the first tap shows the card and the second opens the link. */
+export const tapToPreview = (): boolean => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
+
+/**
+ * A PR link with its hovercard: loaded after a short pause on hover or on keyboard focus. On a
+ * phone the first tap shows the card and a second tap opens the pull request; a tap elsewhere
+ * closes it.
+ */
 export function PrLink({ n, children, linkProps }: { n: number; children: ReactNode; linkProps: Record<string, unknown> }) {
   const [card, setCard] = useState<{ summary: PrSummary; picture: string | null } | null>(null);
   const [open, setOpen] = useState(false);
@@ -77,10 +84,27 @@ export function PrLink({ n, children, linkProps }: { n: number; children: ReactN
     timer.current = setTimeout(() => { setOpen(true); void load(n).then((c) => c && setCard(c)); }, 250);
   };
   const hide = () => { clearTimeout(timer.current); setOpen(false); };
+  // On a touch screen the card is closed by a tap elsewhere only: a phone sends a synthetic
+  // mouseleave or blur right after the tap, which would close it before it is seen.
+  const leave = () => { if (!tapToPreview()) hide(); };
+  const box = useRef<HTMLSpanElement>(null);
+  const tap = (e: MouseEvent) => {
+    if (open || !tapToPreview()) return;
+    e.preventDefault();
+    setOpen(true);
+    void load(n).then((c) => c && setCard(c));
+  };
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [open]);
   return (
-    <span className="relative inline" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
-      <a {...linkProps}>{children}</a>
+    <span ref={box} className="relative inline" onMouseEnter={show} onMouseLeave={leave} onFocus={show} onBlur={leave}>
+      <a {...linkProps} onClick={tap}>{children}</a>
       {open && card && <PrCardView summary={card.summary} picture={card.picture} />}
+      {open && !card && <span role="status" className="pr-card text-xs text-muted" data-pr-loading="">Loading PR {n}…</span>}
     </span>
   );
 }
