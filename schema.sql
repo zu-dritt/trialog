@@ -279,3 +279,11 @@ DO $$
 DROP INDEX IF EXISTS messages_one_welcome;
 
 CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at);
+
+CREATE TABLE IF NOT EXISTS participant_flight (
+     participant TEXT PRIMARY KEY CONSTRAINT participant_flight_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'idle')),
+     text        TEXT NOT NULL CHECK (char_length(text) <= 80 AND (state = 'idle' OR char_length(text) >= 1)),
+     since       TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
