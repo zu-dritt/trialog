@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { FlightStrip, flightAge, flightSentence, flightTone } from '../app/flight';
+import { FlightStrip, flightAge, flightLinkLabel, flightSentence, flightTone } from '../app/flight';
 import type { Flight } from '../lib/shared';
 
 const T = Date.parse('2026-11-27T08:00:00.000Z');
@@ -80,4 +80,41 @@ test('only the entries are the live region; «⇅» sits outside it and shows a 
   const live = /<div role="status" aria-label="Work in flight"[^>]*>([^]*?)<\/div><button/.exec(html);
   assert.ok(live, 'the button comes after the live region, not inside it');
   assert.match(html, /<button[^>]*focus-visible:outline-2[^>]*>⇅<\/button>/);
+});
+
+test('a human entry: red and blinking while an agent waits on them, grey otherwise', async () => {
+  const { waitingOn, humanSentence } = await import('../app/flight');
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+  const human = { name: 'david', label: 'Orchestrator' };
+  const flights = [
+    flight({ participant: 'claude', state: 'waiting', text: 'David: merge PR 36' }),
+    flight({ participant: 'grok', state: 'waiting', text: 'orchestrator:  go for the demo' }),
+    flight({ participant: 'grok', state: 'waiting', text: 'review of PR 82' }),
+    flight({ participant: 'claude', state: 'working', text: 'David: not a wait' }),
+  ];
+  assert.deepEqual(waitingOn(flights, human).map((w) => [w.by, w.text]), [['claude', 'merge PR 36'], ['grok', 'go for the demo']], 'by name or label, any case, only «waiting»');
+  assert.deepEqual(waitingOn([flight({ participant: 'claude', state: 'waiting', text: 'review of PR 82' })], human), []);
+  assert.equal(humanSentence('Orchestrator', [], P), 'Orchestrator: nothing waiting on you');
+  assert.equal(humanSentence('Orchestrator', waitingOn(flights.slice(0, 1), human), P), 'Orchestrator: waiting on you (1): merge PR 36 (Claude)');
+  const html = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={flights.slice(0, 1)} />);
+  assert.match(html, /data-human="david" data-waiting=""/);
+  assert.match(html, /blink-red/);
+  assert.match(html, /waiting on you \(1\): merge PR 36/);
+  const calm = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={[flight({})]} />);
+  assert.match(calm, /data-human="david"/);
+  assert.doesNotMatch(calm, /blink-red/);
+  assert.match(calm, /nothing waiting on you/);
+});
+
+test('an address in a flight is a link: the waiting pill opens the right pull request, in any repo', () => {
+  assert.equal(flightLinkLabel('https://github.com/amberleaf-gmbh/apartment-finder/pull/36', 'zu-dritt/trialog'), 'apartment-finder PR 36');
+  assert.equal(flightLinkLabel('https://github.com/zu-dritt/trialog/pull/83', 'zu-dritt/trialog'), 'PR 83');
+  const url = 'https://github.com/amberleaf-gmbh/apartment-finder/pull/36';
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const html = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={[flight({ participant: 'claude', state: 'waiting', text: `David: merge ${url}.`, since: ago(2) })]} />);
+  const human = html.slice(html.indexOf('data-human='), html.indexOf('data-flight='));
+  assert.match(human, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" title="${url}"[^>]*>apartment-finder PR 36</a>\\.`), 'a real link, the full sentence stop outside it');
+  assert.doesNotMatch(human.slice(human.indexOf('<a ')), /aria-hidden/, 'the link is not hidden from screen readers');
+  const agent = html.slice(html.indexOf('data-flight='));
+  assert.match(agent, /<a href="https:\/\/github\.com\/amberleaf-gmbh\/apartment-finder\/pull\/36" tabindex="-1"/, 'in the agent’s own (hidden) text: clickable, not a tab stop');
 });
