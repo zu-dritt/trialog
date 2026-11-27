@@ -75,7 +75,7 @@ test('the «likely today» line: today’s pace times the hours left, less the c
   const nextColumn = view.slice(view.indexOf('data-column="next"'), view.indexOf('data-column="later"'));
   const order = [...nextColumn.matchAll(/data-card-id="([a-z0-9_]+)"|data-today-line="(\d+)"/g)].map((m) => m[1] ?? 'LINE');
   assert.deepEqual(order.slice(5, 8), ['rm_next0005', 'LINE', 'rm_next0006'], 'the line after the sixth card');
-  assert.match(nextColumn, /▲ likely today: the 6 above · 4 done in 4 h, 7 h left/);
+  assert.match(nextColumn, /▲ likely today: the 6 above · 4 done in 4 h, 7 h left/);
   assert.ok(!view.slice(0, view.indexOf('data-column="next"')).includes('data-today-line'), 'only in Next');
 
   // Reordered: the line stays after six cards, whichever they are.
@@ -114,6 +114,12 @@ test('a card with a description and pictures shows the first line, and opens to 
   assert.equal(html.match(/data-details=""/g)?.length, 1, 'only the card that has details');
   assert.match(html, /<summary[^>]*>🖼 1 · Like Gmail Compose<\/summary>/);
   assert.match(html, /whitespace-pre-wrap[^>]*>Like Gmail Compose\nwith pictures<\/p>/);
+});
+
+test('the today label keeps «7 h left» and «4 done in 4 h» together, so a narrow column wraps between them', async () => {
+  const { todayLineText } = await import('../app/roadmap-board');
+  const text = todayLineText({ fits: 2, done: 13, hours: 6, left: 5 }, 9);
+  assert.equal(text, '▲ likely today: the 2 above · 13\u00a0done in\u00a06\u00a0h, 5\u00a0h\u00a0left');
 });
 
 test('card LEDs: red and blinking when a card waits on the orchestrator, amber in review, green or grey in Now', async () => {

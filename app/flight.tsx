@@ -66,7 +66,7 @@ export function waitingOn(flights: readonly Flight[], human: Pick<Participant, '
   const names = [human.name, human.label].filter(Boolean).map((n) => String(n).toLowerCase());
   return flights.flatMap((f) => {
     if (f.state !== 'waiting' || f.participant === human.name) return [];
-    const m = /^\s*@?([^:]{1,40}):\s*(.+)$/.exec(f.text);
+    const m = /^\s*(?:waiting\s+(?:for|on)\s+)?@?([^:]{1,40}):\s*(.+)$/i.exec(f.text);
     return m && names.includes(m[1].trim().toLowerCase()) ? [{ by: f.participant, text: m[2].trim(), since: f.since }] : [];
   });
 }
@@ -108,13 +108,14 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
         const sentence = humanSentence(shown, waits, participants);
         return (
           <span key={`human-${h.name}`} data-human={h.name} data-waiting={waits.length ? '' : undefined} title={sentence}
-            className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
+            // On a phone a wait takes the strip's width and wraps, so its link is never cut off.
+            className={`inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap ${waits.length ? 'max-sm:w-[calc(100vw-4.5rem)] max-sm:whitespace-normal' : ''}`}>
             {/* Waiting: the words are read as shown, so their links can be reached by keyboard too. */}
             {!waits.length && <span className="sr-only">{sentence}</span>}
             <span aria-hidden="true" className={`inline-block flex-none rounded-full ${waits.length ? 'h-2.5 w-2.5 blink-red' : 'h-2 w-2'}`} style={{ background: waits.length ? '#f85149' : DOT.idle }} />
             <span aria-hidden={waits.length ? undefined : true} className="font-semibold" style={{ color: colorOf(h.name, participants) }}>{shown}</span>
             {waits.length
-              ? <span className="max-w-[60ch] truncate font-semibold text-[#ff7b72]">waiting on you ({waits.length}): {waits.map((w, i) => <Fragment key={i}>{i > 0 && ' · '}<FlightText text={w.text} /></Fragment>)}</span>
+              ? <span className="min-w-0 font-semibold text-[#ff7b72] sm:max-w-[60ch] sm:truncate">waiting on you ({waits.length}): {waits.map((w, i) => <Fragment key={i}>{i > 0 && ' · '}<FlightText text={w.text} /></Fragment>)}</span>
               : <span aria-hidden="true" className="text-muted max-sm:hidden">nothing waiting on you</span>}
           </span>
         );

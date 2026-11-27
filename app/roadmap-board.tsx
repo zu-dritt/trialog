@@ -37,14 +37,15 @@ export function CardLed({ status }: { status: CardStatus }) {
   );
 }
 
-const hoursText = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : `${Math.round(h * 10) / 10} h`);
+const hoursText = (h: number) => (h < 1 ? `${Math.round(h * 60)}\u00a0min` : `${Math.round(h * 10) / 10}\u00a0h`);
 
 /** The words on the line: what is above it, and why there. */
 export function todayLineText(line: TodayLine, cards: number): string {
-  const pace = `${line.done} done in ${hoursText(line.hours)}`;
+  // Non-breaking spaces keep «5 h left» and «13 done in 6 h» on one line in a narrow column.
+  const pace = `${line.done}\u00a0done in\u00a0${hoursText(line.hours)}`;
   if (line.left <= 0) return `▲ the day is over · ${pace}`;
-  if (line.fits >= cards) return `▲ all of Next likely today · ${pace}, ${hoursText(line.left)} left`;
-  return `▲ likely today: ${line.fits === 0 ? 'nothing more from Next' : `the ${line.fits} above`} · ${pace}, ${hoursText(line.left)} left`;
+  if (line.fits >= cards) return `▲ all of Next likely today · ${pace}, ${hoursText(line.left)}\u00a0left`;
+  return `▲ likely today: ${line.fits === 0 ? 'nothing more from Next' : `the ${line.fits} above`} · ${pace}, ${hoursText(line.left)}\u00a0left`;
 }
 
 export interface BoardActions {
