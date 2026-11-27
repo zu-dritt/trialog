@@ -13,7 +13,7 @@ import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } fro
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMentions } from './mentions';
-import { REPO, cardText, isExternal, pullRequestUrl, repoForPrefix, shortLabel, splitPullRequests } from './links';
+import { REPO, REPO_PREFIXES, cardText, isExternal, pullRequestUrl, repoForPrefix, shortLabel, splitPullRequests } from './links';
 import { PrLink, prNumberOf } from './pr-card';
 
 const LINK_REL = 'noopener noreferrer nofollow';
@@ -121,17 +121,18 @@ export function remarkMentions(names: readonly string[]) {
 }
 
 /**
- * Turns «PR 62» in the text into a link to that pull request in `repo`. Text inside links and code
- * is left alone, so a link's own words and code stay as written.
+ * Turns «PR 62» in the text into a link to that pull request in `repo`, or to another repository
+ * when a name in front is listed in `prefixes`. Text inside links and code is left alone, so a
+ * link's own words and code stay as written.
  */
-export function remarkPullRequests(repo: string | null) {
+export function remarkPullRequests(repo: string | null, prefixes: Readonly<Record<string, string>> = REPO_PREFIXES) {
   const walk = (node: MdNode) => {
     if (!node.children || node.type === 'link' || node.type === 'linkReference') return;
     node.children = node.children.flatMap((child): MdNode[] => {
       if (child.type !== 'text' || !child.value || !/p(r|ull request)/i.test(child.value)) { walk(child); return [child]; }
-      return splitPullRequests(child.value).map((part): MdNode => {
+      return splitPullRequests(child.value, prefixes).map((part): MdNode => {
         if (typeof part === 'string') return { type: 'text', value: part };
-        const dest = repoForPrefix(part.prefix, repo);
+        const dest = repoForPrefix(part.prefix, repo, prefixes);
         return dest
           ? { type: 'link', url: pullRequestUrl(dest, part.n), children: [{ type: 'text', value: part.typed }] } as MdNode
           : { type: 'text', value: part.typed };
@@ -141,11 +142,11 @@ export function remarkPullRequests(repo: string | null) {
   return () => (tree: MdNode) => { walk(tree); };
 }
 
-export function MessageBody({ text, names = [], repo = REPO }: { text: string; names?: readonly string[]; repo?: string | null }) {
+export function MessageBody({ text, names = [], repo = REPO, prefixes = REPO_PREFIXES }: { text: string; names?: readonly string[]; repo?: string | null; prefixes?: Readonly<Record<string, string>> }) {
   const plugins = useMemo(() => [
     remarkGfm,
     ...(names.length ? [remarkMentions(names)] : []),
-    remarkPullRequests(repo),
-  ], [names, repo]);
+    remarkPullRequests(repo, prefixes),
+  ], [names, repo, prefixes]);
   return <ReactMarkdown remarkPlugins={plugins} components={mdComponents}>{text}</ReactMarkdown>;
 }

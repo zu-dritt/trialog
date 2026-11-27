@@ -75,33 +75,47 @@ test('«PR 62» links the pull request when the hub knows its repository; #62 st
   assert.ok(!renderToStaticMarkup(<MessageBody text="PR 62" repo={null} />).includes('<a'));
 });
 
+test('prefixesOf keeps good name=owner/repo entries and drops the rest', async () => {
+  const { prefixesOf } = await import('../app/links');
+  assert.deepEqual(prefixesOf('other-repo=example/other-repo, hub=example/hub'), {
+    'other-repo': 'example/other-repo',
+    hub: 'example/hub',
+  });
+  // A second entry for the same name is ignored; bad names and values are dropped.
+  assert.deepEqual(
+    prefixesOf('other-repo=example/other-repo, other-repo=example/ignored, =example/x, tools, bad=not-a-repo, ok=example/ok, /slash=example/x'),
+    { 'other-repo': 'example/other-repo', ok: 'example/ok' },
+  );
+  assert.deepEqual(prefixesOf(''), {});
+  assert.deepEqual(prefixesOf(undefined), {});
+});
+
 test('a known repo name in front of «PR 36» links that repository; a bare «PR 36» stays the hub\'s', async () => {
-  const { splitPullRequests, repoForPrefix, REPO_PREFIXES } = await import('../app/links');
-  assert.equal(REPO_PREFIXES['apartment-finder'], 'amberleaf-gmbh/apartment-finder');
-  assert.equal(REPO_PREFIXES['trialog'], 'zu-dritt/trialog');
-  assert.deepEqual(splitPullRequests('see apartment-finder PR 36, then PR 95 and trialog PR 7'), [
+  const { splitPullRequests, repoForPrefix, prefixesOf } = await import('../app/links');
+  const prefixes = prefixesOf('other-repo=example/other-repo,hub=example/hub');
+  assert.deepEqual(splitPullRequests('see other-repo PR 36, then PR 95 and hub PR 7', prefixes), [
     'see ',
-    { n: 36, typed: 'apartment-finder PR 36', prefix: 'apartment-finder' },
+    { n: 36, typed: 'other-repo PR 36', prefix: 'other-repo' },
     ', then ',
     { n: 95, typed: 'PR 95', prefix: null },
     ' and ',
-    { n: 7, typed: 'trialog PR 7', prefix: 'trialog' },
+    { n: 7, typed: 'hub PR 7', prefix: 'hub' },
   ]);
-  assert.equal(repoForPrefix('apartment-finder', 'zu-dritt/trialog'), 'amberleaf-gmbh/apartment-finder');
-  assert.equal(repoForPrefix(null, 'zu-dritt/trialog'), 'zu-dritt/trialog');
-  assert.equal(repoForPrefix('unknown', 'zu-dritt/trialog'), null);
+  assert.equal(repoForPrefix('other-repo', 'example/hub', prefixes), 'example/other-repo');
+  assert.equal(repoForPrefix(null, 'example/hub', prefixes), 'example/hub');
+  assert.equal(repoForPrefix('unknown', 'example/hub', prefixes), null);
 
-  const out = renderToStaticMarkup(<MessageBody text="Please look at apartment-finder PR 36, then PR 95 and trialog PR 7." repo="zu-dritt/trialog" />);
-  assert.match(out, /href="https:\/\/github\.com\/amberleaf-gmbh\/apartment-finder\/pull\/36"[^>]*>(<svg[^]*?<\/svg>)?apartment-finder PR 36<\/a>/);
-  assert.match(out, /href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/95"[^>]*>(<svg[^]*?<\/svg>)?PR 95<\/a>/);
-  assert.match(out, /href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/7"[^>]*>(<svg[^]*?<\/svg>)?trialog PR 7<\/a>/);
+  const out = renderToStaticMarkup(<MessageBody text="Please look at other-repo PR 36, then PR 95 and hub PR 7." repo="example/hub" prefixes={prefixes} />);
+  assert.match(out, /href="https:\/\/github\.com\/example\/other-repo\/pull\/36"[^>]*>(<svg[^]*?<\/svg>)?other-repo PR 36<\/a>/);
+  assert.match(out, /href="https:\/\/github\.com\/example\/hub\/pull\/95"[^>]*>(<svg[^]*?<\/svg>)?PR 95<\/a>/);
+  assert.match(out, /href="https:\/\/github\.com\/example\/hub\/pull\/7"[^>]*>(<svg[^]*?<\/svg>)?hub PR 7<\/a>/);
   // Prefixed names still link when the hub has no default repository; a bare «PR 95» does not.
-  const noDefault = renderToStaticMarkup(<MessageBody text="apartment-finder PR 36 and PR 95" repo={null} />);
-  assert.match(noDefault, /href="https:\/\/github\.com\/amberleaf-gmbh\/apartment-finder\/pull\/36"/);
+  const noDefault = renderToStaticMarkup(<MessageBody text="other-repo PR 36 and PR 95" repo={null} prefixes={prefixes} />);
+  assert.match(noDefault, /href="https:\/\/github\.com\/example\/other-repo\/pull\/36"/);
   assert.ok(!noDefault.includes('/pull/95'), 'a bare PR stays plain text without TRIALOG_REPO');
-  // An unknown prefix is not swallowed: «other-repo PR 36» still uses the hub's repository for «PR 36».
-  const unknown = renderToStaticMarkup(<MessageBody text="other-repo PR 36" repo="zu-dritt/trialog" />);
-  assert.match(unknown, /other-repo <a[^>]*href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/36"[^>]*>(<svg[^]*?<\/svg>)?PR 36<\/a>/);
+  // An unknown prefix is not swallowed: «apps PR 36» still uses the hub's repository for «PR 36».
+  const unknown = renderToStaticMarkup(<MessageBody text="apps PR 36" repo="example/hub" prefixes={prefixes} />);
+  assert.match(unknown, /apps <a[^>]*href="https:\/\/github\.com\/example\/hub\/pull\/36"[^>]*>(<svg[^]*?<\/svg>)?PR 36<\/a>/);
 });
 
 test('a bare address to a pull request or issue on GitHub reads short, others as written; both carry the globe', () => {

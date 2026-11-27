@@ -46,11 +46,21 @@ test('the gate: without a repository «PR 62» is not a link, but a GitHub pull 
   assert.deepEqual(pullRequestNumbers('PR 62 and https://github.com/zu-dritt/trialog/pull/62', REPO), [62], 'the same number once');
   assert.deepEqual(pullRequestNumbers('PR 62 is ready', null), []);
   assert.deepEqual(pullRequestNumbers('https://github.com/zu-dritt/trialog/pull/62', null), [62]);
+});
 
-  const HUB = 'zu-dritt/trialog';
-  assert.equal(linksPullRequest('apartment-finder PR 36 is ready', HUB), false, 'another repo is not Ship it for this hub');
-  assert.equal(linksPullRequest('trialog PR 36 is ready', HUB), true);
-  assert.deepEqual(pullRequestNumbers('apartment-finder PR 36 and PR 95 and trialog PR 7', HUB), [95, 7]);
+test('a name in front of «PR 36», or a bare address of another repo, is not Ship it for this hub', async () => {
+  const { prefixesOf } = await import('../app/links');
+  const { ownPrs } = await import('../app/merged');
+  const prefixes = prefixesOf('other-repo=example/other-repo,hub=example/hub,tools=example/tools');
+  const HUB = 'example/hub';
+  assert.equal(linksPullRequest('other-repo PR 36 is ready', HUB, prefixes), false, 'another repo is not Ship it for this hub');
+  assert.equal(linksPullRequest('hub PR 36 is ready', HUB, prefixes), true);
+  assert.deepEqual(pullRequestNumbers('other-repo PR 36 and PR 95 and hub PR 7', HUB, prefixes), [95, 7]);
+  assert.deepEqual(pullRequestNumbers('https://github.com/example/other-repo/pull/36', HUB, prefixes), [], 'a bare address of another repo is not ours');
+  assert.equal(linksPullRequest('https://github.com/example/other-repo/pull/36', HUB, prefixes), false);
+  assert.deepEqual(ownPrs('other-repo PR 36 and PR 95', HUB, prefixes), [95], 'a prefixed name is not one of this hub\'s PRs');
+  assert.deepEqual(ownPrs('tools PR 36 and PR 95', HUB, prefixes), [95], 'even a name without a hyphen, when it maps elsewhere');
+  assert.deepEqual(ownPrs('hub PR 7 and PR 95', HUB, prefixes), [7, 95], 'a name that maps to this hub still counts');
 });
 
 test('the go is a 🚀 reaction the reactions API accepts', () => {

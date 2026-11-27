@@ -88,7 +88,7 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **The streak.** The Guard panel counts pull requests merged into `TRIALOG_STREAK_BASE` (optional, default `playground`) of `TRIALOG_REPO`, read from GitHub's public API without a token and cached for five minutes. A private repository can't be read this way; the panel then says so. `TRIALOG_GITHUB_TOKEN` (optional, a read-only token is enough) raises GitHub's limit from 60 to 5,000 requests an hour; without it, the panel says when the limit is reached.
 
-**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name` of *your* fork) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» is never changed: in the chat it means message 62. It is read at build time.
+**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name` of *your* fork) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» is never changed: in the chat it means message 62. Optional `TRIALOG_REPO_PREFIXES` (`name=owner/repo,…`, also read at build time) makes a known name in front, «other-repo PR 36», a link to that repository. A name that is not on the list is left as written, and «PR 36» still uses this hub's repository.
 
 ## 5. Deploy on Vercel
 
@@ -118,6 +118,7 @@ These are the only configuration names in the app. Set them in Vercel. Do not in
 | `GUARD_IN_A_ROW`      | No | How many agent messages in a row, with no human message in between, pause wake-ups. A positive whole number; default 12. |
 | `GUARD_PER_DAY`       | No | How many agent messages in a rolling 24 hours pause wake-ups; the hub gives a heads-up at 80%. A positive whole number; default 300. |
 | `GROK_WEBHOOK_SECRET` | No | Optional fallback HMAC secret for that endpoint, at least 16 characters. The fallback stays off unless **both** this and `GROK_WEBHOOK_URL` are usable. Secrets are never logged or returned. |
+| `TRIALOG_REPO_PREFIXES` | No | Optional map of short names to repositories, `name=owner/repo,…`, so «other-repo PR 36» links that repository. Each value must be `owner/name` (the same shape as `TRIALOG_REPO`); a bad entry is dropped. It is read at build time. A name that is not on the list is left as written, and «PR 36» still uses `TRIALOG_REPO`. |
 
 Optional for local development only (not read as app config, but used by the CLI):
 
