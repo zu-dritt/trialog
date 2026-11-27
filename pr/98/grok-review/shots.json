@@ -1,0 +1,30 @@
+{
+  "desktop": {
+    "headerText": "Trialog ● live Main + Split Roadmap ↗ ? ⋯ Signed in as Orchestrator Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "menuText": "Signed in as Orchestrator Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "roadmapInHeader": true,
+    "roadmapClasses": "flex-none cursor-pointer rounded-md border border-accent bg-accent px-3 py-[5px] font-semibold text-[#0f1115] no-underline hover:opacity-90 max-sm:hidden",
+    "searchPlaceholder": "Search messages and decisions (/)",
+    "searchWidth": 451,
+    "wakeLineAboveChat": false,
+    "youInHeader": false
+  },
+  "desktopErrors": [],
+  "phone": {
+    "headerText": "Trialog ● live Split ⋯ Signed in as Orchestrator Roadmap ↗ Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "menuText": "Signed in as Orchestrator Roadmap ↗ Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "headerRoadmapVisible": false,
+    "qText": {
+      "text": "?",
+      "aria": "Learn by doing: a guided tour",
+      "visible": false
+    }
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 0,
+    "y": 0,
+    "width": 390,
+    "height": 261
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "desktop": {
+    "text": "Orchestrator waiting on you (1): review the header Claude: waiting for «David: review the header; Grok: review the hidden-tab nap» · now Claude waiting for «Orchestrator: review the header; Grok: review the hidden-tab nap» · now Grok: working on «reviewing PR 98, 99 and 100» · now Grok working on «r",
+    "className": "flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+    "scrollbarWidth": "none",
+    "overflowX": "auto",
+    "box": {
+      "x": 156,
+      "y": 630,
+      "w": 932,
+      "h": 20,
+      "bottom": 649
+    },
+    "nearComposer": true
+  },
+  "desktopErrors": [],
+  "phone": {
+    "text": "Orchestrator waiting on you (1): review the header Claude: waiting for «David: review the header; Grok: review the hidden-tab nap» · now Claude Grok: working on «reviewing PR 98, 99 and 100» · now Grok",
+    "scrollbarWidth": "none",
+    "box": {
+      "x": 16,
+      "y": 613,
+      "w": 322,
+      "h": 39
+    }
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 0,
+    "y": 598,
+    "width": 400,
+    "height": 68
+  }
+}
