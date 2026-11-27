@@ -26,7 +26,7 @@ test('the board: four columns, numbered cards, owners, and the controls only whe
   const items = [card('rm_aaaaaaaa', 'next', 0, { title: 'Deploy button', owner: 'grok', note: 'one click' }), card('rm_bbbbbbbb', 'next', 1, { title: 'Hovercard' })];
   const view = renderToStaticMarkup(<RoadmapBoard items={items} />);
   assert.deepEqual([...view.matchAll(/data-column="([a-z]+)"/g)].map((m) => m[1]), ['done', 'now', 'next', 'later']);
-  assert.match(view, /Deploy button<\/div><div class="mt-0\.5 text-xs text-muted"><span class="font-semibold"[^>]*>Grok<\/span> · one click/);
+  assert.match(view, /Deploy button<\/div><div class="mt-0\.5 text-xs text-muted"><span data-role="owner" class="font-semibold"[^>]*>Grok<\/span> builds · one click/);
   assert.ok(!view.includes('↑') && !view.includes('draggable="true"'), 'read-only without actions');
   const live = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {} }} />);
   assert.equal(live.match(/draggable="true"/g)?.length, 2);
@@ -160,4 +160,22 @@ test('a red card with an address in its note gets «Unblock →», and every add
   assert.equal(html.match(/data-unblock=""/g)?.length, 1);
   assert.match(html, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" data-unblock="" draggable="false"[^>]*>Unblock → apartment-finder PR 37</a>`));
   assert.match(html, /<a href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/88"[^>]*>(?:trialog )?PR 88<\/a>/, 'the review card’s address is a link too');
+});
+
+test('every card says who builds and who reviews: «Claude builds · Grok reviews», «built · reviewed» in Done', async () => {
+  const { cardRoles } = await import('../app/roadmap-board');
+  const P = [{ name: 'david', kind: 'human' as const }, { name: 'claude', kind: 'agent' as const }, { name: 'grok', kind: 'agent' as const }];
+  assert.deepEqual(cardRoles({ column: 'now', owner: 'claude', reviewer: 'grok' }, P).map((r) => `${r.name} ${r.verb}`), ['claude builds', 'grok reviews']);
+  assert.deepEqual(cardRoles({ column: 'done', owner: 'claude', reviewer: 'grok' }, P).map((r) => `${r.name} ${r.verb}`), ['claude built', 'grok reviewed']);
+  assert.deepEqual(cardRoles({ column: 'next', owner: 'david', reviewer: null }, P).map((r) => `${r.name}|${r.verb}`), ['david|'], 'the orchestrator decides, he is not «building»');
+  assert.deepEqual(cardRoles({ column: 'next', owner: null, reviewer: 'grok' }, P).map((r) => r.role), ['reviewer']);
+  assert.deepEqual(cardRoles({ column: 'now', owner: 'claude', reviewer: 'claude' }, P).length, 1, 'no one reviews their own');
+  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_rev00000', 'now', 0, { owner: 'claude', reviewer: 'grok', note: 'PR 93' })]} participants={[{ name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never} />);
+  assert.match(html, /<span data-role="owner"[^>]*>Claude<\/span> builds · <span data-role="reviewer"[^>]*>Grok<\/span> reviews · PR 93/);
+});
+
+test('the roadmap shows the work-in-flight strip above the board: who does what, and what waits', () => {
+  const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /data-roadmap-flight=""[^]*<FlightBar token=\{token\} onUnauthorized=\{\(\) => setToken\(''\)\} participants=\{participants\} position="top" \/>/);
+  assert.ok(page.indexOf('data-roadmap-flight') < page.indexOf('<RoadmapBoard'), 'above the board');
 });
