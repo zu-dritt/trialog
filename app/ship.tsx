@@ -50,7 +50,8 @@ export function ShipIt({ message, me, participants = [], onToggle }: Props) {
         <span
           key={name}
           data-shipped={name}
-          className={`rounded-full border px-2 py-0.5 text-[12px] ${name === me ? 'border-accent/60 text-fg' : 'border-line text-muted'}`}
+          // Plain text, not a pill: it says who gave a go and is not something to click (playground #549).
+          className={`px-0.5 text-[12px] ${name === me ? 'font-semibold text-fg' : 'text-muted'}`}
           title={SHIP_HELP}
         >{SHIP_EMOJI} {labelOf(name, participants)} shipped it</span>
       ))}

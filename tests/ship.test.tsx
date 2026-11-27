@@ -106,3 +106,12 @@ for (const [name, make] of STORES) {
     assert.deepEqual(shippersOf(back), ['grok']);
   });
 }
+
+test('«… shipped it» reads as text, not as a button (no pill border)', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { ShipIt } = await import('../app/ship');
+  const html = renderToStaticMarkup(<ShipIt message={{ id: 1, reactions: [{ emoji: '🚀', by: ['david'] }] } as never} me="david" onToggle={() => {}} />);
+  const chip = /<span[^>]*data-shipped="david"[^>]*>/.exec(html)?.[0] ?? '';
+  assert.ok(chip, html);
+  assert.doesNotMatch(chip, /rounded-full|border/);
+});
