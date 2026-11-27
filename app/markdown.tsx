@@ -14,6 +14,7 @@ import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMentions } from './mentions';
 import { REPO, cardText, isExternal, pullRequestUrl, shortLabel, splitPullRequests } from './links';
+import { PrLink, prNumberOf } from './pr-card';
 
 const LINK_REL = 'noopener noreferrer nofollow';
 
@@ -29,6 +30,16 @@ function Link({ node: _node, href, children, ...props }: ComponentPropsWithoutRe
   // CSS from data-card (.hovercard in globals.css), so no extra text lands in the message.
   const bare = textOf(children) === href;
   const external = isExternal(href);
+  // A pull request of this hub's repository: its own hovercard with the PR's summary (app/pr-card.tsx).
+  const pr = prNumberOf(href);
+  if (pr !== null) {
+    return (
+      <PrLink n={pr} linkProps={{ ...props, href, target: '_blank', rel: LINK_REL }}>
+        <Globe />
+        <InsideLink.Provider value={true}>{bare ? shortLabel(href) : children}</InsideLink.Provider>
+      </PrLink>
+    );
+  }
   return (
     <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? undefined : props.title} data-card={external ? cardText(href) : undefined} className={external ? 'hovercard' : undefined}
       onMouseEnter={external ? placeCard : undefined} onFocus={external ? placeCard : undefined}>
