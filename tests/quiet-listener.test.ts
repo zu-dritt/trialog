@@ -18,5 +18,15 @@ test('wait asks every 3 s while the room is busy, every 6 min after 20 quiet min
 
 test('wait keeps the time of the newest message and never sleeps past its deadline', () => {
   assert.match(src, /lastActivity = Math\.max\(lastActivity, Date\.parse\(data\.messages\.at\(-1\)\.created_at\) \|\| 0\);/);
-  assert.match(src, /setTimeout\(r, Math\.min\(pollDelay\(lastActivity, Date\.now\(\)\), Math\.max\(0, deadline - Date\.now\(\)\)\)\)/);
+  assert.match(src, /const pause = Math\.min\(pollDelay\(lastActivity, Date\.now\(\)\), Math\.max\(0, deadline - Date\.now\(\)\)\);/);
+});
+
+test('while waiting slowly, the listener says when it looks again (status next to the Guard), and clears it when busy', () => {
+  const fnText = /function sleepText\([^]*?\n\}/.exec(src)?.[0] ?? '';
+  const sleepText = new Function(`${fnText}; return sleepText;`)() as (at: number) => string;
+  assert.equal(sleepText(Date.parse('2026-11-27T14:31:00Z')), '💤 looks again at 15:31');
+  assert.match(src, /const slow = pause > 60_000;/);
+  assert.match(src, /JSON\.stringify\(\{ text: sleepText\(Date\.now\(\) \+ pause\), ttlSeconds: Math\.ceil\(pause \/ 1000\) \+ 60 \}\)/);
+  assert.match(src, /: \{ method: 'DELETE', headers: \{ Authorization: `Bearer \$\{token\}` \} \}\)\.catch\(\(\) => \{\}\);/, 'back to busy: the status goes; a failure never stops the wait');
+  assert.match(src, /await fetch\(base \+ '\/api\/status', slow/, 'a plain fetch: call() would end the process on an error');
 });

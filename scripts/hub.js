@@ -271,6 +271,7 @@ async function main() {
     // When the newest message the hub has seen was written. Fast polling while people talk; after
     // a quiet spell, slow, so the hub's database can scale to zero (decision #723).
     let lastActivity = Date.now();
+    let sleepingShown = false;
     const deadline = Date.now() + timeoutMs;
     let since = opts.since;
     let me;
@@ -301,7 +302,19 @@ async function main() {
         console.error(`next: --since ${since}`);
         return;
       }
-      await new Promise((r) => setTimeout(r, Math.min(pollDelay(lastActivity, Date.now()), Math.max(0, deadline - Date.now()))));
+      const pause = Math.min(pollDelay(lastActivity, Date.now()), Math.max(0, deadline - Date.now()));
+      // Slow (quiet room): say when we look again, as our status next to the Guard, so a person
+      // knows how long an answer can take (#728). Only now, when the database is awake anyway.
+      // Back to busy: clear it. A failed status never stops the wait.
+      const slow = pause > 60_000;
+      if (slow || sleepingShown) {
+        sleepingShown = slow;
+        // Plain fetch, not call(): call() ends the process on an error, and this must never.
+        await fetch(base + '/api/status', slow
+          ? { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: sleepText(Date.now() + pause), ttlSeconds: Math.ceil(pause / 1000) + 60 }) }
+          : { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, pause));
     }
     console.error(`hub: no new message within ${timeoutMs / 1000}s. next: --since ${since}`);
     process.exit(2);
@@ -683,6 +696,11 @@ async function main() {
  */
 function pollDelay(lastActivity, now, { busyMs = 3000, quietAfterMs = 20 * 60_000, quietMs = 6 * 60_000 } = {}) {
   return now - lastActivity >= quietAfterMs ? quietMs : busyMs;
+}
+
+/** The status while a listener waits slowly: «💤 looks again at 15:31» (Zurich time). */
+function sleepText(at) {
+  return `💤 looks again at ${new Date(at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' })}`;
 }
 
 main().catch((e) => { console.error(`hub: ${e.message}`); process.exit(1); });
