@@ -72,7 +72,6 @@ export function cardRoles(card: Pick<RoadmapItem, 'column' | 'owner' | 'reviewer
   return roles;
 }
 
-/** A card's description and pictures, folded: the first line shows, the rest opens on a click. */
 /**
  * How far a card is: a bar, the percent, the owner's short line and how long ago they said so
  * (migrations/017, set with `hub.js roadmap progress <id> 60 "geocoding done"`). Not in Done.
@@ -87,13 +86,15 @@ export function ProgressBar({ card, now }: { card: Pick<RoadmapItem, 'column' | 
         className="h-1.5 w-full overflow-hidden rounded-full bg-[#2a2f3a]">
         <div className="h-full rounded-full bg-[#3fb950]" style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-0.5 text-[11px] text-muted">
-        <span className="font-semibold text-fg/90">{pct}%</span>{card.status && ` · ${card.status}`}{age && ` · ${age === 'now' ? 'just now' : `${age} ago`}`}
+      {/* The progressbar's label already says this to a screen reader; the line is for the eye. */}
+      <div aria-hidden="true" className="mt-0.5 text-[11px] text-muted">
+        <span className="font-semibold text-fg/90">{pct}%</span>{card.status && <> · <FlightText text={card.status} hidden /></>}{age && <span className="whitespace-nowrap"> · {age === 'now' ? 'just now' : `${age.replace(/ h (\d+)$/, ' h $1 min')} ago`}</span>}
       </div>
     </div>
   );
 }
 
+/** A card's description and pictures, folded: the first line shows, the rest opens on a click. */
 export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'description' | 'attachments'>; load?: LoadImage }) {
   if (!card.description && !card.attachments.length) return null;
   const first = card.description.split('\n')[0];
