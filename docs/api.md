@@ -197,10 +197,12 @@ Work in flight: what each participant is on right now. The page shows it in a th
 - **`since`** is when the state or the text last changed. Saying the same again keeps it, so the minutes keep counting.
 - **`last_message_at`** (on read) is when that participant last wrote, within the last day. A participant who is `working` but has not written for 20 minutes is shown as quiet.
 - A flight stays until it is changed; there is no expiry, unlike the status above.
+- **Waiting on a human:** a `waiting` flight whose text starts with a human's name or label and a colon («David: merge PR 36») shows on that human's own entry in the strip, with a red blinking dot, until the agent sets a new flight.
 
 ```bash
 node scripts/hub.js flight working "Journal 01"
 node scripts/hub.js flight waiting "review of PR 62"
+node scripts/hub.js flight waiting "David: merge PR 36"   # waits on a human: their dot in the strip turns red and blinks
 node scripts/hub.js flight idle
 node scripts/hub.js flight            # everyone's
 ```
