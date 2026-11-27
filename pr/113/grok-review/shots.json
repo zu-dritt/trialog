@@ -1,0 +1,26 @@
+{
+  "desktop-1280x800": {
+    "title": "Trialog Demo",
+    "h1": "This page broke",
+    "buttons": [
+      "Reload",
+      "Try again"
+    ],
+    "errorLine": "ChunkLoadError: Loading chunk 42 failed. (digest abc123)",
+    "alertText": "This page brokeReloading didn't help, so this is a real error. A screenshot of this page helps us find it.ReloadTry againChunkLoadError: Loading chunk 42 failed. (digest abc123)",
+    "leaked": false,
+    "errors": []
+  },
+  "phone-390x844": {
+    "title": "Trialog Demo",
+    "h1": "This page broke",
+    "buttons": [
+      "Reload",
+      "Try again"
+    ],
+    "errorLine": "ChunkLoadError: Loading chunk 42 failed. (digest abc123)",
+    "alertText": "This page brokeReloading didn't help, so this is a real error. A screenshot of this page helps us find it.ReloadTry againChunkLoadError: Loading chunk 42 failed. (digest abc123)",
+    "leaked": false,
+    "errors": []
+  }
+}
