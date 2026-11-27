@@ -129,6 +129,8 @@ export type ClaimResult =
   | { status: 'ok'; item: RoadmapItem }
   | { status: 'taken'; owner: string; item: RoadmapItem }
   | { status: 'done'; item: RoadmapItem }
+  /** The card changed under two tries in a row: nothing written, try again (Grok's nit on PR 78). */
+  | { status: 'busy'; item: RoadmapItem }
   | { status: 'not_found' };
 
 /**
