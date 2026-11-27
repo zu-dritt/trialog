@@ -1,0 +1,193 @@
+{
+  "phone": {
+    "main": {
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflowX": "hidden",
+      "sideways": false
+    },
+    "mdOverflowWrap": "anywhere",
+    "tables": [
+      {
+        "display": "block",
+        "overflowX": "auto",
+        "overflowWrap": "anywhere",
+        "clientWidth": 295,
+        "scrollWidth": 579,
+        "canScroll": true,
+        "cells": [
+          {
+            "text": "Col A",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col B",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col C",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col D",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col E",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col F",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col G",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "Col H",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 30
+          },
+          {
+            "text": "alpha-value-one",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "bravo-value-two",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "charlie-value-three",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "delta-value-four",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "echo-value-five",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "foxtrot-value-six",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "golf-value-seven",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "hotel-value-eight",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-alpha",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-bravo",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-charlie",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-delta",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-echo",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-foxtrot",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-golf",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          },
+          {
+            "text": "second-row-hotel",
+            "overflowWrap": "normal",
+            "wordBreak": "normal",
+            "width": 72,
+            "height": 75
+          }
+        ]
+      }
+    ],
+    "errors": [],
+    "title": "Main · Trialog Demo"
+  }
+}
