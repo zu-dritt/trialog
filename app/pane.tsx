@@ -876,7 +876,8 @@ export function RoomPane({
       )}
 
       <MentionColors.Provider value={color}>
-      <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
+      {/* Never sideways (playground #857): a wide message wraps or scrolls in its own box, so no grey bar shows above the strip. */}
+      <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 && roomInfo && roomInfo.id !== MAIN_ROOM && roomInfo.last_id === 0 && (
           <p className="mt-[18vh] text-center text-sm text-muted">Nothing in {roomInfo.name} yet. The first message is yours.</p>
         )}
