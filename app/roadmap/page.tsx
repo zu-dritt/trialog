@@ -1,0 +1,84 @@
+'use client';
+
+// /roadmap: the interactive roadmap. It uses the token the hub page saved in this browser; without
+// one it sends the reader to the hub to sign in first. It reads the cards every 20 seconds, so it
+// stays current while it is open next to the hub.
+import { useCallback, useEffect, useState } from 'react';
+import { RoadmapBoard, columnOf, placeAt } from '../roadmap-board';
+import type { RoadmapColumn, RoadmapItem } from '../../lib/roadmap';
+import type { Participant } from '../../lib/shared';
+
+const TOKEN_KEY = 'collabHubToken';
+const POLL_MS = 20_000;
+
+export default function RoadmapPage() {
+  const [token, setToken] = useState<string | null>(null);
+  const [items, setItems] = useState<RoadmapItem[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Roadmap · Trialog'; }, []);
+
+  const api = useCallback(async (path: string, init: RequestInit = {}) => {
+    const res = await fetch(path, { ...init, cache: 'no-store', headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+    if (res.status === 401) { setToken(''); throw new Error('unauthorized'); }
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
+    return res.json() as Promise<unknown>;
+  }, [token]);
+
+  const load = useCallback(async () => {
+    try {
+      setItems(((await api('/api/roadmap')) as { items: RoadmapItem[] }).items);
+      setError('');
+    } catch (e) { if (e instanceof Error && e.message !== 'unauthorized') setError(e.message); }
+  }, [api]);
+
+  useEffect(() => {
+    if (!token) return undefined;
+    void load();
+    void api('/api/participants').then((d) => setParticipants((d as { participants: Participant[] }).participants)).catch(() => {});
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [token, load, api]);
+
+  const place = useCallback(async (id: string, column: RoadmapColumn, index: number) => {
+    const card = items.find((i) => i.id === id);
+    if (!card) return;
+    const ids = placeAt(columnOf(items, column).map((i) => i.id), id, index);
+    // Show it at once; the hub's answer then replaces it.
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, column } : i)).map((i) => (i.column === column ? { ...i, position: ids.indexOf(i.id) } : i)));
+    setBusy(true);
+    try {
+      if (card.column !== column) await api(`/api/roadmap/${id}`, { method: 'PATCH', body: JSON.stringify({ column }) });
+      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column, ids }) });
+      setError('');
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not saved: ${e.message}`);
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [items, api, load]);
+
+  if (token === null) return null;
+  if (!token) {
+    return (
+      <main className="mx-auto max-w-xl p-6">
+        <h1 className="text-xl font-bold">Roadmap</h1>
+        <p className="text-muted">Sign in on the <a href="/">hub</a> first; this page uses the same token.</p>
+      </main>
+    );
+  }
+  return (
+    <main className="mx-auto max-w-[1500px] p-4 pt-[max(1rem,env(safe-area-inset-top))]">
+      <header className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <h1 className="m-0 text-2xl font-bold">Roadmap</h1>
+        <p className="m-0 text-sm text-muted">Drag a card to change the order, or use ↑ ↓. The top of «Next» is what we do next.</p>
+        <a href="/" className="ml-auto text-sm">← Hub</a>
+      </header>
+      {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
+      <RoadmapBoard items={items} participants={participants} actions={{ place: (id, c, i) => { void place(id, c, i); } }} busy={busy} />
+    </main>
+  );
+}

@@ -273,12 +273,14 @@ export default function Page() {
         {me && <span className="min-w-0 truncate text-[13px] font-semibold max-sm:hidden">You: {shown(me)}</span>}
         <button className={`${BUTTON} flex-none max-sm:hidden`} onClick={() => { void exportTranscript(); }}>Export .md</button>
         <button className={`${BUTTON} flex-none bg-transparent max-sm:hidden`} onClick={forgetToken}>Switch token</button>
+        <a className={`${BUTTON} flex-none bg-transparent text-fg no-underline max-sm:hidden`} href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
         {DEMO_LINK && <a className={`${BUTTON} flex-none bg-transparent text-fg no-underline max-sm:hidden`} href={DEMO_LINK} target="_blank" rel="noopener noreferrer" title="The demo hub: public tokens, try anything">Demo hub ↗</a>}
         <MoreMenu
           className="sm:hidden"
           items={[
             { label: 'Export .md', onPick: () => { void exportTranscript(); } },
             { label: 'Switch token', onPick: forgetToken },
+            { label: 'Roadmap', href: '/roadmap' },
             ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
           ]}
         />
