@@ -9,6 +9,7 @@ import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
 import { ComposeIdea, type NewIdea } from './compose-idea';
+import { REPO, pullRequestNumbers } from './links';
 import type { Attachment } from '../lib/shared';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
@@ -57,6 +58,23 @@ export interface BoardActions {
   addIdea?: (idea: NewIdea) => Promise<boolean>;
   /** Uploads a picture for an idea (the Compose window); without it, ideas have no pictures. */
   upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
+  /** «🚀 Ship it!» from a card: posts the go as a message with the 🚀 on it; true when sent. */
+  ship?: (card: RoadmapItem, prs: readonly number[]) => Promise<boolean>;
+}
+
+/**
+ * The pull requests a card can be shipped as, from the board (playground #617): a card in review,
+ * or one that waits on the orchestrator for a Ship it, whose note names a PR of this hub.
+ */
+export function shippable(card: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number, humans?: readonly string[], repo: string | null = REPO): number[] {
+  const status = cardStatus(card, now, humans?.length ? humans : undefined);
+  if (status?.tone !== 'review' && !(status?.tone === 'blocked' && /ship it/i.test(card.note))) return [];
+  return pullRequestNumbers(card.note, repo);
+}
+
+/** The message a Ship it from the board posts; the 🚀 on it is the go, as on any message. */
+export function shipText(card: Pick<RoadmapItem, 'title'>, prs: readonly number[]): string {
+  return `🚀 Ship it! ${prs.map((n) => `PR ${n}`).join(', ')} (from the roadmap card «${card.title}»)`;
 }
 
 /**
@@ -114,6 +132,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   const humans = participants.filter((p) => p.kind === 'human').flatMap((p) => [p.name, p.label ?? '']).filter(Boolean);
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<{ column: RoadmapColumn; index: number } | null>(null);
+  // Cards shipped from this page, so the button turns into «go sent» and isn't pressed twice.
+  const [shipped, setShipped] = useState<ReadonlySet<string>>(new Set());
+  const human = participants.some((p) => p.name === me && p.kind === 'human');
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/plain');
@@ -158,6 +179,20 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       )}
                       <ProgressBar card={card} now={at} />
                       <CardDetails card={card} load={loadImage} />
+                      {(() => {
+                        // Ship it from the card (playground #617): only for the orchestrator, only when the card names a PR.
+                        const prs = actions?.ship && human ? shippable(card, at, humans) : [];
+                        if (!prs.length) return null;
+                        if (shipped.has(card.id)) return <span data-shipped="" className="mt-1.5 inline-block text-xs font-semibold text-[#3fb950]">🚀 Go sent for {prs.map((n) => `PR ${n}`).join(', ')}</span>;
+                        return (
+                          <button type="button" data-ship={card.id} disabled={busy} draggable={false}
+                            onClick={() => { void actions!.ship!(card, prs).then((ok) => { if (ok) setShipped((s) => new Set(s).add(card.id)); }); }}
+                            title="Your go: posts «🚀 Ship it!» for this PR in the hub, to the reviewer. It doesn't merge anything itself."
+                            className="mt-1.5 mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#3fb950] bg-[#3fb950]/15 px-2 py-0.5 text-xs font-semibold text-[#56d364] hover:bg-[#3fb950]/25 disabled:opacity-50">
+                            🚀 Ship it! {prs.map((n) => `PR ${n}`).join(', ')}
+                          </button>
+                        );
+                      })()}
                       {(() => {
                         // A card that waits on a human, with an address in its note: one click to where it is unblocked.
                         const href = unblockHref(card, cardStatus(card, at, humans.length ? humans : undefined));

@@ -4,7 +4,7 @@
 // one it sends the reader to the hub to sign in first. It reads the cards every 20 seconds, so it
 // stays current while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
-import { RoadmapBoard, columnOf, placeAt } from '../roadmap-board';
+import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
 import type { RoadmapColumn, RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
 import { uploadRequest, useImageLoader } from '../attachments';
@@ -92,6 +92,21 @@ export default function RoadmapPage() {
     }
   }, [token, participants, load]);
 
+  // «🚀 Ship it!» from a card (playground #617): a message to the card's reviewer, with the 🚀 on it,
+  // the same go as pressing Ship it on a message. The reviewer merges, as always.
+  const ship = useCallback(async (card: RoadmapItem, prs: readonly number[]): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const { message } = (await api('/api/messages', { method: 'POST', body: JSON.stringify({ text: shipText(card, prs), ...(card.reviewer ? { to: card.reviewer } : {}) }) })) as { message: { id: number } };
+      await api(`/api/messages/${message.id}/reactions/${encodeURIComponent('🚀')}`, { method: 'PUT' });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Ship it didn't go out: ${e.message}`);
+      return false;
+    } finally { setBusy(false); }
+  }, [api]);
+
   // A picture for the Compose window: the same upload as a message's (resized, scale noted).
   const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {
     const request = await uploadRequest(file, pasted);
@@ -143,7 +158,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload }} loadImage={loadImage} />
+      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship }} loadImage={loadImage} />
     </main>
   );
 }
