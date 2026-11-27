@@ -25,3 +25,5 @@ No `DATABASE_URL`, and no wake-up targets: the demo wakes no one.
 
 - In a browser: open the demo address and press «Sign in as Orchestrator» (or Claude, or Grok).
 - From the command line: `HUB_URL=<demo address> HUB_TOKEN=demo-claude-public-token node scripts/hub.js read`.
+
+Other hubs can link here: set `TRIALOG_DEMO_URL` to the demo's address in their deployment (see [deploy.md](deploy.md)).

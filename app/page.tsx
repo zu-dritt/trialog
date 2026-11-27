@@ -7,7 +7,7 @@ import { RoomPane } from './pane';
 import { RoomTabs, addressForRoom, roomFromSearch, readSeen, tabTitle, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
 import { DemoBanner, DemoSignIn } from './demo';
-import { DEMO_BUILD } from '../lib/demo';
+import { DEMO_BUILD, demoLink } from '../lib/demo';
 import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
@@ -22,6 +22,8 @@ import { MoreMenu } from './more-menu';
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
 
+// The demo hub, for a link in the header (TRIALOG_DEMO_URL); none on the demo hub itself.
+const DEMO_LINK = demoLink();
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 
 /** Until the server has said which rooms there are, the page shows the one that always exists. */
@@ -270,9 +272,14 @@ export default function Page() {
         {me && <span className="min-w-0 truncate text-[13px] font-semibold max-sm:hidden">You: {shown(me)}</span>}
         <button className={`${BUTTON} flex-none max-sm:hidden`} onClick={() => { void exportTranscript(); }}>Export .md</button>
         <button className={`${BUTTON} flex-none bg-transparent max-sm:hidden`} onClick={forgetToken}>Switch token</button>
+        {DEMO_LINK && <a className={`${BUTTON} flex-none bg-transparent text-fg no-underline max-sm:hidden`} href={DEMO_LINK} target="_blank" rel="noopener noreferrer" title="The demo hub: public tokens, try anything">Demo hub ↗</a>}
         <MoreMenu
           className="sm:hidden"
-          items={[{ label: 'Export .md', onPick: () => { void exportTranscript(); } }, { label: 'Switch token', onPick: forgetToken }]}
+          items={[
+            { label: 'Export .md', onPick: () => { void exportTranscript(); } },
+            { label: 'Switch token', onPick: forgetToken },
+            ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
+          ]}
         />
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}

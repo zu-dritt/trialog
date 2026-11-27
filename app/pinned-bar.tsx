@@ -3,7 +3,7 @@
 // The bar at the top of a pane. It used to list every pinned message, and the list kept growing.
 // Now only the decisions that still wait for agreement stand there, one line each. Everything
 // else (decisions everyone has agreed, and the other pinned messages) folds into one small button
-// at the right: «📌 3 pinned · ✓ 2 decided ▾». A click opens a short list of them; Escape closes it.
+// at the right: «📌 3 pinned · ✓ 2 decided ▾». A click opens a short list of them; Escape or a press anywhere else closes it.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Message } from '../lib/core';
 import { decisionIsAgreed, firstLine, type DecisionCard } from '../lib/shared';
@@ -120,8 +120,15 @@ export function PinnedBar({ list, names, color, shown, onJump }: Look & { list: 
       setUnfolded(false);
       if (inside) buttonRef.current?.focus();
     };
+    const onPointer = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node | null)) setUnfolded(false);
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPointer);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPointer);
+    };
   }, [showList]);
 
   if (!open.length && !label) return null;

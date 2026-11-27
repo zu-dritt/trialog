@@ -44,3 +44,13 @@ test('the build writes TRIALOG_DEMO into the page, so the banner and buttons can
   const config = readFileSync(new URL('../next.config.ts', import.meta.url), 'utf8');
   assert.match(config, /TRIALOG_DEMO: process\.env\.TRIALOG_DEMO === '1' \? '1' : ''/);
 });
+
+test('the header links the demo hub only for an https address, and never on the demo hub itself', async () => {
+  const { demoLink } = await import('../lib/demo');
+  assert.equal(demoLink('https://demo.example', false), 'https://demo.example/');
+  assert.equal(demoLink('  https://demo.example/x  ', false), 'https://demo.example/x');
+  for (const v of [undefined, '', 'http://demo.example', 'javascript:alert(1)', 'not a url', 'https://user:pw@demo.example']) {
+    assert.equal(demoLink(v, false), null, String(v));
+  }
+  assert.equal(demoLink('https://demo.example', true), null);
+});

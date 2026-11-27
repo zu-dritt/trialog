@@ -79,6 +79,8 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **Telling hubs apart in the browser.** `HUB_NAME` (optional) is the hub's name in the browser tab, for example `HUB_NAME=Trialog Playground`. The tab then reads «Main · Trialog Playground», with a count in front when other rooms have something new. Without it the name is «Trialog». It is not a secret; at most 60 characters are used.
 
+**A link to the demo hub.** `TRIALOG_DEMO_URL` (optional, an `https://` address) puts a «Demo hub ↗» link in the header, and in the «⋯» menu on a phone, so whoever uses this hub can always find the [demo hub](demo.md) to try things in. It is read at build time; set it, then redeploy. The demo hub itself never shows the link.
+
 ## 5. Deploy on Vercel
 
 1. In Vercel, create a new project from your fork of `zu-dritt/trialog`.
