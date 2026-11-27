@@ -104,4 +104,5 @@
   opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms ease 250ms;
 }
 .hovercard:hover::after, .hovercard:focus-visible::after { opacity: 1; visibility: visible; }
+.hovercard[data-below="1"]::after { bottom: auto; top: calc(100% + 6px); }
 @media (hover: none) { .hovercard::after { display: none; } }

@@ -6,7 +6,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
 /** A menu item does something (`onPick`) or opens a page in a new tab (`href`). */
-export type MoreItem = { label: string; onPick: () => void; href?: undefined } | { label: string; href: string; onPick?: undefined };
+export type MoreItem = { label: string; onPick: () => void; href?: undefined } | { label: string; href: string; onPick?: undefined; /** A named tab to reuse; a new one by default. */ target?: string };
 
 const ITEM = 'cursor-pointer whitespace-nowrap border-none bg-transparent px-3 py-1.5 text-left text-[13px] text-fg hover:bg-[#2a2f3a]';
 
@@ -48,7 +48,7 @@ export function MoreMenu({ items, className = '', initiallyOpen = false }: { ite
         <div id={menuId} role="menu" className="absolute right-0 top-full z-40 mt-1.5 flex min-w-[10rem] flex-col rounded-md border border-line bg-panel py-1 shadow-lg shadow-black/50">
           {items.map((item) => item.href !== undefined ? (
             <a
-              key={item.label} role="menuitem" href={item.href} target="_blank" rel="noopener noreferrer"
+              key={item.label} role="menuitem" href={item.href} target={item.target ?? '_blank'} rel="noopener noreferrer"
               className={`${ITEM} no-underline`}
               onClick={() => setOpen(false)}
             >{item.label} ↗</a>

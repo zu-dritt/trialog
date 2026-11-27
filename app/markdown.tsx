@@ -30,11 +30,26 @@ function Link({ node: _node, href, children, ...props }: ComponentPropsWithoutRe
   const bare = textOf(children) === href;
   const external = isExternal(href);
   return (
-    <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? undefined : props.title} data-card={external ? cardText(href) : undefined} className={external ? 'hovercard' : undefined}>
+    <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? undefined : props.title} data-card={external ? cardText(href) : undefined} className={external ? 'hovercard' : undefined}
+      onMouseEnter={external ? placeCard : undefined} onFocus={external ? placeCard : undefined}>
       {external && <Globe />}
       <InsideLink.Provider value={true}>{bare && external ? shortLabel(href) : children}</InsideLink.Provider>
     </a>
   );
+}
+
+/**
+ * The hovercard opens above the link; near the top of the scrolling area there is no room, so it
+ * opens below instead (data-below, read by .hovercard in globals.css).
+ */
+export const CARD_ROOM_PX = 56;
+export function cardBelow(linkTop: number, areaTop: number): boolean {
+  return linkTop - areaTop < CARD_ROOM_PX;
+}
+function placeCard(e: { currentTarget: HTMLElement }) {
+  const link = e.currentTarget;
+  const area = link.closest('main') ?? document.body;
+  link.dataset.below = cardBelow(link.getBoundingClientRect().top, area.getBoundingClientRect().top) ? '1' : '';
 }
 
 /** The text of a link's children, when it is only text. */
