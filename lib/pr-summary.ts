@@ -49,17 +49,23 @@ export function summarize(pr: Record<string, unknown>): { summary: PrSummary; pi
 }
 
 const cache = new Map<string, { at: number; summary: PrSummary; picture: string | null }>();
+/** Misses and failures, kept a minute so hovering a missing PR doesn't ask GitHub every time. */
+export const PR_MISS_MS = 60_000;
+const misses = new Map<string, { at: number; error: string | null }>();
 
 export async function prSummary(repo: string, n: number, now = Date.now(), fetchImpl: typeof fetch = fetch): Promise<{ summary: PrSummary; picture: string | null } | null> {
   const key = `${repo}#${n}`;
   const hit = cache.get(key);
   if (hit && now - hit.at < PR_CACHE_MS) return hit;
+  const miss = misses.get(key);
+  if (miss && now - miss.at < PR_MISS_MS) { if (miss.error) throw new Error(miss.error); return null; }
   const res = await fetchImpl(`https://api.github.com/repos/${repo}/pulls/${n}`, { headers: githubHeaders(), cache: 'no-store' });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  if (res.status === 404) { misses.set(key, { at: now, error: null }); return null; }
+  if (!res.ok) { const error = `GitHub answered ${res.status}`; misses.set(key, { at: now, error }); throw new Error(error); }
+  misses.delete(key);
   const done = { at: now, ...summarize((await res.json()) as Record<string, unknown>) };
   cache.set(key, done);
   return done;
 }
 
-export function clearPrCache(): void { cache.clear(); }
+export function clearPrCache(): void { cache.clear(); misses.clear(); }
