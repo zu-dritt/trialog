@@ -26,6 +26,7 @@ import {
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
 import { SHIP_EMOJI, ShipIt } from './ship';
+import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
@@ -956,9 +957,11 @@ export function RoomPane({
                   {(() => {
                     const onToggle = (emoji: string, on: boolean) => { void toggleReaction(m, emoji, on); };
                     const ship = linksPullRequest(m.text);
+                    const build = isBuildableMessage(m, participants, ship);
                     return (
                       <ReactionBar message={m} me={me} participants={participants} onToggle={onToggle} hide={ship ? [SHIP_EMOJI] : []}>
                         {ship && <ShipIt message={m} me={me} participants={participants} onToggle={onToggle} />}
+                        {build && <BuildIt message={m} me={me} participants={participants} api={api} />}
                       </ReactionBar>
                     );
                   })()}

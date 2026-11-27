@@ -67,6 +67,24 @@ export function linksPullRequest(text: string, repo: string | null = REPO): bool
   return repo !== null && splitPullRequests(prose).some((part) => typeof part !== 'string');
 }
 
+/** The pull request numbers a message's text links, in the order they appear. Same gate as linksPullRequest. */
+export function pullRequestNumbers(text: string, repo: string | null = REPO): number[] {
+  const prose = withoutCode(text);
+  const nums: number[] = [];
+  const seen = new Set<number>();
+  const add = (n: number) => { if (!seen.has(n)) { seen.add(n); nums.push(n); } };
+  if (repo !== null) {
+    for (const part of splitPullRequests(prose)) {
+      if (typeof part !== 'string') add(part.n);
+    }
+  }
+  for (const m of prose.matchAll(/https?:\/\/(?:www\.)?github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}\/pull\/(\d{1,6})(?![0-9])/gi)) {
+    add(Number(m[1]));
+  }
+  return nums;
+}
+
+
 /**
  * What the hovercard on a link says: the site, then what the address points at. For GitHub,
  * «github.com · owner/repo · pull request 62»; otherwise the host and the rest of the address.

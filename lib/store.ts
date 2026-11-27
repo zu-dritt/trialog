@@ -811,10 +811,11 @@ const COLS = `${BASE_COLS},
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
   (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll,
   (SELECT ${DECISION_JSON} FROM decision_cards c WHERE c.message_id = messages.id) AS decision,
-  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
      FROM (
        SELECT emoji,
               json_agg(participant ORDER BY created_at, participant) AS by,
+              json_agg(created_at ORDER BY created_at, participant) AS at,
               min(created_at) AS first_at
          FROM reactions
         WHERE message_id = messages.id
@@ -1009,10 +1010,14 @@ const toPoll = (v: unknown): Poll | null => {
     created_at: iso(r.created_at) as string,
   };
 };
-const toReaction = (r: Row): Reaction => ({
-  emoji: r.emoji as string,
-  by: Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []),
-});
+const toReaction = (r: Row): Reaction => {
+  const by = Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []);
+  const rawAt = typeof r.at === 'string' ? (() => { try { return JSON.parse(r.at as string) as unknown; } catch { return []; } })() : r.at;
+  const at = Array.isArray(rawAt)
+    ? rawAt.map((v) => iso(v)).filter((s): s is string => typeof s === 'string')
+    : [];
+  return at.length === by.length && at.length > 0 ? { emoji: r.emoji as string, by, at } : { emoji: r.emoji as string, by };
+};
 const toReactions = (v: unknown): Reaction[] => {
   const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
   return Array.isArray(list) ? (list as Row[]).map(toReaction) : [];
@@ -1870,10 +1875,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       const rows = await db.query(
         `SELECT message_id,
-                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
                    FROM (
                      SELECT emoji,
                             json_agg(participant ORDER BY created_at, participant) AS by,
+                            json_agg(created_at ORDER BY created_at, participant) AS at,
                             min(created_at) AS first_at
                        FROM reactions r2
                       WHERE r2.message_id = r.message_id
@@ -2158,16 +2164,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type ReactionRow = { message_id: number; participant: Sender; emoji: string; created_at: string };
   const reactionRows: ReactionRow[] = [];
   const reactionsOn = (messageId: number): Reaction[] => {
-    const grouped = new Map<string, { by: Sender[]; first: string; index: number }>();
+    const grouped = new Map<string, { by: Sender[]; at: string[]; first: string; index: number }>();
     for (const r of reactionRows) {
       if (r.message_id !== messageId) continue;
       const g = grouped.get(r.emoji);
-      if (g) g.by.push(r.participant);
-      else grouped.set(r.emoji, { by: [r.participant], first: r.created_at, index: grouped.size });
+      if (g) { g.by.push(r.participant); g.at.push(r.created_at); }
+      else grouped.set(r.emoji, { by: [r.participant], at: [r.created_at], first: r.created_at, index: grouped.size });
     }
     return [...grouped.entries()]
       .sort((a, b) => a[1].first.localeCompare(b[1].first) || a[1].index - b[1].index)
-      .map(([emoji, g]) => ({ emoji, by: g.by }));
+      .map(([emoji, g]) => ({ emoji, by: g.by, at: g.at }));
   };
   const reactionsFingerprint = (): string => {
     const byMessage = new Map<number, { n: number; latest: string }>();
@@ -2236,7 +2242,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     attachments: m.attachments.map((a) => ({ ...a })),
     poll: pollForMessage(m.id),
     decision: decisionForMessage(m.id),
-    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by] })),
+    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by], ...(r.at ? { at: [...r.at] } : {}) })),
   });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const wakeTargets = new Map<string, { url: string; secret: string; updated_at: string }>();

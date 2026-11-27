@@ -55,6 +55,8 @@ export interface Message {
 export interface Reaction {
   emoji: string;
   by: Sender[];
+  /** When each person in `by` reacted, as ISO times, same length as `by`. Omitted on older payloads. */
+  at?: string[];
 }
 
 /** Shown in the welcome message and on the reaction picker. */

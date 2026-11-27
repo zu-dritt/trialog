@@ -100,7 +100,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
             <ol className="m-0 flex flex-1 list-none flex-col gap-2 p-2 pt-1">
               {cards.map((card, index) => (<Fragment key={card.id}>
                 {column === 'next' && today && today.fits === index && <TodayMark line={today} cards={cards.length} onDragOver={(e) => { if (!actions) return; e.preventDefault(); e.stopPropagation(); if (over?.column !== column || over.index !== Math.max(0, index - 1)) setOver({ column, index: Math.max(0, index - 1) }); }} onDrop={(e) => { e.stopPropagation(); drop(e, column, Math.max(0, index - 1)); }} />}
-                <li data-card-id={card.id}
+                <li id={card.id} data-card-id={card.id}
                   draggable={Boolean(actions)}
                   onDragStart={(e) => { setDragged(card.id); e.dataTransfer.setData('text/plain', card.id); e.dataTransfer.effectAllowed = 'move'; }}
                   onDragEnd={() => { setDragged(null); setOver(null); }}
