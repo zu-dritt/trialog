@@ -46,6 +46,12 @@ export default function RoadmapPage() {
     return () => clearInterval(timer);
   }, [token, load, api]);
 
+  useEffect(() => {
+    const id = window.location.hash.replace(/^#/, '');
+    if (!id || !items.some((i) => i.id === id)) return;
+    document.getElementById(id)?.scrollIntoView({ block: 'center' });
+  }, [items]);
+
   const place = useCallback(async (id: string, column: RoadmapColumn, index: number) => {
     const card = items.find((i) => i.id === id);
     if (!card) return;

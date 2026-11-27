@@ -9,6 +9,17 @@ import { REPO, pullRequestUrl } from './links';
 
 const TOKEN_KEY = 'collabHubToken';
 const loaded = new Map<number, Promise<{ summary: PrSummary; picture: string | null } | null>>();
+const resolved = new Map<number, PrSummary | null>();
+
+/** The summary if it has already been loaded on this page, else undefined. */
+export function peekedPr(n: number): PrSummary | null | undefined {
+  return resolved.has(n) ? resolved.get(n) : undefined;
+}
+
+/** Loads the pull request's summary (the same cache the hovercard uses). */
+export function loadPr(n: number): Promise<PrSummary | null> {
+  return load(n).then((c) => c?.summary ?? null);
+}
 
 /** The PR number when `href` is a pull request of this hub's repository, else null. */
 export function prNumberOf(href: string, repo: string | null = REPO): number | null {
@@ -28,8 +39,9 @@ function load(n: number) {
     const token = typeof localStorage === 'undefined' ? '' : localStorage.getItem(TOKEN_KEY) || '';
     const auth = { headers: { Authorization: `Bearer ${token}` } };
     loaded.set(n, fetch(`/api/pr/${n}`, auth).then(async (r) => {
-      if (!r.ok) return null;
+      if (!r.ok) { resolved.set(n, null); return null; }
       const { summary } = (await r.json()) as { summary: PrSummary };
+      resolved.set(n, summary);
       let picture: string | null = null;
       if (summary.hasPicture) {
         const p = await fetch(`/api/pr/${n}/picture`, auth).catch(() => null);

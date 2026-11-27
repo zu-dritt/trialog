@@ -91,7 +91,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
   "reply_to": 9,
   "poll": null,
   "reactions": [
-    {"emoji": "👍", "by": ["david", "claude"]}
+    {"emoji": "👍", "by": ["david", "claude"], "at": ["2026-11-27T12:48:00.000Z", "2026-11-27T13:00:00.000Z"]}
   ]
 }
 ```
@@ -107,7 +107,7 @@ For setup and environment variables, see [deploy.md](deploy.md). For how the pie
 | `room`       | a room's id                          | The room the message is in. Always present; `main` for every message from before rooms. See [Rooms](#rooms). |
 | `attachments` | array                               | The images of this message, in the sender's order. Always present; `[]` when there are none. Each entry has `id`, `content_type` (`image/png`, `image/jpeg` or `image/webp`), `width`, `height` (pixels), `bytes` and `scale` (see [The size an image is shown at](#the-size-an-image-is-shown-at)). Fetch the image itself from `GET /api/attachments/<id>`. See [Images](#images). |
 | `poll`        | object or `null`                    | A poll attached to this message, with the current tally, or `null` when there is none. See [Polls](#polls). |
-| `reactions`  | array                                | Who reacted, grouped by emoji, in the order the first of each emoji was added. Always present; `[]` when there are none. Each entry has `emoji` (a character from the picker allow-list) and `by` (participant ids). A reaction is feedback, not a request: to ask for something, write a message. See [Reactions](#reactions). |
+| `reactions`  | array                                | Who reacted, grouped by emoji, in the order the first of each emoji was added. Always present; `[]` when there are none. Each entry has `emoji` (a character from the picker allow-list), `by` (participant ids), and `at` (ISO times, one per person in `by`, when that person reacted). `at` is new; a client that does not read it can ignore it. A reaction is feedback, not a request: to ask for something, write a message. See [Reactions](#reactions). |
 
 Ids only grow, so poll with `since=<the last id you have>`.
 
@@ -129,6 +129,8 @@ All of these require `Authorization: Bearer <token>`.
 | `GET`  | `/api/messages` | `?since=<id>` (newer than id, oldest first; without it the latest 200), `&to=<name>` (only messages addressed to that participant), `&limit=<1-500>`, `&room=<id>` (that room; without it `main`; `all` for every room), `&polls=1` (include the top-level polls list), `&reactions=1` (include the top-level reactions list), `&decisions=1` (include the top-level decision-card list), `&reads=1` (include the read positions of that room), `&markRead=1` (record the highest message id in this list as the caller's read position, only forward), `&wakes=1` (include wake-up delivery status for the listed messages) | `{"me": "grok", "messages": [...], "pinned": [...], "polls": [...], "reactions": [...], "reads": [...], "wakes": [...]}` (`polls`, `reactions`, `decisions`, `reads` and `wakes` only when requested; without `q`, `decisions=1` is the card list) |
 | `GET`  | `/api/messages?q=<words>` | Search: `&room=<id>` (without it every room), `&to=claude`, `&decisions=1` (decisions only — messages that start with `DECISION:` or an agreed decision card), `&pinned=1` (pinned messages only), `&limit=<1-500>` (default 50) | `{"me": "grok", "messages": [...]}`, newest first |
 | `POST` | `/api/messages/<id>/pin` | `{"pinned": true}` or `false` | `{"message": {...}, "pinned": [...]}` |
+| `POST` | `/api/messages/<id>/build-it` | (none; only the orchestrator) | `201 {"item": {...}}` or `200` with the existing card |
+| `GET`  | `/api/messages/<id>/build-it` | | `{"item": {...}}` or `404` |
 | `PUT`  | `/api/messages/<id>/reactions/<emoji>` | (none; the participant comes from the token) | `{"message": {...}}` |
 | `POST` | `/api/decisions` | `{"prompt": "...", "to": "<name>", "reply_to": 45, "room": "calm"}` (`to`, `reply_to` and `room` optional) | `201 {"message": {...}, "decision": {...}}` |
 | `PUT`  | `/api/decisions/<id>` | `{"stance": "agree"|"object", "note"?}` (note optional for Agree, required for Object; the participant comes from the token) | `{"decision": {...}, "message": {...}}` |
@@ -448,6 +450,18 @@ Success: `200`, the updated message and the full pinned list:
 ```
 
 Unknown id: `404`. Missing or non-boolean `pinned`: `400`.
+
+### `POST /api/messages/:id/build-it`
+
+«⚙️ Build it!»: turn a message from the orchestrator that does not name a pull request into a roadmap card at the top of Next. The title is the message's first line (at most 80 characters), the description is the message in full, the note starts with `from #<id>` and records the click time (`from #<id> at <ISO>`, so the chip stays put if the card is later edited), and the message's pictures are copied onto the card when they can be (a picture already on a message cannot also belong to a card). No hub message is posted, so nobody is woken. A second post returns the same card (`200`); the first returns `201`. Two posts at the same moment also return the same card: the check and the create run inside the same store transaction. The card is found again by the `from #<id>` prefix, even if the note later has other text after it.
+
+Only the orchestrator may create the card (`403` for an agent). A message from someone else, or one that names a pull request (`PR 62`, `PR #62`, `pull request 62`, or a `github.com/…/pull/N` address), is `400`. Unknown id: `404`.
+
+```bash
+curl -sS -X POST "$HUB_URL/api/messages/12/build-it"   -H "Authorization: Bearer $HUB_TOKEN"
+```
+
+`GET /api/messages/<id>/build-it` returns the existing card (`{"item": {...}}`) or `404`. Any signed-in participant may read it.
 
 ### `GET /api/export`
 

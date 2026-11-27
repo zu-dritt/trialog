@@ -349,6 +349,12 @@ export interface Store {
   /** A new card at the end of its column; null when the roadmap is full. */
   /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
   addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null }): Promise<RoadmapItem | null>;
+  /**
+   * Adds a card, or returns the existing one when `sameAs` already matches, inside the same
+   * transaction and advisory lock as a normal add — so two calls at the same moment cannot
+   * create two cards.
+   */
+  addRoadmapItemOnce(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null; sameAs: (item: RoadmapItem) => boolean }): Promise<{ item: RoadmapItem; created: boolean } | null>;
   /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
   updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description' | 'reviewer'>>, by: Sender): Promise<RoadmapItem | null>;
   deleteRoadmapItem(id: string): Promise<boolean>;
@@ -811,10 +817,11 @@ const COLS = `${BASE_COLS},
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
   (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll,
   (SELECT ${DECISION_JSON} FROM decision_cards c WHERE c.message_id = messages.id) AS decision,
-  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
      FROM (
        SELECT emoji,
               json_agg(participant ORDER BY created_at, participant) AS by,
+              json_agg(created_at ORDER BY created_at, participant) AS at,
               min(created_at) AS first_at
          FROM reactions
         WHERE message_id = messages.id
@@ -1009,10 +1016,14 @@ const toPoll = (v: unknown): Poll | null => {
     created_at: iso(r.created_at) as string,
   };
 };
-const toReaction = (r: Row): Reaction => ({
-  emoji: r.emoji as string,
-  by: Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []),
-});
+const toReaction = (r: Row): Reaction => {
+  const by = Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []);
+  const rawAt = typeof r.at === 'string' ? (() => { try { return JSON.parse(r.at as string) as unknown; } catch { return []; } })() : r.at;
+  const at = Array.isArray(rawAt)
+    ? rawAt.map((v) => iso(v)).filter((s): s is string => typeof s === 'string')
+    : [];
+  return at.length === by.length && at.length > 0 ? { emoji: r.emoji as string, by, at } : { emoji: r.emoji as string, by };
+};
 const toReactions = (v: unknown): Reaction[] => {
   const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
   return Array.isArray(list) ? (list as Row[]).map(toReaction) : [];
@@ -1077,6 +1088,38 @@ export interface StoreOptions {
   welcome?: string;
 }
 const defaultWelcome = (): string => welcomeText(parseParticipants(DEFAULT_PARTICIPANTS));
+
+type RoadmapTx = { query: (text: string, params: unknown[]) => Promise<Row[]> };
+type NewRoadmapItem = { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null };
+
+/** Inserts a card; the caller already holds the roadmap advisory lock. */
+async function insertRoadmapItem(tx: RoadmapTx, { column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }: NewRoadmapItem): Promise<RoadmapItem | null> {
+  const [{ n, next }] = await tx.query(`SELECT count(*)::int AS n, coalesce(max(position) FILTER (WHERE col = $1::text), -1) + 1 AS next FROM roadmap_items`, [column]);
+  if (Number(n) >= ROADMAP_MAX_ITEMS) return null;
+  // Pictures: the caller's own uploads, not yet on a message or a card. A failure throws and
+  // rolls everything back, so there is never a card with half its pictures.
+  if (attachments.length) {
+    const found = await tx.query(`SELECT id, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`, [attachments]);
+    for (const aid of attachments) {
+      const row = found.find((r) => r.id === aid);
+      if (!row) throw new AttachmentLinkError(aid, 'unknown');
+      if (row.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+      if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(aid, 'already linked');
+    }
+  }
+  // «top»: first in its column (an idea someone wants built next), else last.
+  if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
+  const id = newRoadmapId();
+  await tx.query(
+    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text)`,
+    [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
+  );
+  for (const [position, aid] of attachments.entries()) {
+    await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
+  }
+  const [row] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+  return toRoadmap(row);
+}
 
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
 export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcome = defaultWelcome() }: StoreOptions = {}): Store {
@@ -1547,35 +1590,21 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
     },
-    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
+    async addRoadmapItem(input) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
-        const [{ n, next }] = await tx.query(`SELECT count(*)::int AS n, coalesce(max(position) FILTER (WHERE col = $1::text), -1) + 1 AS next FROM roadmap_items`, [column]);
-        if (Number(n) >= ROADMAP_MAX_ITEMS) return null;
-        // Pictures: the caller's own uploads, not yet on a message or a card. A failure throws and
-        // rolls everything back, so there is never a card with half its pictures.
-        if (attachments.length) {
-          const found = await tx.query(`SELECT id, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`, [attachments]);
-          for (const aid of attachments) {
-            const row = found.find((r) => r.id === aid);
-            if (!row) throw new AttachmentLinkError(aid, 'unknown');
-            if (row.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
-            if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(aid, 'already linked');
-          }
-        }
-        // «top»: first in its column (an idea someone wants built next), else last.
-        if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
-        const id = newRoadmapId();
-        await tx.query(
-          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text)`,
-          [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
-        );
-        for (const [position, aid] of attachments.entries()) {
-          await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
-        }
-        const [row] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
-        return toRoadmap(row);
+        return insertRoadmapItem(tx, input);
+      });
+    },
+    async addRoadmapItemOnce({ sameAs, ...input }) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const hit = (await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap).find(sameAs);
+        if (hit) return { item: hit, created: false };
+        const item = await insertRoadmapItem(tx, input);
+        return item ? { item, created: true } : null;
       });
     },
     async updateRoadmapItem(id, change, by) {
@@ -1870,10 +1899,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       const rows = await db.query(
         `SELECT message_id,
-                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
                    FROM (
                      SELECT emoji,
                             json_agg(participant ORDER BY created_at, participant) AS by,
+                            json_agg(created_at ORDER BY created_at, participant) AS at,
                             min(created_at) AS first_at
                        FROM reactions r2
                       WHERE r2.message_id = r.message_id
@@ -2158,16 +2188,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type ReactionRow = { message_id: number; participant: Sender; emoji: string; created_at: string };
   const reactionRows: ReactionRow[] = [];
   const reactionsOn = (messageId: number): Reaction[] => {
-    const grouped = new Map<string, { by: Sender[]; first: string; index: number }>();
+    const grouped = new Map<string, { by: Sender[]; at: string[]; first: string; index: number }>();
     for (const r of reactionRows) {
       if (r.message_id !== messageId) continue;
       const g = grouped.get(r.emoji);
-      if (g) g.by.push(r.participant);
-      else grouped.set(r.emoji, { by: [r.participant], first: r.created_at, index: grouped.size });
+      if (g) { g.by.push(r.participant); g.at.push(r.created_at); }
+      else grouped.set(r.emoji, { by: [r.participant], at: [r.created_at], first: r.created_at, index: grouped.size });
     }
     return [...grouped.entries()]
       .sort((a, b) => a[1].first.localeCompare(b[1].first) || a[1].index - b[1].index)
-      .map(([emoji, g]) => ({ emoji, by: g.by }));
+      .map(([emoji, g]) => ({ emoji, by: g.by, at: g.at }));
   };
   const reactionsFingerprint = (): string => {
     const byMessage = new Map<number, { n: number; latest: string }>();
@@ -2236,7 +2266,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     attachments: m.attachments.map((a) => ({ ...a })),
     poll: pollForMessage(m.id),
     decision: decisionForMessage(m.id),
-    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by] })),
+    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by], ...(r.at ? { at: [...r.at] } : {}) })),
   });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const wakeTargets = new Map<string, { url: string; secret: string; updated_at: string }>();
@@ -2485,6 +2515,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       for (const upload of pictures) upload.roadmap_item_id = item.id;
       roadmap.set(item.id, item);
       return { ...item, attachments: [...item.attachments] };
+    },
+    async addRoadmapItemOnce({ sameAs, ...input }) {
+      const hit = [...roadmap.values()].find(sameAs);
+      if (hit) return { item: { ...hit, attachments: [...hit.attachments] }, created: false };
+      const item = await this.addRoadmapItem(input);
+      return item ? { item, created: true } : null;
     },
     async updateRoadmapItem(id, change, by) {
       const item = roadmap.get(id);

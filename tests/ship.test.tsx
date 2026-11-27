@@ -1,5 +1,6 @@
-// «🚀 Ship it!»: which messages get it (the PR-link gate), the toggle, the chips, the reaction row
-// not showing the 🚀 twice, and the 🚀 go stored through the reactions store (memory and PGlite).
+// «🚀 Ship it!»: which messages get it (the PR-link gate), the toggle, the chips («go from …»,
+// or «shipped» only when the PR is known to be merged), the reaction row not showing the 🚀 twice,
+// and the 🚀 go stored through the reactions store (memory and PGlite).
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -7,18 +8,20 @@ import { PGlite } from '@electric-sql/pglite';
 import type { Message } from '../lib/core';
 import type { Participant } from '../lib/shared';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { linksPullRequest } from '../app/links';
-import { SHIP_EMOJI, SHIP_HELP, ShipIt, shipToggle, shippersOf } from '../app/ship';
+import { linksPullRequest, pullRequestNumbers } from '../app/links';
+import { formatClock, shipChipText } from '../lib/build-it';
+import { SHIP_EMOJI, SHIP_HELP, ShipIt, shipToggle, shippersOf, shipGoesOf } from '../app/ship';
 import { ReactionBar } from '../app/reactions';
 import { canonicalEmoji } from '../app/emoji-data';
 
 const REPO = 'zu-dritt/trialog';
+const AT = '2026-11-27T12:48:00.000Z'; // 13:48 Europe/Zurich
 const base = (over: Partial<Message> = {}): Message => ({
   id: 7, sender: 'claude', recipient: null, text: 'PR 66 is up', created_at: '2026-11-27T07:00:00.000Z',
   pinned_at: null, room: 'main', attachments: [], reply_to: null, poll: null, reactions: [], ...over,
 });
 const people: Participant[] = [
-  { name: 'david', label: 'David', kind: 'human', color: 0 },
+  { name: 'david', label: 'Orchestrator', kind: 'human', color: 0 },
   { name: 'claude', label: 'Claude', kind: 'agent', color: 1 },
   { name: 'grok', label: 'Grok', kind: 'agent', color: 2 },
 ];
@@ -39,6 +42,10 @@ test('the gate: other text, issues, code and words containing «pr» do not', ()
 test('the gate: without a repository «PR 62» is not a link, but a GitHub pull request address still is', () => {
   assert.equal(linksPullRequest('PR 62 is ready', null), false);
   assert.equal(linksPullRequest('https://github.com/zu-dritt/trialog/pull/62', null), true);
+  assert.deepEqual(pullRequestNumbers('PR 62 and PR 63', REPO), [62, 63]);
+  assert.deepEqual(pullRequestNumbers('PR 62 and https://github.com/zu-dritt/trialog/pull/62', REPO), [62], 'the same number once');
+  assert.deepEqual(pullRequestNumbers('PR 62 is ready', null), []);
+  assert.deepEqual(pullRequestNumbers('https://github.com/zu-dritt/trialog/pull/62', null), [62]);
 });
 
 test('the go is a 🚀 reaction the reactions API accepts', () => {
@@ -46,29 +53,45 @@ test('the go is a 🚀 reaction the reactions API accepts', () => {
 });
 
 test('the toggle: ship when you have not, take it back when you have, nothing without a token', () => {
-  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'] }, { emoji: '👍', by: ['grok'] }] });
+  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'], at: [AT] }, { emoji: '👍', by: ['grok'] }] });
   assert.deepEqual(shippersOf(m), ['david']);
+  assert.deepEqual(shipGoesOf(m), [{ name: 'david', at: AT }]);
   assert.deepEqual(shipToggle(m, 'grok'), { emoji: SHIP_EMOJI, on: true });
   assert.deepEqual(shipToggle(m, 'david'), { emoji: SHIP_EMOJI, on: false });
   assert.equal(shipToggle(m, null), null);
   assert.deepEqual(shippersOf(base()), []);
 });
 
-test('the button and a chip per participant who shipped, with names and the help line', () => {
-  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david', 'claude'] }] });
+test('the chip says «🚀 go from Orchestrator · HH:MM», not «shipped it»', () => {
+  assert.equal(formatClock(AT), '13:48');
+  assert.equal(shipChipText('Orchestrator', AT), '🚀 go from Orchestrator · 13:48');
+  assert.equal(shipChipText('Orchestrator', AT, true), '🚀 shipped · 13:48');
+  assert.equal(shipChipText('Orchestrator'), '🚀 go from Orchestrator');
+  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david', 'claude'], at: [AT, '2026-11-27T13:00:00.000Z'] }] });
   const out = renderToStaticMarkup(<ShipIt message={m} me="claude" participants={people} onToggle={() => {}} />);
   assert.match(out, /🚀 Ship it!/);
-  assert.match(out, /aria-pressed="true"/, 'Claude has shipped, so the button is highlighted');
-  assert.match(out, /🚀 David shipped it/);
-  assert.match(out, /🚀 Claude shipped it/);
+  assert.match(out, /aria-pressed="true"/, 'Claude has given a go, so the button is highlighted');
+  assert.match(out, /🚀 go from Orchestrator · 13:48/);
+  assert.match(out, /🚀 go from Claude · 14:00/);
+  assert.ok(!out.includes('shipped it'), 'clicking is a go, not a ship');
   assert.ok(out.includes(`title="${SHIP_HELP.replace("'", '&#x27;')}"`), out);
   const fresh = renderToStaticMarkup(<ShipIt message={base()} me="grok" participants={people} onToggle={() => {}} />);
   assert.match(fresh, /aria-pressed="false"/);
-  assert.ok(!fresh.includes('shipped it'));
+  assert.ok(!fresh.includes('go from'));
+});
+
+test('the chip says «shipped» only when the pull request is known to be merged', () => {
+  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'], at: [AT] }] });
+  const go = renderToStaticMarkup(<ShipIt message={m} me="david" participants={people} onToggle={() => {}} />);
+  assert.match(go, /🚀 go from Orchestrator · 13:48/);
+  assert.ok(!go.includes('🚀 shipped'));
+  const done = renderToStaticMarkup(<ShipIt message={m} me="david" participants={people} onToggle={() => {}} merged />);
+  assert.match(done, /🚀 shipped · 13:48/);
+  assert.ok(!done.includes('go from'));
 });
 
 test('the reaction row leaves out the 🚀 it shows as chips, and keeps the other pills', () => {
-  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'] }, { emoji: '👍', by: ['grok'] }] });
+  const m = base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'], at: [AT] }, { emoji: '👍', by: ['grok'] }] });
   const out = renderToStaticMarkup(
     <ReactionBar message={m} me="grok" participants={people} onToggle={() => {}} hide={[SHIP_EMOJI]}>
       <ShipIt message={m} me="grok" participants={people} onToggle={() => {}} />
@@ -76,7 +99,7 @@ test('the reaction row leaves out the 🚀 it shows as chips, and keeps the othe
   );
   assert.ok(!out.includes(`${SHIP_EMOJI} 1`), 'no 🚀 pill next to the chips');
   assert.match(out, /👍 1/);
-  assert.equal((out.match(/David shipped it/g) ?? []).length, 1);
+  assert.equal((out.match(/go from Orchestrator/g) ?? []).length, 1);
   // Without the button and with nothing else to show, the row stays empty.
   assert.equal(renderToStaticMarkup(<ReactionBar message={base({ reactions: [{ emoji: SHIP_EMOJI, by: ['david'] }] })} me="grok" onToggle={() => {}} hide={[SHIP_EMOJI]} />), '');
 });
@@ -93,24 +116,27 @@ const STORES: [string, () => Promise<Store>][] = [
 ];
 
 for (const [name, make] of STORES) {
-  test(`${name}: several people ship, and a second tap takes a go back`, async () => {
+  test(`${name}: several people ship, and a second tap takes a go back, with a time on each go`, async () => {
     const store = await make();
     const m = await store.add({ sender: 'claude', recipient: null, text: 'PR 66 is up' });
     assert.ok(m);
     await store.addReaction(m.id, 'david', SHIP_EMOJI);
     const both = await store.addReaction(m.id, 'grok', SHIP_EMOJI);
     assert.equal(both.status, 'ok');
-    if (both.status === 'ok') assert.deepEqual(shippersOf(both.message), ['david', 'grok']);
+    if (both.status === 'ok') {
+      assert.deepEqual(shippersOf(both.message), ['david', 'grok']);
+      const goes = shipGoesOf(both.message);
+      assert.equal(goes.length, 2);
+      assert.ok(goes.every((g) => g.at && !Number.isNaN(Date.parse(g.at))), 'each go has a time');
+    }
     const back = await store.removeReaction(m.id, 'david', SHIP_EMOJI);
     assert.ok(back);
     assert.deepEqual(shippersOf(back), ['grok']);
   });
 }
 
-test('«… shipped it» reads as text, not as a button (no pill border)', async () => {
-  const { renderToStaticMarkup } = await import('react-dom/server');
-  const { ShipIt } = await import('../app/ship');
-  const html = renderToStaticMarkup(<ShipIt message={{ id: 1, reactions: [{ emoji: '🚀', by: ['david'] }] } as never} me="david" onToggle={() => {}} />);
+test('the go chip reads as text, not as a button (no pill border)', () => {
+  const html = renderToStaticMarkup(<ShipIt message={{ id: 1, text: 'PR 1', reactions: [{ emoji: '🚀', by: ['david'] }] } as never} me="david" onToggle={() => {}} />);
   const chip = /<span[^>]*data-shipped="david"[^>]*>/.exec(html)?.[0] ?? '';
   assert.ok(chip, html);
   assert.doesNotMatch(chip, /rounded-full|border/);
