@@ -5,7 +5,7 @@
 // (playground #813). Read through GET /api/pr/<n> (GitHub, cached five minutes on the server). A
 // merged PR stays merged, so it is asked once; an open one again every OPEN_RECHECK_MS while shown.
 import { useEffect, useRef, useState } from 'react';
-import { REPO, pullRequestNumbers } from './links';
+import { REPO, REPO_PREFIXES, pullRequestNumbers } from './links';
 
 export const OPEN_RECHECK_MS = 2 * 60_000;
 
@@ -13,12 +13,12 @@ export const OPEN_RECHECK_MS = 2 * 60_000;
  * The PRs of this hub a text names. Another repository's PR is not ours (Grok's review of PR 108): an
  * address of another repo, or a repo name in front, «apartment-finder PR 36», is left out.
  */
-export function ownPrs(text: string, repo: string | null = REPO): number[] {
+export function ownPrs(text: string, repo: string | null = REPO, prefixes: Readonly<Record<string, string>> = REPO_PREFIXES): number[] {
   const ours = repo ? repo.toLowerCase() : '';
   const cleaned = text
     .replace(/https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})\/pull\/\d+/gi, (m, r: string) => (r.toLowerCase() === ours ? m : ' '))
     .replace(/(?:^|\s)[A-Za-z0-9_.]*[-/][A-Za-z0-9_./-]*\s+(?:PR|pull request)\s?#?\d+/gi, ' ');
-  return pullRequestNumbers(cleaned, repo);
+  return pullRequestNumbers(cleaned, repo, prefixes);
 }
 
 /** True when the text names at least one PR of this hub and every one of them is merged. */

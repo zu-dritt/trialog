@@ -27,7 +27,7 @@ const buildNumber = process.env.TRIALOG_BUILD_NUMBER ?? pullRequestOf(lastCommit
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Written into the server code and the page code at build time, so both carry the same value.
-  env: { TRIALOG_BUILD_ID: buildId, TRIALOG_VERSION: version, TRIALOG_BUILD_NUMBER: buildNumber, TRIALOG_DEMO: process.env.TRIALOG_DEMO === '1' ? '1' : '', TRIALOG_DEMO_URL: process.env.TRIALOG_DEMO_URL ?? '', TRIALOG_REPO: process.env.TRIALOG_REPO ?? '' },
+  env: { TRIALOG_BUILD_ID: buildId, TRIALOG_VERSION: version, TRIALOG_BUILD_NUMBER: buildNumber, TRIALOG_DEMO: process.env.TRIALOG_DEMO === '1' ? '1' : '', TRIALOG_DEMO_URL: process.env.TRIALOG_DEMO_URL ?? '', TRIALOG_REPO: process.env.TRIALOG_REPO ?? '', TRIALOG_REPO_PREFIXES: process.env.TRIALOG_REPO_PREFIXES ?? '' },
   async headers() {
     return [
       {
