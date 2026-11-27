@@ -10,11 +10,11 @@ import type { Participant } from '../lib/shared';
 import type { RoadmapItem } from '../lib/roadmap';
 import { ROADMAP_TITLE_MAX } from '../lib/roadmap';
 import {
-  BUILD_NOTE, buildChipText, buildItFromMessage, cardHref, descriptionFromMessage, findBuiltCard,
-  formatClock, sourceMessageOf, titleFromMessage,
+  BUILD_NOTE, buildChipText, buildItFromMessage, builtAtFromNote, cardHref, descriptionFromMessage,
+  findBuiltCard, formatClock, sourceMessageOf, titleFromMessage,
 } from '../lib/build-it';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
-import { BuildIt, BUILD_HELP, BUILD_HELP_DISABLED, isBuildableMessage, isOrchestrator } from '../app/build-it';
+import { BuildIt, BUILD_HELP, BUILD_HELP_DISABLED, BUILD_IT_QUIET_CLASS, isBuildableMessage, isOrchestrator, isQuietBuildIt, loadRoadmapOnce, rememberBuiltCard, resetRoadmapCache } from '../app/build-it';
 import { linksPullRequest } from '../app/links';
 
 const AT = '2026-11-27T12:48:00.000Z';
@@ -48,13 +48,24 @@ test('the description keeps line breaks and is cut at 4000 characters', () => {
   assert.equal(descriptionFromMessage('ok\x07done'), 'okdone');
 });
 
-test('the note «from #N» is how a card is found again', () => {
+test('the note «from #N» is how a card is found again, even if later text is added', () => {
   assert.equal(BUILD_NOTE(12), 'from #12');
+  assert.equal(BUILD_NOTE(12, AT), 'from #12 at 2026-11-27T12:48:00.000Z');
   assert.equal(sourceMessageOf('from #12'), 12);
   assert.equal(sourceMessageOf(' from #12 '), 12);
-  assert.equal(sourceMessageOf('from #12, claimed'), null);
-  const items = [card(), card({ id: 'rm_bbbbbbbb', note: 'other', title: 'Other' })];
+  assert.equal(sourceMessageOf('from #12, claimed'), 12, 'an edited note that still starts with «from #N» is the same card');
+  assert.equal(sourceMessageOf('from #12 at 2026-11-27T12:48:00.000Z'), 12);
+  assert.equal(sourceMessageOf('see from #12'), null);
+  assert.equal(sourceMessageOf('from #12x'), null);
+  assert.equal(builtAtFromNote('from #12 at 2026-11-27T12:48:00.000Z'), AT);
+  assert.equal(builtAtFromNote('from #12'), undefined);
+  const items = [
+    card({ note: 'from #12 at 2026-11-27T12:48:00.000Z' }),
+    card({ id: 'rm_bbbbbbbb', note: 'other', title: 'Other' }),
+    card({ id: 'rm_cccccccc', note: 'from #12, claimed', title: 'Edited note' }),
+  ];
   assert.equal(findBuiltCard(items, 12)?.id, 'rm_aaaaaaaa');
+  assert.equal(findBuiltCard([items[2]], 12)?.id, 'rm_cccccccc');
   assert.equal(findBuiltCard(items, 99), undefined);
 });
 
@@ -90,6 +101,56 @@ test('the button, a disabled button for an agent, and the chip once a card exist
   assert.match(chip, /href="\/roadmap#rm_aaaaaaaa"/);
   assert.match(chip, /data-build-card="rm_aaaaaaaa"/);
   assert.ok(!chip.includes('Build it!'), 'the button is replaced by the chip');
+
+  const later = '2026-11-27T18:00:00.000Z';
+  const frozen = renderToStaticMarkup(
+    <BuildIt message={base()} me="david" participants={people} card={card({ note: `from #12 at ${AT}`, updated_at: later })} />,
+  );
+  assert.match(frozen, /⚙️ go to build · 13:48 → card/, 'the click time in the note holds still after an edit bumps updated_at');
+  assert.ok(!frozen.includes('19:00'), frozen);
+});
+
+test('a message older than today is quiet until hover or focus; today and the chip are not', () => {
+  const now = new Date('2026-11-27T14:00:00.000Z');
+  assert.equal(isQuietBuildIt(AT, now), false, 'today in Europe/Zurich');
+  assert.equal(isQuietBuildIt('2026-11-26T12:00:00.000Z', now), true);
+  assert.equal(isQuietBuildIt('2026-11-26T23:30:00.000Z', now), false, 'already 00:30 on the 27th in Zurich');
+  const today = renderToStaticMarkup(<BuildIt message={base()} me="david" participants={people} />);
+  assert.ok(!today.includes('data-build-quiet'), today);
+  assert.ok(!today.includes(BUILD_IT_QUIET_CLASS), today);
+  const old = renderToStaticMarkup(<BuildIt message={base({ created_at: '2026-11-26T12:00:00.000Z' })} me="david" participants={people} />);
+  assert.match(old, /data-build-quiet=""/);
+  assert.ok(old.includes(BUILD_IT_QUIET_CLASS), old);
+  const chip = renderToStaticMarkup(
+    <BuildIt message={base({ created_at: '2026-11-26T12:00:00.000Z' })} me="david" participants={people} card={card()} />,
+  );
+  assert.ok(!chip.includes('data-build-quiet'), 'the chip stays visible');
+  assert.ok(!chip.includes(BUILD_IT_QUIET_CLASS), chip);
+});
+
+test('the roadmap is loaded once and shared, then the cache is updated after a POST', async () => {
+  resetRoadmapCache();
+  let n = 0;
+  const items = [card()];
+  const api = async (path: string) => {
+    n += 1;
+    assert.equal(path, '/api/roadmap');
+    return new Response(JSON.stringify({ items }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const first = loadRoadmapOnce(api);
+  const second = loadRoadmapOnce(api);
+  assert.equal(await first, await second);
+  assert.equal((await first).map((i) => i.id).join(), 'rm_aaaaaaaa');
+  assert.equal(n, 1, 'one GET for every button on the page');
+  const added = card({ id: 'rm_bbbbbbbb', note: 'from #99' });
+  rememberBuiltCard(added);
+  const after = await loadRoadmapOnce(api);
+  assert.equal(after.some((i) => i.id === 'rm_bbbbbbbb'), true);
+  assert.equal(n, 1, 'a successful POST does not refetch the whole list');
+  resetRoadmapCache();
+  await loadRoadmapOnce(api);
+  assert.equal(n, 2, 'a reset lets the next page load fetch again');
+  resetRoadmapCache();
 });
 
 function pgliteDb(pg: PGlite): Db {
@@ -117,7 +178,8 @@ for (const [name, make] of STORES) {
     assert.equal(first.item.position, 0, 'top of Next');
     assert.equal(first.item.title, 'A weekly MVP card');
     assert.equal(first.item.description, 'A weekly MVP card\nPick one each week.');
-    assert.equal(first.item.note, `from #${m.id}`);
+    assert.equal(sourceMessageOf(first.item.note), m.id);
+    assert.equal(builtAtFromNote(first.item.note) !== undefined, true, 'the click time is in the note so the chip stays put');
     assert.equal(first.item.owner, null);
     const next = (await store.listRoadmap()).filter((i) => i.column === 'next');
     assert.deepEqual(next.map((i) => i.title), ['A weekly MVP card', 'Older card']);
@@ -126,7 +188,21 @@ for (const [name, make] of STORES) {
     const second = await buildItFromMessage(store, { messageId: m.id, by: 'david', humans: ['david'], namesPr: false });
     assert.equal(second.status, 'exists');
     if (second.status === 'exists') assert.equal(second.item.id, first.item.id);
-    assert.equal((await store.listRoadmap()).filter((i) => i.note === `from #${m.id}`).length, 1);
+    assert.equal((await store.listRoadmap()).filter((i) => sourceMessageOf(i.note) === m.id).length, 1);
+  });
+
+  test(`${name}: two posts at the same moment create only one card`, async () => {
+    const store = await make();
+    const m = await store.add({ sender: 'david', recipient: null, text: 'Make this atomic' });
+    assert.ok(m);
+    const input = { messageId: m.id, by: 'david' as const, humans: ['david'], namesPr: false };
+    const [a, b] = await Promise.all([buildItFromMessage(store, input), buildItFromMessage(store, input)]);
+    const statuses = [a.status, b.status].sort();
+    assert.deepEqual(statuses, ['created', 'exists']);
+    const id = a.status === 'created' || a.status === 'exists' ? a.item.id : '';
+    const other = b.status === 'created' || b.status === 'exists' ? b.item.id : '';
+    assert.equal(id, other);
+    assert.equal((await store.listRoadmap()).filter((i) => sourceMessageOf(i.note) === m.id).length, 1);
   });
 
   test(`${name}: a message from an agent, or one that names a PR, is refused; pictures are copied`, async () => {
@@ -195,7 +271,8 @@ test('API: only the orchestrator can create the card; a second post returns the 
   assert.equal(item.position, 0);
   assert.equal(item.title, 'The claim draft:');
   assert.equal(item.description, 'The claim draft:\ntake turns picking.');
-  assert.equal(item.note, `from #${m.id}`);
+  assert.equal(sourceMessageOf(item.note), m.id);
+  assert.equal(builtAtFromNote(item.note) !== undefined, true);
   const again = await call('POST', m.id, 'david');
   assert.equal(again.status, 200);
   assert.equal(((await again.json()) as { item: RoadmapItem }).item.id, item.id);
@@ -214,4 +291,14 @@ test('API: a message that names a PR, or one from an agent, is refused; a missin
   assert.equal((await call('POST', 999999, 'david')).status, 404);
   assert.equal((await call('POST', 'nope', 'david')).status, 400);
   assert.equal(linksPullRequest('PR 66 is up', 'zu-dritt/trialog'), true);
+});
+
+test('API: two posts at the same moment return the same card', async () => {
+  const m = await postMessage('david', 'Race me into a card');
+  const [a, b] = await Promise.all([call('POST', m.id, 'david'), call('POST', m.id, 'david')]);
+  const statuses = [a.status, b.status].sort();
+  assert.ok(statuses[0] === 200 && statuses[1] === 201, `expected 200 and 201, got ${statuses}`);
+  const idA = ((await a.json()) as { item: RoadmapItem }).item.id;
+  const idB = ((await b.json()) as { item: RoadmapItem }).item.id;
+  assert.equal(idA, idB);
 });

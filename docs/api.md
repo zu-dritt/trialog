@@ -453,7 +453,7 @@ Unknown id: `404`. Missing or non-boolean `pinned`: `400`.
 
 ### `POST /api/messages/:id/build-it`
 
-«⚙️ Build it!»: turn a message from the orchestrator that does not name a pull request into a roadmap card at the top of Next. The title is the message's first line (at most 80 characters), the description is the message in full, the note is `from #<id>`, and the message's pictures are copied onto the card when they can be (a picture already on a message cannot also belong to a card). No hub message is posted, so nobody is woken. A second post returns the same card (`200`); the first returns `201`.
+«⚙️ Build it!»: turn a message from the orchestrator that does not name a pull request into a roadmap card at the top of Next. The title is the message's first line (at most 80 characters), the description is the message in full, the note starts with `from #<id>` and records the click time (`from #<id> at <ISO>`, so the chip stays put if the card is later edited), and the message's pictures are copied onto the card when they can be (a picture already on a message cannot also belong to a card). No hub message is posted, so nobody is woken. A second post returns the same card (`200`); the first returns `201`. Two posts at the same moment also return the same card: the check and the create run inside the same store transaction. The card is found again by the `from #<id>` prefix, even if the note later has other text after it.
 
 Only the orchestrator may create the card (`403` for an agent). A message from someone else, or one that names a pull request (`PR 62`, `PR #62`, `pull request 62`, or a `github.com/…/pull/N` address), is `400`. Unknown id: `404`.
 

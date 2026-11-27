@@ -1,17 +1,25 @@
 // «⚙️ Build it!»: turn an orchestrator message that does not name a pull request into a roadmap
 // card at the top of Next. One click, no hub message (so nobody is woken). A second click returns
-// the same card. The note «from #N» is how the card is found again.
+// the same card. The note «from #N» is how the card is found again (a source-message column would
+// be sturdier if the note is later edited away).
 import { ROADMAP_DESCRIPTION_MAX, ROADMAP_PICTURES_MAX, ROADMAP_TITLE_MAX, type RoadmapItem } from './roadmap';
 import type { Message, Sender } from './core';
 import type { Store } from './store';
 
-export const BUILD_NOTE = (id: number): string => `from #${id}`;
-const SOURCE_NOTE = /^from #(\d+)$/;
+/** The identifying prefix, with an optional click time so the chip stays put after later edits. */
+export const BUILD_NOTE = (id: number, at?: string): string => (at ? `from #${id} at ${at}` : `from #${id}`);
+const SOURCE_NOTE = /^from #(\d+)\b/;
+const BUILT_AT = /^from #\d+ at (\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s*$/;
 
-/** The message a Build-it card came from, or null when the note is not «from #N». */
+/** The message a Build-it card came from, or null when the note does not start with «from #N». */
 export function sourceMessageOf(note: string): number | null {
   const m = SOURCE_NOTE.exec(note.trim());
   return m ? Number(m[1]) : null;
+}
+
+/** The click time written into the note, when present. */
+export function builtAtFromNote(note: string): string | undefined {
+  return BUILT_AT.exec(note.trim())?.[1];
 }
 
 /** The first non-empty line, trimmed, at most 80 characters; «Message #N» when the text is empty. */
@@ -32,8 +40,7 @@ export function descriptionFromMessage(text: string, max = ROADMAP_DESCRIPTION_M
 }
 
 export function findBuiltCard(items: readonly RoadmapItem[], messageId: number): RoadmapItem | undefined {
-  const note = BUILD_NOTE(messageId);
-  return items.find((i) => i.note === note);
+  return items.find((i) => sourceMessageOf(i.note) === messageId);
 }
 
 /** HH:MM in Europe/Zurich, the same clock the hub uses for a message's time. */
@@ -65,6 +72,8 @@ export type BuildItResult =
 /**
  * Finds or creates the Next card for this message. Pictures are copied (a message's own uploads
  * cannot also sit on a card); if a copy cannot be made, the card is still created without them.
+ * The check-and-create runs inside the store's roadmap lock, so two posts at the same moment
+ * return the same card.
  */
 export async function buildItFromMessage(
   store: Store,
@@ -77,33 +86,26 @@ export async function buildItFromMessage(
   const existing = findBuiltCard(await store.listRoadmap(), input.messageId);
   if (existing) return { status: 'exists', item: existing };
   const copies = await copyPictures(store, message, input.by);
-  const again = findBuiltCard(await store.listRoadmap(), input.messageId);
-  if (again) return { status: 'exists', item: again };
+  const note = BUILD_NOTE(message.id, new Date().toISOString());
+  const add = (attachments: string[]) => store.addRoadmapItemOnce({
+    column: 'next',
+    title: titleFromMessage(message.text, message.id),
+    note,
+    owner: null,
+    by: input.by,
+    description: descriptionFromMessage(message.text),
+    attachments,
+    top: true,
+    sameAs: (item) => sourceMessageOf(item.note) === message.id,
+  });
   try {
-    const item = await store.addRoadmapItem({
-      column: 'next',
-      title: titleFromMessage(message.text, message.id),
-      note: BUILD_NOTE(message.id),
-      owner: null,
-      by: input.by,
-      description: descriptionFromMessage(message.text),
-      attachments: copies,
-      top: true,
-    });
-    if (!item) return { status: 'full' };
-    return { status: 'created', item };
+    const result = await add(copies);
+    if (!result) return { status: 'full' };
+    return { status: result.created ? 'created' : 'exists', item: result.item };
   } catch {
-    const item = await store.addRoadmapItem({
-      column: 'next',
-      title: titleFromMessage(message.text, message.id),
-      note: BUILD_NOTE(message.id),
-      owner: null,
-      by: input.by,
-      description: descriptionFromMessage(message.text),
-      top: true,
-    });
-    if (!item) return { status: 'full' };
-    return { status: 'created', item };
+    const result = await add([]);
+    if (!result) return { status: 'full' };
+    return { status: result.created ? 'created' : 'exists', item: result.item };
   }
 }
 
@@ -112,6 +114,8 @@ async function copyPictures(store: Store, message: Message, by: Sender): Promise
   for (const a of (message.attachments ?? []).slice(0, ROADMAP_PICTURES_MAX)) {
     const got = await store.getAttachment(a.id);
     if (!got) continue;
+    // Server-side copies of pictures already on the message: not a new user upload, so the
+    // per-hour cap does not apply. 10 000 is high enough that a card's few pictures always go through.
     const copy = await store.addAttachment({
       sender: by,
       content_type: got.attachment.content_type,
