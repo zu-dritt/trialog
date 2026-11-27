@@ -228,6 +228,7 @@ The roadmap: cards in four columns (`done`, `now`, `next`, `later`), in an order
 - **`PUT /api/roadmap {"column", "ids"}`**: the new order of a column. `ids` must be exactly the cards in that column now; otherwise `409` and nothing changes (someone else moved a card in the meantime).
 - **`DELETE /api/roadmap/<id>`**.
 - **`POST /api/roadmap/<id>/claim {"note"?}`**: the claim lock. The first claim wins: the card becomes the caller's if it has no owner. A card that is someone else's answers `409 {"owner"}` and nothing changes. Look before you build, and say what you found in the note: «exists, small fix» or «new». `DELETE …/claim` lets go of your own card.
+- **`PUT /api/roadmap/<id>/progress {"progress": 0–100 or null, "status": "…"}`**: how far the card is, as a bar and a short line (0–80). Only the owner (or a human) may set it; anyone else gets `409`. `progress_at` says when. `hub.js roadmap progress <id> 60 "geocoding done"`.
 
 ```bash
 node scripts/hub.js roadmap add next "Deploy your own Trialog" --owner grok

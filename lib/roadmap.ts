@@ -18,6 +18,12 @@ export interface RoadmapItem {
   owner: string | null;
   updated_by: string;
   updated_at: string;
+  /** How far the owner is, 0–100, or null when not said (migrations/017). */
+  progress: number | null;
+  /** A short line on where it stands («geocoding done»). */
+  status: string;
+  /** When progress or status was last set. */
+  progress_at: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };
@@ -92,3 +98,14 @@ export type ClaimResult =
   | { status: 'ok'; item: RoadmapItem }
   | { status: 'taken'; owner: string; item: RoadmapItem }
   | { status: 'not_found' };
+
+/** {progress: 0–100 or null, status?: "…" (0–80)}: the owner's word on how far a card is. */
+export function parseProgress(body: unknown): { ok: true; progress: number | null; status: string } | Fail {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
+  if (!b || !('progress' in b)) return { ok: false, status: 400, error: 'Body must be {"progress": 0–100 or null, "status": "short line"}.' };
+  const p = b.progress;
+  if (p !== null && (typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p > 100)) return { ok: false, status: 400, error: '"progress" must be a whole number 0–100, or null.' };
+  const status = b.status === undefined ? '' : line(b.status, 'status', 0, 80);
+  if (typeof status !== 'string') return status;
+  return { ok: true, progress: p as number | null, status };
+}

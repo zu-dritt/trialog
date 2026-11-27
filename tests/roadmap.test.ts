@@ -148,3 +148,25 @@ test('API: a claim on someone else\'s card is a 409 with the owner', async () =>
   assert.equal((await claimRoute.DELETE(req('claude', 'DELETE', undefined, path), ctx)).status, 409);
   assert.equal((await claimRoute.DELETE(req('grok', 'DELETE', undefined, path), ctx)).status, 200);
 });
+
+test('progress: only the owner (or a human) says how far a card is; the bar and line come back with the card', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'now', title: 'Murten', note: '', owner: null, by: 'david' }))!;
+    assert.equal(c.progress, null);
+    assert.equal((await store.setRoadmapProgress(c.id, 'grok', 40, 'geocoding', false)).status, 'taken', 'claim first');
+    await store.claimRoadmapItem(c.id, 'grok', null);
+    const r = await store.setRoadmapProgress(c.id, 'grok', 60, 'geocoding done', false);
+    assert.equal(r.status, 'ok');
+    assert.equal(r.status === 'ok' && r.item.progress, 60);
+    assert.equal(r.status === 'ok' && r.item.status, 'geocoding done');
+    assert.ok(r.status === 'ok' && r.item.progress_at);
+    assert.equal((await store.setRoadmapProgress(c.id, 'claude', 90, 'x', false)).status, 'taken', 'not the owner');
+    assert.equal((await store.setRoadmapProgress(c.id, 'david', 70, 'checked by the orchestrator', true)).status, 'ok', 'a human may');
+    const cleared = await store.setRoadmapProgress(c.id, 'grok', null, '', false);
+    assert.equal(cleared.status === 'ok' && cleared.item.progress, null);
+  }
+  const { parseProgress } = await import('../lib/roadmap');
+  assert.deepEqual(parseProgress({ progress: 60, status: ' half ' }), { ok: true, progress: 60, status: 'half' });
+  assert.deepEqual(parseProgress({ progress: null }), { ok: true, progress: null, status: '' });
+  for (const bad of [{}, { progress: 101 }, { progress: -1 }, { progress: 2.5 }, { progress: '50' }, { progress: 5, status: 'x'.repeat(81) }]) assert.equal(parseProgress(bad).ok, false, JSON.stringify(bad));
+});

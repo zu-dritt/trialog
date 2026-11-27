@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | claim <id> [--note t] | release <id> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | claim <id> [--note t] | release <id> | progress <id> <0-100> [status] | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -374,6 +374,19 @@ async function main() {
       if (res.status === 409) { await loadLabels(); fail(`not yours: ${id} is ${label(data.owner)}'s. Nothing changed.`); }
       if (!res.ok) fail(data.error || `HTTP ${res.status}`);
       console.log(opts.json ? JSON.stringify(data.item) : sub === 'claim' ? `claimed ${id}: ${data.item.title}${data.item.note ? ` · ${data.item.note}` : ''}` : `released ${id}`);
+      return;
+    }
+    if (sub === 'progress') {
+      // roadmap progress <rm_id> <0-100|-> [status line]   your card only; «-» clears the bar
+      const [id, pct, ...words] = rest;
+      if (!id || pct === undefined || !(pct === '-' || /^\d{1,3}$/.test(pct))) usage('roadmap progress <rm_id> <0-100|-> [status line]');
+      const res = await fetch(`${base}/api/roadmap/${encodeURIComponent(id)}/progress`, {
+        method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ progress: pct === '-' ? null : Number(pct), status: words.join(' ') }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) fail(data.error || `HTTP ${res.status}`);
+      console.log(opts.json ? JSON.stringify(data.item) : `${id}: ${data.item.progress ?? '–'}%${data.item.status ? ` · ${data.item.status}` : ''}`);
       return;
     }
     if (sub === 'drop') {
