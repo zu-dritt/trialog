@@ -7,10 +7,13 @@
 //     chose, the moment the message is shown, which tells that server who looked and when.
 //     Images are shown as plain links instead; nothing is loaded until the reader clicks.
 //   - Links open in a new tab, without passing on where the reader came from.
+//   - Links to other sites carry a globe, bare addresses read short, and «PR 62» links the pull
+//     request (app/links.ts).
 import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } from 'react';
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMentions } from './mentions';
+import { REPO, isExternal, pullRequestUrl, shortLabel, splitPullRequests } from './links';
 
 const LINK_REL = 'noopener noreferrer nofollow';
 
@@ -21,10 +24,31 @@ function Link({ node: _node, href, children, ...props }: ComponentPropsWithoutRe
   // react-markdown has already dropped unsafe addresses (javascript:, data: and the like), leaving
   // an empty href. A link to nowhere would only reload the page, so show its text and no link.
   if (typeof href !== 'string' || href === '') return <span>{children}</span>;
+  // A bare address (its text is the address itself) reads short; the whole of it is in the title.
+  const bare = textOf(children) === href;
+  const external = isExternal(href);
   return (
-    <a {...props} href={href} target="_blank" rel={LINK_REL}>
-      <InsideLink.Provider value={true}>{children}</InsideLink.Provider>
+    <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? href : props.title}>
+      {external && <Globe />}
+      <InsideLink.Provider value={true}>{bare && external ? shortLabel(href) : children}</InsideLink.Provider>
     </a>
+  );
+}
+
+/** The text of a link's children, when it is only text. */
+function textOf(children: unknown): string | null {
+  if (typeof children === 'string') return children;
+  if (Array.isArray(children) && children.every((c) => typeof c === 'string')) return children.join('');
+  return null;
+}
+
+/** A small grey globe before a link that leaves the hub (a line icon, not an emoji, so it stays quiet). Decorative: the link's text says where it goes. */
+function Globe() {
+  return (
+    <svg aria-hidden="true" data-globe="" viewBox="0 0 16 16" width="12" height="12" className="mr-[3px] inline-block align-[-1px] text-muted" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <circle cx="8" cy="8" r="6.3" />
+      <path d="M1.8 8h12.4M8 1.7c1.8 1.9 2.7 4 2.7 6.3S9.8 12.4 8 14.3M8 1.7C6.2 3.6 5.3 5.7 5.3 8s.9 4.4 2.7 6.3" />
+    </svg>
   );
 }
 
@@ -49,7 +73,7 @@ function Span({ node: _node, children, ...props }: ComponentPropsWithoutRef<'spa
 
 export const mdComponents = { a: Link, img: Image, span: Span };
 
-interface MdNode { type: string; value?: string; children?: MdNode[]; data?: Record<string, unknown> }
+interface MdNode { type: string; value?: string; url?: string; children?: MdNode[]; data?: Record<string, unknown> }
 
 /**
  * Marks each @name of a participant in the text as a mention (a span, coloured by `Span`). Code
@@ -68,7 +92,28 @@ export function remarkMentions(names: readonly string[]) {
   return () => (tree: MdNode) => { walk(tree); };
 }
 
-export function MessageBody({ text, names = [] }: { text: string; names?: readonly string[] }) {
-  const plugins = useMemo(() => (names.length ? [remarkGfm, remarkMentions(names)] : [remarkGfm]), [names]);
+/**
+ * Turns «PR 62» in the text into a link to that pull request in `repo`. Text inside links and code
+ * is left alone, so a link's own words and code stay as written.
+ */
+export function remarkPullRequests(repo: string) {
+  const walk = (node: MdNode) => {
+    if (!node.children || node.type === 'link' || node.type === 'linkReference') return;
+    node.children = node.children.flatMap((child): MdNode[] => {
+      if (child.type !== 'text' || !child.value || !/p(r|ull request)/i.test(child.value)) { walk(child); return [child]; }
+      return splitPullRequests(child.value).map((part): MdNode => typeof part === 'string'
+        ? { type: 'text', value: part }
+        : { type: 'link', url: pullRequestUrl(repo, part.n), children: [{ type: 'text', value: part.typed }] } as MdNode);
+    });
+  };
+  return () => (tree: MdNode) => { walk(tree); };
+}
+
+export function MessageBody({ text, names = [], repo = REPO }: { text: string; names?: readonly string[]; repo?: string | null }) {
+  const plugins = useMemo(() => [
+    remarkGfm,
+    ...(names.length ? [remarkMentions(names)] : []),
+    ...(repo ? [remarkPullRequests(repo)] : []),
+  ], [names, repo]);
   return <ReactMarkdown remarkPlugins={plugins} components={mdComponents}>{text}</ReactMarkdown>;
 }

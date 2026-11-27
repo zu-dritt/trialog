@@ -23,7 +23,7 @@ test('an image without a description, a reference-style image and a linked image
   // An image inside a link: still no <img>, the outer link is kept, and there is no link within a link.
   const linked = html('[![badge](https://example.com/b.svg)](https://example.com/page)');
   assert.ok(!linked.includes('<img'), linked);
-  assert.match(linked, /<a href="https:\/\/example\.com\/page"[^>]*><span>\[image: badge\]<\/span><\/a>/);
+  assert.match(linked, /<a href="https:\/\/example\.com\/page"[^>]*><svg[^]*?<\/svg><span>\[image: badge\]<\/span><\/a>/);
   assert.equal(linked.match(/<a /g)?.length, 1, 'exactly one link');
   assert.ok(!linked.includes('b.svg'), 'the image address is not used at all');
 });
@@ -48,7 +48,7 @@ test('raw HTML is shown as text, including an <img> tag', () => {
 
 test('links open in a new tab without a referrer, and javascript: links are dropped', () => {
   const out = html('[docs](https://example.com/docs) and [bad](javascript:alert(1)) and [worse](data:text/html,<b>x</b>)');
-  assert.match(out, /<a href="https:\/\/example\.com\/docs" target="_blank" rel="noopener noreferrer nofollow">docs<\/a>/);
+  assert.match(out, /<a href="https:\/\/example\.com\/docs" target="_blank" rel="noopener noreferrer nofollow" title="https:\/\/example\.com\/docs"><svg aria-hidden="true" data-globe=""[^]*?<\/svg>docs<\/a>/);
   assert.ok(!out.includes('javascript:'), out);
   assert.ok(!out.includes('data:'), out);
   // A link whose address was unsafe keeps its text and is no link at all (not a link to nowhere).
@@ -60,4 +60,31 @@ test('links open in a new tab without a referrer, and javascript: links are drop
 test('ordinary Markdown still works', () => {
   const out = html('**bold**, `code`, and a list:\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```');
   for (const tag of ['<strong>bold</strong>', '<code>code</code>', '<li>one</li>', '<table>', '<pre>']) assert.ok(out.includes(tag), `${tag} missing in ${out}`);
+});
+
+test('«PR 62» links the pull request when the hub knows its repository; #62 stays a message number', () => {
+  const out = renderToStaticMarkup(<MessageBody text={'Review PR 62, then pull request #61 and PR#7. Not #62, not APR 5, not `PR 9`, not [PR 3](https://example.com/x).'} repo="owner/repo" />);
+  assert.match(out, /href="https:\/\/github\.com\/owner\/repo\/pull\/62"[^>]*>(<svg[^]*?<\/svg>)?PR 62<\/a>/);
+  assert.match(out, /href="https:\/\/github\.com\/owner\/repo\/pull\/61"[^>]*>(<svg[^]*?<\/svg>)?pull request #61<\/a>/);
+  assert.match(out, /href="https:\/\/github\.com\/owner\/repo\/pull\/7"/);
+  assert.ok(!out.includes('/pull/5'), 'APR 5 is a word, no reference');
+  assert.ok(!out.includes('/pull/9'), 'code stays code');
+  assert.ok(!out.includes('/pull/3'), 'a link keeps its own address');
+  assert.match(out, /Not #62/);
+  // Without a repository, nothing becomes a link.
+  assert.ok(!renderToStaticMarkup(<MessageBody text="PR 62" repo={null} />).includes('<a'));
+});
+
+test('a bare address to a pull request or issue on GitHub reads short, others as written; both carry the globe', () => {
+  const out = html('https://github.com/zu-dritt/trialog/pull/62 and https://github.com/zu-dritt/trialog/issues/5 and https://example.com/a');
+  assert.match(out, /href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/62"[^>]*title="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/62"><svg[^]*?<\/svg>PR 62<\/a>/);
+  assert.match(out, /<svg[^]*?<\/svg>issue 5<\/a>/);
+  assert.match(out, /<svg[^]*?<\/svg>https:\/\/example\.com\/a<\/a>/);
+  assert.equal(out.match(/data-globe/g)?.length, 3);
+});
+
+test('repoOf takes only owner/name', async () => {
+  const { repoOf } = await import('../app/links');
+  assert.equal(repoOf(' zu-dritt/trialog '), 'zu-dritt/trialog');
+  for (const v of [undefined, '', 'trialog', 'a/b/c', 'https://github.com/a/b', 'a/..', 'a b/c']) assert.equal(repoOf(v), null, String(v));
 });

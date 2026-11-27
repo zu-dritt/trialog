@@ -74,10 +74,11 @@ test('a web address in a quote is a link as in any message, with the same rules,
     const out = html(quoteSelection('Grok', 45, text));
     assert.equal(squash(visible(out)), `Grok in #45:\n\n${text}`, 'the text is unchanged');
     const tags = new Set([...out.matchAll(/<\/?([a-z0-9]+)/g)].map((m) => m[1]));
-    assert.deepEqual([...tags].sort(), ['a', 'blockquote', 'p', 'strong'], out);
+    // A link to another site carries the globe (an svg of a circle and a path), as in any message.
+    assert.deepEqual([...tags].filter((t) => !['svg', 'circle', 'path'].includes(t)).sort(), ['a', 'blockquote', 'p', 'strong'], out);
     assert.ok(!out.includes('<img'), 'an image address is never loaded');
     // Every link opens in a new tab without passing on where the reader came from, and its text is its own address.
-    for (const link of out.match(/<a [^>]*>[^<]*<\/a>/g) ?? []) {
+    for (const link of out.replace(/<svg[^]*?<\/svg>/g, '').match(/<a [^>]*>[^<]*<\/a>/g) ?? []) {
       assert.match(link, /target="_blank" rel="noopener noreferrer nofollow"/);
       const [, href, label] = /href="([^"]*)"[^>]*>([^<]*)</.exec(link) ?? [];
       assert.ok(href.replace(/^(https?:\/\/|mailto:)/, '').replace(/&amp;/g, '&') === label.replace(/^https?:\/\//, '').replace(/&amp;/g, '&'), `${href} shows as ${label}`);
@@ -88,7 +89,7 @@ test('a web address in a quote is a link as in any message, with the same rules,
   const address = 'https://example.com/page?x=1&y=2&z=a_b';
   const two = html(quoteSelection('Grok', 45, `see ${address} for it`));
   assert.equal(/href="([^"]*)"/.exec(two)?.[1].replace(/&amp;/g, '&'), address, 'the link goes to the original address');
-  assert.equal(/<a [^>]*>([^<]*)<\/a>/.exec(two)?.[1].replace(/&amp;/g, '&'), address, 'and shows it, with no backslash');
+  assert.equal(/<a [^>]*>(?:<svg[^]*?<\/svg>)?([^<]*)<\/a>/.exec(two)?.[1].replace(/&amp;/g, '&'), address, 'and shows it, with no backslash');
   assert.ok(!two.includes('\\') && !two.includes('%5C'), two);
   assert.equal(squash(visible(two)), `Grok in #45:\n\nsee ${address} for it`);
   // The same holds for the other characters an address may hold that mean something in Markdown.
@@ -112,7 +113,7 @@ test('a web address in a quote is a link as in any message, with the same rules,
   // An address written in angle brackets: the ">" is not part of the address.
   const angled = html(quoteSelection('Grok', 45, '<https://example.com>'));
   assert.equal(/href="([^"]*)"/.exec(angled)?.[1], 'https://example.com');
-  assert.equal(/<a [^>]*>([^<]*)<\/a>/.exec(angled)?.[1], 'https://example.com');
+  assert.equal(/<a [^>]*>(?:<svg[^]*?<\/svg>)?([^<]*)<\/a>/.exec(angled)?.[1], 'https://example.com');
   assert.equal(squash(visible(angled)), 'Grok in #45:\n\n<https://example.com>');
   // The same family, each checked for the link and for the text.
   for (const [text, href] of [
