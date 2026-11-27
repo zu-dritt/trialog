@@ -59,7 +59,8 @@ export type Cue =
 
 /** Which cue wins when several arrive together (an agreement comes with the message that completed it). */
 // A new version outranks an ordinary message, so it is not lost when both come at once.
-const RANK: Record<Cue['kind'], number> = { agreed: 4, version: 3, note: 2, sent: 2, reaction: 1 };
+// An addressed note ranks 3 (below); the new version ranks 3.5, so it wins that tie too.
+const RANK: Record<Cue['kind'], number> = { agreed: 4, version: 3.5, note: 2, sent: 2, reaction: 1 };
 const rank = (cue: Cue) => RANK[cue.kind] + (cue.kind === 'note' && cue.addressed ? 1 : 0);
 
 /** While the tab is hidden, only a message addressed to you, an agreed decision and a new version are heard. */
@@ -300,6 +301,13 @@ const makeBrowserContext = (): AudioContextLike | null => {
 /** When the new-version chime sounds a second time, if the page has not been reloaded. */
 export const VERSION_REMINDER_MS = 30 * 60 * 1000;
 
+/** The new-version chime now and once more after VERSION_REMINDER_MS. Returns the way to cancel the second. */
+export function versionChimes(offer: (cue: Cue) => void, timers: { set: typeof setTimeout; clear: typeof clearTimeout } = { set: setTimeout, clear: clearTimeout }): () => void {
+  offer({ kind: 'version' });
+  const again = timers.set(() => offer({ kind: 'version' }), VERSION_REMINDER_MS);
+  return () => timers.clear(again);
+}
+
 export function useSoundMode({ messages, me, participants, primed, newVersion }: {
   messages: readonly Message[];
   me: Sender | null;
@@ -360,12 +368,7 @@ export function useSoundMode({ messages, me, participants, primed, newVersion }:
 
   // The pill appeared while the page was open.
   // The chime when a new version is out, and once more after 30 minutes if the page is still old.
-  useEffect(() => {
-    if (!newVersion) return undefined;
-    player.current!.offer({ kind: 'version' });
-    const again = setTimeout(() => player.current!.offer({ kind: 'version' }), VERSION_REMINDER_MS);
-    return () => clearTimeout(again);
-  }, [newVersion]);
+  useEffect(() => (newVersion ? versionChimes((cue) => player.current!.offer(cue)) : undefined), [newVersion]);
 
   /** Your own message went out. */
   const sent = useCallback(() => {

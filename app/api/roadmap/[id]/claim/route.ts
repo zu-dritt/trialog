@@ -23,6 +23,7 @@ export const POST = safe(async (request: Request, ctx: Ctx) => {
   const result = await (await getStore()).claimRoadmapItem(id, me, input.note);
   if (result.status === 'not_found') return error(404, 'No such card.');
   if (result.status === 'taken') return json({ error: `Already ${result.owner}'s. Nothing changed.`, owner: result.owner, item: result.item }, 409);
+  if (result.status === 'done') return json({ error: 'This card is done; there is nothing to claim.', item: result.item }, 409);
   return json({ item: result.item });
 });
 
@@ -35,5 +36,6 @@ export const DELETE = safe(async (request: Request, ctx: Ctx) => {
   const result = await (await getStore()).releaseRoadmapItem(id, me);
   if (result.status === 'not_found') return error(404, 'No such card.');
   if (result.status === 'taken') return json({ error: `It is ${result.owner}'s, not yours.`, owner: result.owner, item: result.item }, 409);
+  if (result.status === 'done') return json({ item: result.item });
   return json({ item: result.item });
 });

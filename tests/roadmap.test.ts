@@ -168,5 +168,51 @@ test('progress: only the owner (or a human) says how far a card is; the bar and 
   const { parseProgress } = await import('../lib/roadmap');
   assert.deepEqual(parseProgress({ progress: 60, status: ' half ' }), { ok: true, progress: 60, status: 'half' });
   assert.deepEqual(parseProgress({ progress: null }), { ok: true, progress: null, status: '' });
+  assert.deepEqual(parseProgress({ progress: 80 }), { ok: true, progress: 80, status: null }, 'no status: the line stays');
   for (const bad of [{}, { progress: 101 }, { progress: -1 }, { progress: 2.5 }, { progress: '50' }, { progress: 5, status: 'x'.repeat(81) }]) assert.equal(parseProgress(bad).ok, false, JSON.stringify(bad));
+});
+
+test('the lock has no back door: an agent cannot move a claim with PATCH; the orchestrator can hand a card over; done cards are not claimed', async () => {
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler };
+  const c = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Back door' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: c.id }) };
+  const path = `/api/roadmap/${c.id}`;
+  assert.equal((await claimRoute.POST(req('grok', 'POST', {}, `${path}/claim`), ctx)).status, 200);
+  const steal = await one.PATCH(req('claude', 'PATCH', { owner: 'claude' }, path), ctx);
+  assert.equal(steal.status, 409, 'a claim cannot be overwritten');
+  assert.equal(((await steal.json()) as { owner: string }).owner, 'grok');
+  assert.equal((await one.PATCH(req('claude', 'PATCH', { owner: 'grok' }, path), ctx)).status, 403, 'agents take cards for themselves only');
+  const handed = await one.PATCH(req('david', 'PATCH', { owner: 'claude' }, path), ctx);
+  assert.equal(((await handed.json()) as { item: RoadmapItem }).item.owner, 'claude', 'the orchestrator may hand a card to anyone');
+  assert.equal((await one.PATCH(req('claude', 'PATCH', { owner: null, title: 'Back door, closed' }, path), ctx)).status, 200, 'letting go of your own works');
+  await one.PATCH(req('david', 'PATCH', { column: 'done' }, path), ctx);
+  const late = await claimRoute.POST(req('grok', 'POST', {}, `${path}/claim`), ctx);
+  assert.equal(late.status, 409);
+  assert.match(((await late.json()) as { error: string }).error, /done/);
+});
+
+test('API: progress is 400 for a bad body, 404 for no card, 409 before the claim or for another agent, 200 for the owner; the line stays without a status', async () => {
+  const route = (await import('../app/api/roadmap/[id]/progress/route')) as unknown as { PUT: Handler };
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler };
+  const c = ((await (await list.POST(req('david', 'POST', { column: 'now', title: 'Progress via HTTP' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: c.id }) };
+  const path = `/api/roadmap/${c.id}/progress`;
+  const put = (who: string, body: unknown, at = ctx) => route.PUT(req(who, 'PUT', body, path), at);
+  assert.equal((await put('grok', { progress: 101 })).status, 400);
+  assert.equal((await put('grok', { progress: 5 }, { params: Promise.resolve({ id: 'rm_00000000' }) })).status, 404);
+  const unclaimed = await put('grok', { progress: 5 });
+  assert.equal(unclaimed.status, 409);
+  assert.match(((await unclaimed.json()) as { error: string }).error, /Claim the card first/);
+  await claimRoute.POST(req('grok', 'POST', {}, `/api/roadmap/${c.id}/claim`), ctx);
+  const other = await put('claude', { progress: 5 });
+  assert.equal(other.status, 409);
+  assert.match(((await other.json()) as { error: string }).error, /grok's card/);
+  assert.equal((await put('grok', { progress: 40, status: 'geocoding' })).status, 200);
+  const kept = ((await (await put('grok', { progress: 60 })).json()) as { item: RoadmapItem }).item;
+  assert.equal(kept.progress, 60);
+  assert.equal(kept.status, 'geocoding', 'no status: the line stays');
+  const byHuman = ((await (await put('david', { progress: 90, status: 'checked' })).json()) as { item: RoadmapItem }).item;
+  assert.equal(byHuman.status, 'checked', 'a human may');
+  const cleared = ((await (await put('grok', { progress: null })).json()) as { item: RoadmapItem }).item;
+  assert.deepEqual([cleared.progress, cleared.status], [null, '']);
 });

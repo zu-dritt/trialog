@@ -59,9 +59,10 @@ export function flightSentence(f: Flight, now: number, shown: string): string {
 export function FlightStrip({ flights, now, participants = [], position = 'top', onFlip }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void }) {
   if (!flights.length) return null;
   return (
-    <div role="status" aria-label="Work in flight" data-position={position} className={`flex min-w-0 items-center gap-3 bg-[#1a1d25] px-4 py-1 text-[13px] ${position === 'top' ? 'border-b border-line' : 'border-t border-line'}`}>
-      {/* The entries scroll sideways when they don't fit; «⇅» stays in view at the right. */}
-      <div className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto">
+    <div data-position={position} className={`flex min-w-0 items-center gap-3 bg-[#1a1d25] px-4 py-1 text-[13px] ${position === 'top' ? 'border-b border-line' : 'border-t border-line'}`}>
+      {/* The entries scroll sideways when they don't fit; «⇅» stays in view at the right. Only the
+          entries are the live region, so the button isn't read out with every update. */}
+      <div role="status" aria-label="Work in flight" className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto">
       {flights.map((f) => {
         const tone = flightTone(f, now);
         const shown = labelOf(f.participant, participants);
@@ -90,7 +91,7 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
           type="button" onClick={onFlip} data-flip=""
           title={position === 'top' ? 'Move this strip right above the message box' : 'Move this strip to the top'}
           aria-label={position === 'top' ? 'Move the work-in-flight strip above the message box' : 'Move the work-in-flight strip to the top'}
-          className="flex-none cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg"
+          className="flex-none cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >⇅</button>
       )}
     </div>

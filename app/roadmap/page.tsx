@@ -19,7 +19,7 @@ export default function RoadmapPage() {
   const [busy, setBusy] = useState(false);
   const [me, setMe] = useState<string | null>(null);
 
-  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Roadmap · Trialog'; }, []);
+  useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Trialog Roadmap'; }, []);
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     const res = await fetch(path, { ...init, cache: 'no-store', headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
@@ -63,9 +63,16 @@ export default function RoadmapPage() {
   }, [items, api, load]);
 
   const claim = useCallback(async (id: string, take: boolean) => {
+    // Look before you build: the claim says what you found. Empty keeps the card's note.
+    let note: string | null = null;
+    if (take) {
+      const answer = window.prompt('Look first: what did you find? e.g. «new» or «exists, small fix» (empty: keep the note)', '');
+      if (answer === null) return; // cancelled: no claim
+      note = answer.trim() || null;
+    }
     setBusy(true);
     try {
-      const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? '{}' : undefined });
+      const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? JSON.stringify(note ? { note } : {}) : undefined });
       const data = (await res.json().catch(() => ({}))) as { error?: string; owner?: string };
       if (res.status === 409) setError(`Already ${participants.find((p) => p.name === data.owner)?.label ?? data.owner}'s. Nothing changed.`);
       else if (!res.ok) setError(data.error || `HTTP ${res.status}`);
@@ -75,6 +82,25 @@ export default function RoadmapPage() {
       void load();
     }
   }, [token, participants, load]);
+
+  // An idea: a card at the top of «Later», noted as whose idea it is. No message: nobody is woken.
+  const addIdea = useCallback(async (title: string) => {
+    setBusy(true);
+    try {
+      const who = participants.find((p) => p.name === me)?.label ?? me ?? '';
+      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: 'later', title, note: `💡 idea from ${who}`.slice(0, 120) }) })) as { item: RoadmapItem };
+      const ids = [item.id, ...columnOf(items, 'later').map((i) => i.id)];
+      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column: 'later', ids }) });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not saved: ${e.message}`);
+      return false;
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [api, items, me, participants, load]);
 
   if (token === null) return null;
   if (!token) {
@@ -93,7 +119,7 @@ export default function RoadmapPage() {
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); } }} />
+      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea }} />
     </main>
   );
 }

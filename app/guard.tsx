@@ -183,7 +183,7 @@ export function GuardFigure({ label, value, of }: { label: string; value: number
       </div>
       {full !== null && (
         <div className="h-1.5 overflow-hidden rounded-full bg-line" role="presentation">
-          <div className="h-full rounded-full" style={{ width: `${Math.round(full * 100)}%`, background: color }} />
+          <div className="h-full rounded-full" style={{ width: `${percent(value, of!)}%`, background: color }} />
         </div>
       )}
     </div>

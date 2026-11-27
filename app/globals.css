@@ -104,4 +104,12 @@
   opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms ease 250ms;
 }
 .hovercard:hover::after, .hovercard:focus-visible::after { opacity: 1; visibility: visible; }
+.hovercard[data-below="1"]::after { bottom: auto; top: calc(100% + 6px); }
 @media (hover: none) { .hovercard::after { display: none; } }
+
+/* The PR hovercard (app/pr-card.tsx): the pull request's summary under the link. */
+.pr-card {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; display: block;
+  width: min(24rem, 80vw); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--color-line);
+  background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 0.5); white-space: normal; text-align: left;
+}

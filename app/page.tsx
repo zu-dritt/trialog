@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
 import { RoomPane } from './pane';
@@ -50,7 +50,8 @@ export default function Page() {
   const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
   // Where the work-in-flight strip sits; read from this browser once the page is in it.
   const [flightPosition, setFlightPosition] = useState<FlightPosition>('top');
-  useEffect(() => { setFlightPosition(readFlightPosition(localStorage)); }, []);
+  // Before the first paint, so a stored «bottom» doesn't flash at the top first.
+  useLayoutEffect(() => { setFlightPosition(readFlightPosition(localStorage)); }, []);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [pageNotice, setPageNotice] = useState('');
   const [splitOn, setSplitOn] = useState(false);
@@ -297,7 +298,7 @@ export default function Page() {
           items={[
             { label: 'Export .md', onPick: () => { void exportTranscript(); } },
             { label: 'Switch token', onPick: forgetToken },
-            { label: 'Roadmap', href: '/roadmap' },
+            { label: 'Roadmap', href: '/roadmap', target: 'trialog-roadmap' },
             ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
           ]}
         />

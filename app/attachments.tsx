@@ -182,6 +182,8 @@ export function popOut(viewed: Pick<Viewed, 'url' | 'size'>, open: typeof window
 function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [realSize, setRealSize] = useState(false);
+  // The browser refused the pop-out window: say so, and keep the view open.
+  const [blocked, setBlocked] = useState(false);
   // A local file says how large it is only once it has loaded.
   const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -197,11 +199,12 @@ function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) 
       className="fixed inset-0 z-50 flex flex-col bg-black/90 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center gap-3 px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
         <span>{info}</span>
+        {blocked && <span role="status" className="text-bad">Pop-up blocked: allow pop-ups for this site, then try again.</span>}
         <span className="flex-1" />
         {viewed.saveAs && <a href={viewed.url} download={viewed.saveAs}>Save</a>}
         <button
           type="button" title="Open the image in its own window, next to the hub"
-          onClick={() => { if (popOut({ url: viewed.url, size })) onClose(); }}
+          onClick={() => { if (popOut({ url: viewed.url, size })) onClose(); else setBlocked(true); }}
           className="cursor-pointer rounded-md border border-line bg-transparent px-3 py-[5px] text-fg hover:bg-[#343a47] max-sm:hidden"
         >Pop out ↗</button>
         <button ref={closeRef} type="button" onClick={onClose} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] text-fg hover:bg-[#343a47]">Close</button>
