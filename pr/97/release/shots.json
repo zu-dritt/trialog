@@ -1,0 +1,32 @@
+{
+  "desktop": {
+    "waitingText": "Orchestrator waiting on you (1): look at the strip",
+    "hasGrokInWaiting": false,
+    "blink": true,
+    "steps": [
+      {
+        "for": "david",
+        "text": "Orchestrator:",
+        "color": "rgb(79, 179, 255)"
+      },
+      {
+        "for": "grok",
+        "text": "Grok:",
+        "color": "rgb(240, 136, 62)"
+      }
+    ]
+  },
+  "desktopErrors": [],
+  "phone": {
+    "waitingText": "Orchestrator waiting on you (1): look at the strip",
+    "hasGrokInWaiting": false,
+    "blink": true
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 8,
+    "y": 88,
+    "width": 334,
+    "height": 63
+  }
+}
