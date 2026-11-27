@@ -11,6 +11,7 @@ import { DEMO_BUILD, demoLink } from '../lib/demo';
 import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
+import { FlightBar } from './flight';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../lib/build';
@@ -287,6 +288,7 @@ export default function Page() {
         {tabs('flex min-w-0 flex-1')}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
       </div>
+      <FlightBar token={token} onUnauthorized={refuseToken} participants={participants} />
       <TourPanel tour={tour} me={me} participants={participants} />
       <WakeTargetsLine me={me} participants={participants} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
