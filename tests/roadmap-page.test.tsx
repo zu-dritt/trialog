@@ -50,3 +50,9 @@ test('a card with no owner offers «Claim»; your own offers «Release»; done c
   assert.deepEqual([...html.matchAll(/data-release="([^"]+)"/g)].map((m) => m[1]), ['rm_dddddddd']);
   assert.ok(!renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, claim: () => {} }} />).includes('data-claim'), 'no claim without knowing who you are');
 });
+
+test('the roadmap tab is named «Trialog Roadmap»', async () => {
+  const { metadata } = await import('../app/roadmap/layout');
+  assert.equal(metadata.title, 'Trialog Roadmap');
+  assert.match(readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8'), /document\.title = 'Trialog Roadmap'/);
+});
