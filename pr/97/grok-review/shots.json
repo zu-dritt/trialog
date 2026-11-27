@@ -1,0 +1,41 @@
+{
+  "desktop": {
+    "waitingText": "Orchestrator waiting on you (1): Ship it on PR 95",
+    "waitingBox": {
+      "x": 156,
+      "y": 61,
+      "w": 321,
+      "h": 20
+    },
+    "blink": true,
+    "steps": [
+      {
+        "for": "david",
+        "text": "Orchestrator:",
+        "color": "rgb(79, 179, 255)",
+        "visible": true
+      },
+      {
+        "for": "grok",
+        "text": "Grok:",
+        "color": "rgb(240, 136, 62)",
+        "visible": true
+      }
+    ],
+    "stripText": "Orchestrator waiting on you (1): Ship it on PR 95 Claude: waiting for «David: Ship it on PR 95; Grok: review PR 96» · now Claude waiting for «Orchestrator: Ship it on PR 95; Grok: review PR 96» · now Grok: working on «review of PR 96» · now Grok working on «review of PR 96» · now"
+  },
+  "desktopErrors": [],
+  "phone": {
+    "waitingText": "Orchestrator waiting on you (1): Ship it on PR 95",
+    "hasGrokInWaiting": false,
+    "blink": true,
+    "stepCountVisible": 0
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 8,
+    "y": 90,
+    "width": 338,
+    "height": 59
+  }
+}
