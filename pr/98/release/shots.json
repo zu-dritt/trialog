@@ -1,0 +1,21 @@
+{
+  "desktop": {
+    "headerText": "Trialog ● live Main Workshop 66 + Split Roadmap ↗ ? ⋯ Signed in as Orchestrator Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "menuText": "Signed in as Orchestrator Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "wakeLine": false,
+    "scrollbarWidth": "none"
+  },
+  "desktopErrors": [],
+  "phone": {
+    "headerText": "Trialog ● live Split ⋯ Signed in as Orchestrator Roadmap ↗ Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "menuText": "Signed in as Orchestrator Roadmap ↗ Demo hub ↗ Wake-ups: none set Export .md Switch token",
+    "wakeLine": false
+  },
+  "phoneErrors": [],
+  "phoneClip": {
+    "x": 0,
+    "y": 0,
+    "width": 390,
+    "height": 261
+  }
+}
