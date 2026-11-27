@@ -8,6 +8,7 @@ import { RoadmapBoard, columnOf, placeAt } from '../roadmap-board';
 import type { RoadmapColumn, RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
 import { uploadRequest, useImageLoader } from '../attachments';
+import { FlightBar } from '../flight';
 import type { NewIdea } from '../compose-idea';
 
 const TOKEN_KEY = 'collabHubToken';
@@ -130,6 +131,11 @@ export default function RoadmapPage() {
         <p className="m-0 text-sm text-muted">Drag a card to change the order, or use ↑ ↓. The top of «Next» is what we do next; the dashed line shows what we likely still do today.</p>
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
+      {/* One line per participant: what each is doing now and what waits on whom, so nobody has to
+          read the cards to find out (playground #641). The same strip as on the hub. */}
+      <div className="-mx-4 mb-3" data-roadmap-flight="">
+        <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
+      </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
       <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload }} loadImage={loadImage} />
     </main>
