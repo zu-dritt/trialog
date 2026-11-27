@@ -316,6 +316,8 @@ ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ;
 
 ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000);
 
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS reviewer TEXT CONSTRAINT roadmap_items_reviewer_shape CHECK (reviewer ~ '^[a-z][a-z0-9-]{0,23}$');
+
 CREATE TABLE IF NOT EXISTS roadmap_pictures (
      attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
      roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,

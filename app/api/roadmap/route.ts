@@ -26,7 +26,7 @@ export const POST = safe(async (request: Request) => {
   if (!input.ok) return error(input.status, input.error);
   let item;
   try {
-    item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top });
+    item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top, reviewer: input.reviewer });
   } catch (e) {
     if (e instanceof AttachmentLinkError) return error(e.reason === 'already linked' ? 409 : e.reason === 'not yours' ? 403 : 404, e.message);
     throw e;

@@ -348,9 +348,9 @@ export interface Store {
   listRoadmap(): Promise<RoadmapItem[]>;
   /** A new card at the end of its column; null when the roadmap is full. */
   /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
-  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean }): Promise<RoadmapItem | null>;
+  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null }): Promise<RoadmapItem | null>;
   /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
-  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description'>>, by: Sender): Promise<RoadmapItem | null>;
+  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description' | 'reviewer'>>, by: Sender): Promise<RoadmapItem | null>;
   deleteRoadmapItem(id: string): Promise<boolean>;
   /** A lock: the card becomes `by`'s if it has no owner (or is already theirs); otherwise «taken» and nothing changes. */
   claimRoadmapItem(id: string, by: Sender, note: string | null): Promise<ClaimResult>;
@@ -757,6 +757,7 @@ const SCHEMA = [
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ`,
   // A description and pictures on roadmap cards (migrations/018-roadmap-details.sql).
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS reviewer TEXT CONSTRAINT roadmap_items_reviewer_shape CHECK (reviewer ~ ${NAME_SHAPE})`,
   `CREATE TABLE IF NOT EXISTS roadmap_pictures (
      attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
      roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
@@ -950,7 +951,7 @@ const toFlight = (r: Row): Flight => ({
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
 });
-const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description,
+const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer,
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
             'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY p.position, a.id), '[]'::json)
      FROM roadmap_pictures p JOIN attachments a ON a.id = p.attachment_id WHERE p.roadmap_item_id = roadmap_items.id) AS attachments`;
@@ -969,6 +970,7 @@ const toRoadmap = (r: Row): RoadmapItem => ({
   status: String(r.status ?? ''),
   progress_at: iso(r.progress_at) ?? null,
   description: String(r.description ?? ''),
+  reviewer: r.reviewer == null ? null : String(r.reviewer),
   attachments: (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments ?? [])).map(toAttachment),
 });
 const toBreak = (r: Row): StreakBreak => ({
@@ -1545,7 +1547,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
     },
-    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false }) {
+    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
@@ -1566,8 +1568,8 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
         const id = newRoadmapId();
         await tx.query(
-          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text)`,
-          [id, column, top ? 0 : Number(next), title, note, owner, by, description],
+          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text)`,
+          [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
         );
         for (const [position, aid] of attachments.entries()) {
           await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
@@ -1590,9 +1592,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           position = Number(next);
         }
         const [row] = await tx.query(
-          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text
+          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text, reviewer = $9::text
            WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
-          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description],
+          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description, change.reviewer === undefined ? item.reviewer : change.reviewer],
         );
         return toRoadmap(row);
       });
@@ -2456,7 +2458,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async listRoadmap() {
       return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
     },
-    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false }) {
+    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
       if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
       const pictures = attachments.map((aid) => {
         const upload = uploads.get(aid);
@@ -2470,7 +2472,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const item: RoadmapItem = {
         id: newRoadmapId(), column, position: top ? 0 : inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
         title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
-        progress: null, status: '', progress_at: null, description,
+        progress: null, status: '', progress_at: null, description, reviewer: reviewer === null ? null : shaped(reviewer),
         attachments: pictures.map(({ id, content_type, width, height, bytes, scale }) => ({ id, content_type, width, height, bytes, scale })),
       };
       for (const upload of pictures) upload.roadmap_item_id = item.id;
@@ -2488,6 +2490,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (change.title !== undefined) item.title = change.title;
       if (change.note !== undefined) item.note = change.note;
       if (change.description !== undefined) item.description = change.description;
+      if (change.reviewer !== undefined) item.reviewer = change.reviewer === null ? null : shaped(change.reviewer);
       if (change.owner !== undefined) item.owner = change.owner === null ? null : shaped(change.owner);
       item.updated_by = shaped(by);
       item.updated_at = new Date(now()).toISOString();
