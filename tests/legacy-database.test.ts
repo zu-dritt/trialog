@@ -80,6 +80,7 @@ const SHAPE_CHECKS = [
   /^polls\.polls_creator_shape: CHECK \(\(creator ~ /,
   /^reactions\.reactions_participant_shape: CHECK \(\(participant ~ /,
   /^read_positions\.read_positions_participant_shape: CHECK \(\(participant ~ /,
+  /^streak_breaks\.streak_breaks_participant_shape: CHECK \(\(participant ~ /,
   /^wake_deliveries\.wake_deliveries_participant_shape: CHECK \(\(participant ~ /,
   /^wake_targets\.wake_targets_participant_shape: CHECK \(\(participant ~ /,
   /^wake_test_events\.wake_test_events_participant_shape: CHECK \(\(participant ~ /,
@@ -178,9 +179,9 @@ test('an old database, a new database and the migration files by hand all end wi
   assert.ok(files.indexOf('007-any-participants.sql') > files.indexOf('006-attachment-scale.sql'), 'it runs after every table that listed names exists');
   assert.ok(files.includes('009-decision-cards.sql'));
   assert.ok(files.indexOf('010-read-markers.sql') > files.indexOf('009-decision-cards.sql'), 'read markers come after decision cards, with the same name check');
-  assert.equal(files.at(-1), '014-work-in-flight.sql', 'work in flight comes last');
-  assert.equal(files.at(-2), '013-guard.sql', 'the guard before it');
-  assert.equal(files.at(-3), '012-rooms.sql', 'and rooms before that');
+  assert.equal(files.at(-1), '015-streak-breaks.sql', 'the streak comes last');
+  assert.equal(files.at(-2), '014-work-in-flight.sql', 'work in flight before it');
+  assert.equal(files.at(-3), '013-guard.sql', 'the guard before that');
   assert.ok(files.includes('008-reactions.sql'));
   assert.ok(files.includes('010-read-markers.sql'));
   assert.ok(files.indexOf('011-wake-targets.sql') > files.indexOf('010-read-markers.sql'), 'wake-up targets come after read markers, with the same name check');

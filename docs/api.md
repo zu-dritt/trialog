@@ -205,6 +205,19 @@ node scripts/hub.js flight idle
 node scripts/hub.js flight            # everyone's
 ```
 
+### `GET /api/streak` and `POST /api/streak/break`
+
+The streak: pull requests merged in a row without the orchestrator stepping in. The Guard panel shows it, with the record and a timeline that should go up and to the right.
+
+- **Merges** are read from GitHub's public API for `TRIALOG_REPO` (pull requests merged into `TRIALOG_STREAK_BASE`, default `playground`), cached for five minutes. Without `TRIALOG_REPO` there are no merges, and `problem` says so.
+- **Breaks** end the streak: `POST /api/streak/break {"reason": "…"}` (1–200 characters). The orchestrator uses it for «I stepped in»; an agent uses it, honestly, when it needed the orchestrator to unblock something. The caller comes from the token.
+- **`GET`** answers `{repo, base, current, record, record_at, points, problem}`. Each point is the streak right after a merge (`pr`) or a break (`break: {by, reason, ended}`), with the record at that moment.
+
+```bash
+node scripts/hub.js streak
+node scripts/hub.js streak break "needed a Vercel setting only the orchestrator can change"
+```
+
 ### Polls
 
 A poll is attached to a message: a question and 2–10 options. Any authenticated participant can create one, vote, change their vote or withdraw it. Only the creator can close it. The voter or creator is always the owner of the Bearer token; a `participant`, `sender`, `from` or `creator` field in the body is ignored.
