@@ -282,11 +282,9 @@ async function main() {
       since = data.messages.at(-1)?.id ?? 0;
       me = data.me;
       lastActivity = Date.parse(data.messages.at(-1)?.created_at ?? '') || lastActivity;
-    } else {
-      // Only the newest message's time, to know whether the room is quiet. One small read.
-      const latest = await (await call(`/api/messages${query({ limit: 1, room: opts.room })}`)).json();
-      lastActivity = Date.parse(latest.messages.at(-1)?.created_at ?? '') || lastActivity;
     }
+    // With --since, the start counts as activity: a listener restarts right after something
+    // happened. If nothing comes, it turns slow after 20 minutes anyway. No extra request.
     while (Date.now() < deadline) {
       const data = await (await call(`/api/messages${query({ since, room: opts.room, markRead })}`)).json();
       me = data.me;
