@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
 import { test } from 'vitest';
-import { allMerged } from '../app/merged';
+import { allMerged, ownPrs, settledByMerge } from '../app/merged';
 import { waitingOn } from '../app/flight';
 import type { Flight } from '../lib/shared';
 import { boardStatus, shippable } from '../app/roadmap-board';
@@ -50,4 +50,16 @@ test('the strip and the roadmap ask which PRs are merged; a merged PR is asked o
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /useMergedPrs\(token, items\.filter\(\(i\) => i\.column !== 'done'\)\.map\(\(i\) => i\.note\)\)/);
   assert.match(page, /<RoadmapBoard merged=\{merged\}/);
+});
+
+test('Grok\'s review of PR 108: another repo\'s PR is not ours, and an Agree is not settled by a merge', () => {
+  assert.deepEqual(ownPrs('apartment-finder PR 36 and PR 95', REPO), [95]);
+  assert.deepEqual(ownPrs('https://github.com/example-org/other-app/pull/36 and https://github.com/zu-dritt/trialog/pull/95', REPO), [95]);
+  assert.equal(allMerged('merge apartment-finder PR 36', new Set([36]), REPO), false, 'names no PR of ours');
+  assert.equal(settledByMerge('Agree on decision card #791 (PR 101)', new Set([101]), REPO), false);
+  assert.equal(settledByMerge('Ship it on PR 101', new Set([101]), REPO), true);
+  const agree = card('⛔ WAITING ON DAVID: Agree on decision card #791 (PR 101, migration)');
+  assert.equal(boardStatus(agree, NOW, HUMANS, new Set([101]), REPO)?.tone, 'blocked', 'still red');
+  const flights: Flight[] = [{ participant: 'claude', state: 'waiting', text: 'David: Agree on decision card #791 (PR 101)', since: '2026-11-27T18:40:00.000Z', updated_at: '2026-11-27T18:40:00.000Z', last_message_at: null }];
+  assert.equal(waitingOn(flights, { name: 'david', label: 'Orchestrator' }, new Set([101]), REPO).length, 1);
 });

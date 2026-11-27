@@ -10,7 +10,7 @@ import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
 import { ComposeIdea, type NewIdea } from './compose-idea';
 import { REPO, pullRequestNumbers } from './links';
-import { allMerged } from './merged';
+import { allMerged, settledByMerge } from './merged';
 import type { Attachment } from '../lib/shared';
 
 export const COLUMN_TITLES: Record<RoadmapColumn, string> = { done: 'Done', now: 'Now', next: 'Next', later: 'Later / needs the orchestrator' };
@@ -80,7 +80,8 @@ export function shippable(card: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 
  */
 export function boardStatus(card: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number, humans?: readonly string[], merged: ReadonlySet<number> = new Set(), repo: string | null = REPO): CardStatus | null {
   const status = cardStatus(card, now, humans?.length ? humans : undefined);
-  if ((status?.tone === 'blocked' || status?.tone === 'review') && allMerged(card.note, merged, repo)) return { tone: 'working', label: 'merged' };
+  // In review: merged settles it. Waiting on the orchestrator: only a wait for a Ship it or a merge.
+  if ((status?.tone === 'review' && allMerged(card.note, merged, repo)) || (status?.tone === 'blocked' && settledByMerge(card.note, merged, repo))) return { tone: 'working', label: 'merged' };
   return status;
 }
 

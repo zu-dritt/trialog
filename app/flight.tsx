@@ -8,7 +8,7 @@
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { REPO, shortLabel } from './links';
-import { allMerged, useMergedPrs } from './merged';
+import { settledByMerge, useMergedPrs } from './merged';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
@@ -83,7 +83,7 @@ export function waitingOn(flights: readonly Flight[], human: Pick<Participant, '
     if (f.state !== 'waiting' || f.participant === human.name) return [];
     // Only the steps addressed to this human wait on them; «Grok: review PR 96» in the same flight does not (#743).
     // A step about PRs that are all merged is done, whatever the note still says (#813).
-    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()) && !allMerged(step.text, merged, repo))
+    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()) && !settledByMerge(step.text, merged, repo))
       .map((step) => ({ by: f.participant, text: step.text, since: f.since }));
   });
 }
