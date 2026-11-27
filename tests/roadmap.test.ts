@@ -8,8 +8,8 @@ import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from
 const NAMES = ['david', 'claude', 'grok'];
 
 test('a new card needs a column and a title; note and owner are optional, and the owner must be a participant', () => {
-  assert.deepEqual(parseNewItem({ column: 'next', title: '  Deploy\nbutton ' }, NAMES), { ok: true, column: 'next', title: 'Deploy button', note: '', owner: null, description: '', attachments: [], top: false });
-  assert.deepEqual(parseNewItem({ column: 'now', title: 'x', note: 'y', owner: 'grok' }, NAMES), { ok: true, column: 'now', title: 'x', note: 'y', owner: 'grok', description: '', attachments: [], top: false });
+  assert.deepEqual(parseNewItem({ column: 'next', title: '  Deploy\nbutton ' }, NAMES), { ok: true, column: 'next', title: 'Deploy button', note: '', owner: null, description: '', attachments: [], top: false, reviewer: null });
+  assert.deepEqual(parseNewItem({ column: 'now', title: 'x', note: 'y', owner: 'grok' }, NAMES), { ok: true, column: 'now', title: 'x', note: 'y', owner: 'grok', description: '', attachments: [], top: false, reviewer: null });
   for (const bad of [null, {}, { column: 'soon', title: 'x' }, { column: 'next' }, { column: 'next', title: '' }, { column: 'next', title: 'x'.repeat(81) },
     { column: 'next', title: 'x', note: 'n'.repeat(121) }, { column: 'next', title: 'x', owner: 'ana' }]) {
     assert.equal(parseNewItem(bad, NAMES).ok, false, JSON.stringify(bad));
@@ -239,6 +239,8 @@ async function detailRules(store: Store) {
   const edited = (await store.updateRoadmapItem(card.id, { description: 'Shorter.' }, 'david'))!;
   assert.equal(edited.description, 'Shorter.');
   assert.equal(edited.attachments.length, 2, 'editing the text keeps the pictures');
+  assert.equal(await store.deleteRoadmapItem(card.id), true);
+  assert.equal(await store.getAttachment(a.id), null, 'a deleted card takes its pictures with it, at once');
 }
 
 test('card details (memory): a description, pictures in order, at the top; only your own unlinked uploads', async () => { await detailRules(createMemoryStore()); });
@@ -250,7 +252,7 @@ test('card details (PGlite): the same', async () => {
 
 test('description: line breaks stay, other control characters and more than 4000 characters do not', async () => {
   const ok = parseNewItem({ column: 'later', title: 'Idea', description: ' line one\r\nline two\n\n\n\n\nend ', attachments: ['att_abc123'], top: true }, NAMES);
-  assert.deepEqual(ok, { ok: true, column: 'later', title: 'Idea', note: '', owner: null, description: 'line one\nline two\n\n\nend', attachments: ['att_abc123'], top: true });
+  assert.deepEqual(ok, { ok: true, column: 'later', title: 'Idea', note: '', owner: null, description: 'line one\nline two\n\n\nend', attachments: ['att_abc123'], top: true, reviewer: null });
   assert.equal(parseNewItem({ column: 'later', title: 'x', description: 'bell\x07' }, NAMES).ok, false);
   assert.equal(parseNewItem({ column: 'later', title: 'x', description: 'x'.repeat(4001) }, NAMES).ok, false);
   assert.equal(parseNewItem({ column: 'later', title: 'x', attachments: ['att_a', 'att_a'] }, NAMES).ok, false, 'no duplicates');
@@ -275,4 +277,19 @@ test('API: a card with pictures; a stranger’s upload is 403; everyone signed i
   const seen = await picture.GET(new Request(`http://hub.test/api/attachments/${mine}`, { headers: { Authorization: `Bearer ${TOKENS.claude}` } }), { params: Promise.resolve({ id: mine }) });
   assert.equal(seen.status, 200, 'on a card, so not only its uploader can see it');
   assert.equal((await list.POST(req('david', 'POST', { column: 'later', title: 'Again', attachments: [mine] }))).status, 409);
+});
+
+test('a reviewer on a card: set when adding or later, any participant or none; «Claude builds · Grok reviews»', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'now', title: 'Reviewed', note: '', owner: 'claude', by: 'claude', reviewer: 'grok' }))!;
+    assert.deepEqual([c.owner, c.reviewer], ['claude', 'grok']);
+    assert.equal((await store.updateRoadmapItem(c.id, { reviewer: null }, 'grok'))!.reviewer, null);
+    assert.equal((await store.updateRoadmapItem(c.id, { reviewer: 'david' }, 'claude'))!.reviewer, 'david');
+    assert.equal((await store.updateRoadmapItem(c.id, { note: 'x' }, 'claude'))!.reviewer, 'david', 'other changes keep it');
+  }
+  assert.equal(parseNewItem({ column: 'now', title: 'x', reviewer: 'nobody' }, NAMES).ok, false);
+  assert.match((parseNewItem({ column: 'now', title: 'x', reviewer: 'nobody' }, NAMES) as { error: string }).error, /"reviewer"/);
+  assert.deepEqual(parseItemChange({ reviewer: 'grok' }, NAMES), { ok: true, change: { reviewer: 'grok' } });
+  const res = await one.PATCH(req('claude', 'PATCH', { reviewer: 'grok' }, '/api/roadmap/rm_00000000'), { params: Promise.resolve({ id: 'rm_00000000' }) });
+  assert.equal(res.status, 404);
 });
