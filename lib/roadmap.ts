@@ -93,3 +93,38 @@ export type ClaimResult =
   | { status: 'taken'; owner: string; item: RoadmapItem }
   | { status: 'done'; item: RoadmapItem }
   | { status: 'not_found' };
+
+/** Where «Next» is cut by what we likely still finish today, and the numbers behind it. */
+export interface TodayLine {
+  /** How many cards at the top of «Next» are likely done today. */
+  fits: number;
+  /** Cards that reached «Done» today. */
+  done: number;
+  /** The working day so far, in hours (from 08:00 or the first change, whichever came first). */
+  hours: number;
+  /** Hours left until the end of the day. */
+  left: number;
+}
+
+export const DAY_START_HOUR = 8;
+export const DAY_END_HOUR = 19;
+
+/**
+ * The «likely today» line: today's pace (cards done per hour so far) times the hours left, less
+ * the cards still in «Now» (they come first). Local time; null before the first card is done today,
+ * since there is no pace yet. It counts cards, not positions, so reordering «Next» moves the line
+ * with it: the card dragged above it pushes the last one below.
+ */
+export function todayLine(items: readonly RoadmapItem[], now: Date = new Date(), endHour = DAY_END_HOUR): TodayLine | null {
+  const at = (h: number) => { const d = new Date(now); d.setHours(h, 0, 0, 0); return d.getTime(); };
+  const midnight = at(0);
+  const today = items.map((i) => ({ i, t: Date.parse(i.updated_at) })).filter((x) => x.t >= midnight && x.t <= now.getTime());
+  const done = today.filter((x) => x.i.column === 'done').length;
+  if (!done) return null;
+  const start = Math.min(at(DAY_START_HOUR), ...today.map((x) => x.t));
+  const hours = Math.max(1, (now.getTime() - start) / 3_600_000);
+  const left = Math.max(0, (at(endHour) - now.getTime()) / 3_600_000);
+  const inProgress = items.filter((i) => i.column === 'now').length;
+  const fits = Math.max(0, Math.floor((done / hours) * left) - inProgress);
+  return { fits, done, hours, left };
+}

@@ -115,7 +115,7 @@ export default function RoadmapPage() {
     <main className="mx-auto max-w-[1500px] p-4 pt-[max(1rem,env(safe-area-inset-top))]">
       <header className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <h1 className="m-0 text-2xl font-bold">Roadmap</h1>
-        <p className="m-0 text-sm text-muted">Drag a card to change the order, or use ↑ ↓. The top of «Next» is what we do next.</p>
+        <p className="m-0 text-sm text-muted">Drag a card to change the order, or use ↑ ↓. The top of «Next» is what we do next; the dashed line shows what we likely still do today.</p>
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
