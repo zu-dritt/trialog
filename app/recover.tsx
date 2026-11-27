@@ -15,10 +15,16 @@ interface StorageLike { getItem(key: string): string | null; setItem(key: string
 /** Reload once: true unless the page already reloaded itself within RELOAD_WINDOW_MS. Notes the time. */
 export function shouldReload(storage: StorageLike | null, now: number): boolean {
   if (!storage) return false;
-  const last = Number(storage.getItem(RELOADED_KEY) || 0);
-  if (last && now - last < RELOAD_WINDOW_MS) return false;
-  storage.setItem(RELOADED_KEY, String(now));
-  return true;
+  // Without a note of this reload there is no guard against the next one: then never reload
+  // (Grok's review of PR 113, e.g. a private window that can read but not write).
+  try {
+    const last = Number(storage.getItem(RELOADED_KEY) || 0);
+    if (last && now - last < RELOAD_WINDOW_MS) return false;
+    storage.setItem(RELOADED_KEY, String(now));
+    return storage.getItem(RELOADED_KEY) === String(now);
+  } catch {
+    return false;
+  }
 }
 
 /** The error in one short line for the small print: name, message and Next's digest. */

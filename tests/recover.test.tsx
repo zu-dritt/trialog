@@ -27,3 +27,19 @@ test('the page says it is loading the newest version first; both error pages use
   assert.match(html, /Loading the newest version…/);
   for (const f of ['../app/error.tsx', '../app/global-error.tsx']) assert.ok(existsSync(new URL(f, import.meta.url)), f);
 });
+
+test('no reload when the note can\'t be written, so it can never loop (Grok\'s review of PR 113)', () => {
+  const readOnly = { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError'); } };
+  assert.equal(shouldReload(readOnly, 1_000), false);
+  const forgetful = { getItem: () => null, setItem: () => {} };
+  assert.equal(shouldReload(forgetful, 1_000), false, 'written but not kept: no guard, no reload');
+  const throwsOnRead = { getItem: () => { throw new Error('SecurityError'); }, setItem: () => {} };
+  assert.equal(shouldReload(throwsOnRead, 1_000), false);
+});
+
+test('a second break shows the error, with its small print', async () => {
+  const s = { m: new Map<string, string>([[RELOADED_KEY, String(Date.now())]]) };
+  const store = { getItem: (k: string) => s.m.get(k) ?? null, setItem: (k: string, v: string) => { s.m.set(k, v); } };
+  assert.equal(shouldReload(store, Date.now()), false, 'within the minute: stays');
+  assert.match(errorLine({ name: 'TypeError', message: 'x is undefined' }), /^TypeError: x is undefined$/);
+});
