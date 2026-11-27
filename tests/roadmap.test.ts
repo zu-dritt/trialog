@@ -293,3 +293,15 @@ test('a reviewer on a card: set when adding or later, any participant or none; Â
   const res = await one.PATCH(req('claude', 'PATCH', { reviewer: 'grok' }, '/api/roadmap/rm_00000000'), { params: Promise.resolve({ id: 'rm_00000000' }) });
   assert.equal(res.status, 404);
 });
+
+test('who raised a card: whoever added it, kept through edits, claims and moves (playground #670)', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'next', title: 'Raised', note: '', owner: null, by: 'david' }))!;
+    assert.equal(c.raised_by, 'david');
+    assert.equal((await store.updateRoadmapItem(c.id, { note: 'x', column: 'now' }, 'grok'))!.raised_by, 'david', 'an edit by someone else keeps it');
+    const claimed = await store.claimRoadmapItem(c.id, 'claude', null);
+    assert.equal('item' in claimed ? claimed.item.raised_by : null, 'david', 'a claim keeps it');
+    assert.equal((await store.listRoadmap()).find((i) => i.id === c.id)!.raised_by, 'david');
+  }
+  assert.ok(!('raised_by' in (parseItemChange({ raised_by: 'grok', note: 'x' }, NAMES) as { change: object }).change), 'a change cannot set it');
+});
