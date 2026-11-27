@@ -280,7 +280,7 @@ export default function Page() {
           items={[
             { label: 'Export .md', onPick: () => { void exportTranscript(); } },
             { label: 'Switch token', onPick: forgetToken },
-            { label: 'Roadmap', href: '/roadmap' },
+            { label: 'Roadmap', href: '/roadmap', target: 'trialog-roadmap' },
             ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
           ]}
         />

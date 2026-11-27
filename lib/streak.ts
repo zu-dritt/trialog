@@ -71,11 +71,21 @@ export function parseStreakBreak(body: unknown): { ok: true; reason: string } | 
 }
 
 /** Merged pull requests into `base`, oldest first, from GitHub's public API (up to 500). */
-export async function fetchMerges(repo: string, base: string, fetchImpl: typeof fetch = fetch): Promise<Merge[]> {
+/**
+ * Optional: a GitHub token (read-only is enough) lifts the limit from 60 to 5,000 requests an hour.
+ * TRIALOG_GITHUB_TOKEN; without it the public API is used.
+ */
+export function githubHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const token = env.TRIALOG_GITHUB_TOKEN?.trim();
+  return { Accept: 'application/vnd.github+json', 'User-Agent': 'trialog-hub', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+export async function fetchMerges(repo: string, base: string, fetchImpl: typeof fetch = fetch, headers: Record<string, string> = githubHeaders()): Promise<Merge[]> {
   const merges: Merge[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = `https://api.github.com/repos/${repo}/pulls?state=closed&base=${encodeURIComponent(base)}&per_page=100&page=${page}`;
-    const res = await fetchImpl(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'trialog-hub' }, cache: 'no-store' });
+    const res = await fetchImpl(url, { headers, cache: 'no-store' });
+    if (res.status === 403 || res.status === 429) throw new Error(`GitHub's hourly limit is reached (${res.status}); set TRIALOG_GITHUB_TOKEN to raise it`);
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
     const rows = (await res.json()) as unknown;
     if (!Array.isArray(rows)) throw new Error('GitHub answered something that is not a list');

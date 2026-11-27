@@ -40,5 +40,5 @@ test('the board: four columns, numbered cards, owners, and the controls only whe
 test('the hub links the roadmap in the header and in the «⋯» menu, in a tab of its own', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /href="\/roadmap" target="trialog-roadmap"/);
-  assert.match(page, /\{ label: 'Roadmap', href: '\/roadmap' \}/);
+  assert.match(page, /\{ label: 'Roadmap', href: '\/roadmap', target: 'trialog-roadmap' \}/);
 });
