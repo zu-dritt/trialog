@@ -34,6 +34,8 @@ export interface RoadmapItem {
   attachments: Attachment[];
   /** Who reviews it: a participant, or null (migrations/018). «Claude builds · Grok reviews». */
   reviewer: string | null;
+  /** Who added the card, or null for cards from before migrations/019 (playground #670). Never changed by an edit. */
+  raised_by: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };
@@ -127,6 +129,8 @@ export type ClaimResult =
   | { status: 'ok'; item: RoadmapItem }
   | { status: 'taken'; owner: string; item: RoadmapItem }
   | { status: 'done'; item: RoadmapItem }
+  /** The card changed under two tries in a row: nothing written, try again (Grok's nit on PR 78). */
+  | { status: 'busy'; item: RoadmapItem }
   | { status: 'not_found' };
 
 /**

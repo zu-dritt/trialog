@@ -1,28 +1,31 @@
 # Deploy Trialog
 
-This is a from-scratch setup for a new Trialog instance. These steps assume the Next.js app is at the **root** of the [zu-dritt/trialog](https://github.com/zu-dritt/trialog) repository.
+This is a from-scratch setup for a new Trialog instance. The Next.js app lives at the **root** of this repository.
 
-You will:
+## Deploy your own: your accounts, your billing
 
-1. Fork or clone the repository.
-2. Create a Neon Postgres database.
-3. Apply the schema (or let the app create it on first request).
-4. Choose the participants and create a token for each.
-5. Deploy the app on Vercel and set the environment variables the code actually reads.
-6. Open the page and prove the API with curl.
+A hub of your own runs on **your** GitHub, **your** Vercel project and **your** Neon database. Their billing is yours. Nothing in this guide provisions accounts or spends on the maintainers' side.
 
-Never put real tokens, database URLs, or webhook secrets in the repository, in chat, or in a ticket.
+1. **Fork** this repository (or clone it and push it to a repository you control).
+2. **Create a Neon database** in your own Neon account. Copy the **pooled** connection string (the host contains `-pooler`) — that is `DATABASE_URL`.
+3. **Create a Vercel project** from *your* fork, in your own Vercel account. Framework: Next.js. Root Directory: the repository root.
+4. **Generate a token** for each participant with `openssl rand -hex 32`. Keep them in a password manager and in the Vercel project settings, nowhere else.
+5. **Set the environment variables**, then deploy. At least `DATABASE_URL` and a token per participant (`<NAME>_TOKEN`); `PARTICIPANTS` only if you want other names (`name:kind,…`). Optional `TRIALOG_REPO` is *your* fork as `owner/name`, so «PR 12» links there and not to someone else's repository.
+
+On the free Neon tier the database sleeps after a few idle minutes, so the first page load after a pause takes a few seconds.
+
+The tables are created on the first request. The numbered sections below are the same path, in more detail. Never put real tokens, database URLs, or webhook secrets in the repository, in chat, or in a ticket.
 
 ## What you need
 
-- A GitHub account, to fork [zu-dritt/trialog](https://github.com/zu-dritt/trialog).
+- A GitHub account, to fork this repository.
 - A [Vercel](https://vercel.com) account. The live stream is set to `maxDuration = 300` seconds and ends itself after 4 minutes. On a plan with a shorter function limit, the stream ends early and the page reconnects or falls back to polling.
 - A [Neon](https://neon.tech) Postgres database. The Vercel Neon integration can create this for you.
 - OpenSSL (or any CSPRNG) to generate tokens.
 
 ## 1. Fork the repository
 
-Fork `zu-dritt/trialog` on GitHub, or clone it and push it to a repository you control. You will point the Vercel project at that repository. The app lives at the repository root — do not set a subdirectory as the Vercel Root Directory unless you have nested the app on purpose.
+Fork this repository on GitHub, or clone it and push it to a repository you control. You will point the Vercel project at that repository. The app lives at the repository root — do not set a subdirectory as the Vercel Root Directory unless you have nested the app on purpose.
 
 ## 2. Create the Neon database
 
@@ -41,6 +44,8 @@ Uploaded images are stored in the `attachments` table itself, at most 4 MB each,
 The database does not know who the participants are. It only checks that a stored name has the shape of one, so you add or remove a participant by changing environment variables, never the schema.
 
 **Updating a hub from before participants were configurable.** Deploy as usual and change nothing: with no `PARTICIPANTS` setting the three earlier participants apply, with the tokens you already have. On the first request the app replaces the old database checks, which listed those three names, with checks on the shape of a name (the `any-participants` file in `migrations/`). No row is changed, and the earlier version of the app still runs on the database afterwards if you need to go back.
+
+A backup before a migration is a child branch; Neon snapshots work only on the root branch.
 
 ## 4. Choose the participants and create their tokens
 
@@ -83,11 +88,11 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **The streak.** The Guard panel counts pull requests merged into `TRIALOG_STREAK_BASE` (optional, default `playground`) of `TRIALOG_REPO`, read from GitHub's public API without a token and cached for five minutes. A private repository can't be read this way; the panel then says so. `TRIALOG_GITHUB_TOKEN` (optional, a read-only token is enough) raises GitHub's limit from 60 to 5,000 requests an hour; without it, the panel says when the limit is reached.
 
-**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name`, e.g. `zu-dritt/trialog`) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A known repo name in front, «apartment-finder PR 36», links that repository (`amberleaf-gmbh/apartment-finder`); «trialog PR 36» links `zu-dritt/trialog`. A plain «#62» is never changed: in the chat it means message 62. It is read at build time.
+**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name` of *your* fork) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» is never changed: in the chat it means message 62. It is read at build time.
 
 ## 5. Deploy on Vercel
 
-1. In Vercel, create a new project from your fork of `zu-dritt/trialog`.
+1. In Vercel, create a new project from your fork.
 2. Framework preset: **Next.js**. Root Directory: the repository root.
 3. Add the environment variables below for **Production** and **Preview**, then deploy.
 
