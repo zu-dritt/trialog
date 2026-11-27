@@ -88,14 +88,32 @@ test('the «likely today» line: today’s pace times the hours left, less the c
   assert.match(few, /▲ all of Next likely today/, 'when everything fits, the line sits at the end');
 });
 
-test('«+ Idee» sits at the top of Later when the page can add, and nowhere else', () => {
-  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />);
-  assert.equal(html.match(/data-idea-box=""/g)?.length, 1);
-  assert.match(html, /data-column="later"[^]*data-idea-box=""/);
-  assert.match(html, /aria-label="Add an idea to Later \(no message, wakes no one\)"/);
-  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {} }} />).includes('data-idea-box'));
+test('«✎ Compose» sits at the top of Later when the page can add and upload, and opens a full window', async () => {
+  const add = { place: () => {}, addIdea: async () => true, upload: async () => ({ id: 'att_x', content_type: 'image/png' as const, width: 1, height: 1, bytes: 1, scale: 1 }) };
+  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={add} />);
+  assert.equal(html.match(/data-compose=""/g)?.length, 1);
+  assert.match(html, /data-column="later"[^]*data-compose=""[^>]*>[^]*Compose/);
+  assert.ok(!html.includes('data-idea-box'), 'the one-line field is gone (playground #638)');
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />).includes('data-compose'), 'no upload, no Compose');
+  const { composeState } = await import('../app/compose-idea');
+  assert.deepEqual(composeState('', [], false), { ready: false, label: 'Add to Later' }, 'a title is needed');
+  assert.deepEqual(composeState('Idea', [{ state: 'uploading' }], false), { ready: false, label: 'Uploading…' });
+  assert.deepEqual(composeState('Idea', [{ state: 'failed' }], false).ready, false, 'a failed picture must be removed first');
+  assert.deepEqual(composeState('Idea', [{ state: 'ready' }], false), { ready: true, label: 'Add to Later' });
+  assert.deepEqual(composeState('Idea', [], true), { ready: false, label: 'Adding…' });
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
+  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`\.slice\(0, 120\), description, attachments, top: true/);
+  const compose = readFileSync(new URL('../app/compose-idea.tsx', import.meta.url), 'utf8');
+  assert.match(compose, /onPaste=\{paste\}/, 'pictures can be pasted');
+});
+
+test('a card with a description and pictures shows the first line, and opens to the rest', () => {
+  const pic = { id: 'att_one', content_type: 'image/png' as const, width: 40, height: 20, bytes: 9, scale: 1 };
+  const items = [card('rm_details00', 'later', 0, { description: 'Like Gmail Compose\nwith pictures', attachments: [pic] }), card('rm_plain0000', 'later', 1)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} loadImage={async () => 'blob:x'} />);
+  assert.equal(html.match(/data-details=""/g)?.length, 1, 'only the card that has details');
+  assert.match(html, /<summary[^>]*>🖼 1 · Like Gmail Compose<\/summary>/);
+  assert.match(html, /whitespace-pre-wrap[^>]*>Like Gmail Compose\nwith pictures<\/p>/);
 });
 
 test('card LEDs: red and blinking when a card waits on the orchestrator, amber in review, green or grey in Now', async () => {
