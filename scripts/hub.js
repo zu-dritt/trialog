@@ -268,6 +268,9 @@ async function main() {
 
   if (cmd === 'wait') {
     const timeoutMs = Number(opts.timeout ?? 600) * 1000;
+    // When the newest message the hub has seen was written. Fast polling while people talk; after
+    // a quiet spell, slow, so the hub's database can scale to zero (decision #723).
+    let lastActivity = Date.now();
     const deadline = Date.now() + timeoutMs;
     let since = opts.since;
     let me;
@@ -277,20 +280,28 @@ async function main() {
       const data = await (await call(`/api/messages${query({ limit: 1, room: opts.room })}`)).json();
       since = data.messages.at(-1)?.id ?? 0;
       me = data.me;
+      lastActivity = Date.parse(data.messages.at(-1)?.created_at ?? '') || lastActivity;
+    } else {
+      // Only the newest message's time, to know whether the room is quiet. One small read.
+      const latest = await (await call(`/api/messages${query({ limit: 1, room: opts.room })}`)).json();
+      lastActivity = Date.parse(latest.messages.at(-1)?.created_at ?? '') || lastActivity;
     }
     while (Date.now() < deadline) {
       const data = await (await call(`/api/messages${query({ since, room: opts.room, markRead })}`)).json();
       me = data.me;
       const target = opts.to ? opts.to.replace(/^@/, '').toLowerCase() : me;
       const hits = data.messages.filter((m) => m.sender !== me && (m.recipient === target || (!opts.to && m.recipient === null)));
-      if (data.messages.length) since = data.messages.at(-1).id;
+      if (data.messages.length) {
+        since = data.messages.at(-1).id;
+        lastActivity = Math.max(lastActivity, Date.parse(data.messages.at(-1).created_at) || 0);
+      }
       if (hits.length) {
         if (opts.json) console.log(JSON.stringify(hits));
         else { await loadLabels(); for (const m of hits) console.log(fmt(m)); }
         console.error(`next: --since ${since}`);
         return;
       }
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, Math.min(pollDelay(lastActivity, Date.now()), Math.max(0, deadline - Date.now()))));
     }
     console.error(`hub: no new message within ${timeoutMs / 1000}s. next: --since ${since}`);
     process.exit(2);
@@ -663,6 +674,15 @@ async function main() {
   }
 
   usage(cmd ? `unknown command "${cmd}"` : undefined);
+}
+
+/**
+ * How long `wait` pauses before asking again: every 3 s while the room is busy, every 6 min once
+ * nothing has been written for 20 min. Neon puts the hub's database to sleep after 5 quiet
+ * minutes; polling every 3 s around the clock kept it awake (decision #723, about $20 a month).
+ */
+function pollDelay(lastActivity, now, { busyMs = 3000, quietAfterMs = 20 * 60_000, quietMs = 6 * 60_000 } = {}) {
+  return now - lastActivity >= quietAfterMs ? quietMs : busyMs;
 }
 
 main().catch((e) => { console.error(`hub: ${e.message}`); process.exit(1); });
