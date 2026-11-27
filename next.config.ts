@@ -26,6 +26,16 @@ const buildNumber = process.env.TRIALOG_BUILD_NUMBER ?? pullRequestOf(lastCommit
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // When Vercel sets VERCEL_DEPLOYMENT_ID at build time, Next stamps client
+  // scripts with ?dpl=… so Skew Protection can keep serving an open tab its
+  // own build after a release. Left unset locally, so tests and a laptop build
+  // stay unchanged.
+  deploymentId: process.env.VERCEL_DEPLOYMENT_ID || undefined,
+  // Next 16 with Turbopack on Vercel otherwise treats /_next/static/immutable
+  // as not needing ?dpl=. Those filenames change every build, so an open tab
+  // would still miss its scripts. Turn that off so the deployment id is on
+  // the script URLs.
+  supportsImmutableAssets: false,
   // Written into the server code and the page code at build time, so both carry the same value.
   env: { TRIALOG_BUILD_ID: buildId, TRIALOG_VERSION: version, TRIALOG_BUILD_NUMBER: buildNumber, TRIALOG_DEMO: process.env.TRIALOG_DEMO === '1' ? '1' : '', TRIALOG_DEMO_URL: process.env.TRIALOG_DEMO_URL ?? '', TRIALOG_REPO: process.env.TRIALOG_REPO ?? '', TRIALOG_REPO_PREFIXES: process.env.TRIALOG_REPO_PREFIXES ?? '' },
   async headers() {
