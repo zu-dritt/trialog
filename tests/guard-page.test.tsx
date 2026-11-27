@@ -28,13 +28,13 @@ test('the ring: green, amber from 80% of the day, red when tripped, and what it 
   assert.equal(ringLevel(report({ now: { hour: 0, inARow: 0, day: 239 } })), 'ok');
   assert.equal(ringLevel(report({ now: { hour: 0, inARow: 0, day: 240 } })), 'warn');
   assert.equal(ringLevel(report({ tripped: 'in-a-row' })), 'tripped');
-  assert.equal(ringLabel(report()), 'Agent messages today: 177 of 300');
-  assert.equal(ringLabel(report({ tripped: 'in-a-row' })), 'Agent messages today: 177 of 300. Wake-ups paused: 12 agent messages in a row without a human.');
+  assert.equal(ringLabel(report()), 'Agent messages today: 177 of 300 (59%)');
+  assert.equal(ringLabel(report({ tripped: 'in-a-row' })), 'Agent messages today: 177 of 300 (59%). Wake-ups paused: 12 agent messages in a row without a human.');
   assert.equal(share(450, 300), 1);
   assert.equal(share(-1, 300), 0);
 
   const html = renderToStaticMarkup(<GuardRing report={report({ tripped: 'day' })} open={false} onToggle={() => {}} />);
-  assert.match(html, /<button type="button"[^>]*aria-label="Agent messages today: 177 of 300\. Wake-ups paused/);
+  assert.match(html, /<button type="button"[^>]*aria-label="Agent messages today: 177 of 300 \(59%\)\. Wake-ups paused/);
   assert.match(html, /aria-haspopup="dialog" aria-expanded="false"/);
   assert.ok(html.includes(`stroke="${RING_COLORS.tripped}"`));
 });
@@ -73,8 +73,8 @@ test('the panel: what holds wake-ups back, the chart and three figures', () => {
   const html = renderToStaticMarkup(<GuardPanel report={report({ tripped: 'in-a-row', now: { hour: 12, inARow: 12, day: 177 } })} error="" participants={ROSTER} onClose={() => {}} />);
   assert.match(html, /role="dialog" aria-label="Guard"/);
   assert.match(html, /Wake-ups paused<\/span>: 12 agent messages in a row without a human\. Write anything to continue\./);
-  assert.match(html, /Agent messages, last 24 hours<\/span><span[^>]*>177 \/ 300</);
-  assert.match(html, /In a row without a human<\/span><span[^>]*>12 \/ 12</);
+  assert.match(html, /Agent messages, last 24 hours<\/span><span[^>]*>177 \/ 300 <span[^>]*>59%<\/span></);
+  assert.match(html, /In a row without a human<\/span><span[^>]*>12 \/ 12 <span[^>]*>100%<\/span></);
   assert.match(html, /Pauses, last 24 hours<\/span><span[^>]*>2</);
   assert.match(html, /aria-label="Close the Guard panel"/);
 
@@ -101,4 +101,14 @@ test('the composer row has a place for the ring, after the size button and befor
   const ring = html.indexOf('Agent messages today');
   assert.ok(ring > html.indexOf('Enlarge the message box') && ring < html.indexOf('>Send<'));
   assert.ok(!renderToStaticMarkup(<ComposerTools {...props} />).includes('Agent messages today'), 'none without a guard (the second pane)');
+});
+
+test('the figures and the ring say how full, in percent, rounded down', async () => {
+  const { percent } = await import('../app/guard');
+  assert.equal(percent(241, 300), 80);
+  assert.equal(percent(299, 300), 99, 'only a reached limit reads 100%');
+  assert.equal(percent(300, 300), 100);
+  assert.equal(percent(0, 300), 0);
+  assert.match(renderToStaticMarkup(<GuardFigure label="x" value={219} of={300} />), />73%</);
+  assert.ok(!renderToStaticMarkup(<GuardFigure label="Pauses" value={2} />).includes('%'), 'no percent without a limit');
 });
