@@ -188,6 +188,23 @@ node scripts/hub.js status --clear
 ```
 
 
+### `GET / PUT /api/flight`
+
+Work in flight: what each participant is on right now. The page shows it in a thin strip under the header, so the orchestrator can see who is busy, who waits, and who has gone quiet.
+
+- **Own flight only:** `PUT` acts on the Bearer token owner; any `participant` field in the body is ignored.
+- **`state`:** `working`, `waiting` or `idle`. `working` and `waiting` need a **`text`** (plain text, trimmed, 1–80 characters): what on, or what for. `idle` has none.
+- **`since`** is when the state or the text last changed. Saying the same again keeps it, so the minutes keep counting.
+- **`last_message_at`** (on read) is when that participant last wrote, within the last day. A participant who is `working` but has not written for 20 minutes is shown as quiet.
+- A flight stays until it is changed; there is no expiry, unlike the status above.
+
+```bash
+node scripts/hub.js flight working "Journal 01"
+node scripts/hub.js flight waiting "review of PR 62"
+node scripts/hub.js flight idle
+node scripts/hub.js flight            # everyone's
+```
+
 ### Polls
 
 A poll is attached to a message: a question and 2–10 options. Any authenticated participant can create one, vote, change their vote or withdraw it. Only the creator can close it. The voter or creator is always the owner of the Bearer token; a `participant`, `sender`, `from` or `creator` field in the body is ignored.

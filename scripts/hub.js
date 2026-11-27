@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -323,6 +323,32 @@ async function main() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).json();
     console.log(opts.json ? JSON.stringify(status) : `status set: ${status.text} (expires ${status.expires_at})`);
+    return;
+  }
+
+
+  if (cmd === 'flight') {
+    // flight                       everyone's work in flight
+    // flight working <text>        what you are on now (the clock starts when the text changes)
+    // flight waiting <text>        what you wait for: a review, CI, the orchestrator
+    // flight idle                  nothing in flight
+    const [state, ...rest] = args;
+    if (!state) {
+      const data = await (await call('/api/flight')).json();
+      if (opts.json) console.log(JSON.stringify(data.flights));
+      else if (!data.flights.length) console.log('no work in flight');
+      else { await loadLabels(); for (const f of data.flights) console.log(`${label(f.participant)}: ${f.state}${f.text ? ` · ${f.text}` : ''} (since ${f.since})`); }
+      return;
+    }
+    if (!['working', 'waiting', 'idle'].includes(state)) usage('flight working <text> | flight waiting <text> | flight idle');
+    const text = rest.join(' ').replace(/[\r\n\t]+/g, ' ').trim();
+    if (state === 'idle' && text) usage('flight idle takes no text');
+    if (state !== 'idle' && !text) usage(`flight ${state} needs a text: what on`);
+    if ([...text].length > 80) fail(`flight text must be at most 80 characters (got ${[...text].length})`);
+    const { flight } = await (await call('/api/flight', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state === 'idle' ? { state } : { state, text }),
+    })).json();
+    console.log(opts.json ? JSON.stringify(flight) : `flight: ${flight.state}${flight.text ? ` · ${flight.text}` : ''} (since ${flight.since})`);
     return;
   }
 

@@ -11,7 +11,7 @@ import {
   MAIN_ROOM, MAX_ROOMS, ROOM_NAME_MAX_LENGTH,
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WAKE_TEST_PER_MIN, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Flight, type FlightState, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
@@ -332,6 +332,10 @@ export interface Store {
   clearStatus(participant: Sender): Promise<boolean>;
   /** Active (non-expired) statuses for all participants; lazily drops expired rows. */
   listStatuses(): Promise<ParticipantStatus[]>;
+  /** Sets the caller's work in flight. `since` stays when state and text are the same as before. */
+  setFlight(input: { participant: Sender; state: FlightState; text: string }): Promise<Flight>;
+  /** Everyone's work in flight, with when each last wrote (within a day), by name. */
+  listFlights(): Promise<Flight[]>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -696,6 +700,14 @@ const SCHEMA = [
   // welcome message, and the guard counts the messages of the last 24 hours by their time.
   `DROP INDEX IF EXISTS messages_one_welcome`,
   `CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at)`,
+  // Work in flight (migrations/014-work-in-flight.sql): one row per participant, kept until changed.
+  `CREATE TABLE IF NOT EXISTS participant_flight (
+     participant TEXT PRIMARY KEY CONSTRAINT participant_flight_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'idle')),
+     text        TEXT NOT NULL CHECK (char_length(text) <= 80 AND (state = 'idle' OR char_length(text) >= 1)),
+     since       TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -874,6 +886,14 @@ const toWakeDelivery = (r: Row): WakeDelivery => ({
   updated_at: iso(r.updated_at)!,
 });
 
+const toFlight = (r: Row): Flight => ({
+  participant: r.participant as Sender,
+  state: r.state as FlightState,
+  text: r.text as string,
+  since: iso(r.since) as string,
+  updated_at: iso(r.updated_at) as string,
+  last_message_at: iso(r.last_message_at) ?? null,
+});
 const toStatus = (r: Row): ParticipantStatus => ({
   participant: r.participant as Sender,
   text: r.text as string,
@@ -1412,6 +1432,35 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.length > 0;
     },
+    async setFlight({ participant, state, text }) {
+      await ensure();
+      // In DO UPDATE, participant_flight.* is the row as it was: the clock restarts only on a change.
+      const [row] = await db.query(
+        `INSERT INTO participant_flight (participant, state, text, since, updated_at)
+         VALUES ($1::text, $2::text, $3::text, now(), now())
+         ON CONFLICT (participant) DO UPDATE
+           SET since = CASE WHEN participant_flight.state = EXCLUDED.state AND participant_flight.text = EXCLUDED.text
+                            THEN participant_flight.since ELSE now() END,
+               state = EXCLUDED.state,
+               text = EXCLUDED.text,
+               updated_at = now()
+         RETURNING participant, state, text, since, updated_at,
+           (SELECT max(created_at) FROM messages m WHERE m.sender = $1::text AND m.created_at > now() - interval '1 day') AS last_message_at`,
+        [participant, state, text],
+      );
+      return toFlight(row);
+    },
+    async listFlights() {
+      await ensure();
+      const rows = await db.query(
+        `SELECT f.participant, f.state, f.text, f.since, f.updated_at,
+           (SELECT max(created_at) FROM messages m WHERE m.sender = f.participant AND m.created_at > now() - interval '1 day') AS last_message_at
+         FROM participant_flight f
+         ORDER BY f.participant`,
+        [],
+      );
+      return rows.map(toFlight);
+    },
     async listStatuses() {
       await ensure();
       await db.query(`DELETE FROM participant_status WHERE expires_at <= now()`, []);
@@ -1837,6 +1886,13 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     if (!NAME_PATTERN.test(name)) throw new Error('A stored name must have the shape of a participant name.');
     return name;
   };
+  /** A participant's flight, with when they last wrote (within a day, as the SQL store). */
+  const flightOf = (participant: Sender): Flight => {
+    const cutoff = now() - 86_400_000;
+    let last: string | null = null;
+    for (const m of rows) if (m.sender === participant && Date.parse(m.created_at) > cutoff && (!last || m.created_at > last)) last = m.created_at;
+    return { ...flights.get(participant)!, last_message_at: last };
+  };
   type PollRow = { id: string; message_id: number; creator: Sender; question: string; options: string[]; closed_at: string | null; created_at: string };
   type VoteRow = { poll_id: string; participant: Sender; option_index: number; created_at: string; updated_at: string };
   const pollRows = new Map<string, PollRow>();
@@ -1968,6 +2024,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let wakeTestEvents: { participant: string; at: number }[] = [];
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
+  const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -2167,6 +2224,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async clearStatus(participant) {
       return statuses.delete(participant);
+    },
+    async setFlight({ participant, state, text }) {
+      const at = new Date(now()).toISOString();
+      const before = flights.get(participant);
+      const same = before && before.state === state && before.text === text;
+      flights.set(shaped(participant), { participant, state, text, since: same ? before.since : at, updated_at: at });
+      return flightOf(participant);
+    },
+    async listFlights() {
+      return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
     },
     async listStatuses() {
       const current = now();
