@@ -207,3 +207,13 @@ export function cardStatus(item: Pick<RoadmapItem, 'column' | 'note' | 'owner' |
   const hours = (now - Date.parse(item.updated_at)) / 3_600_000;
   return hours > CARD_STALE_HOURS ? { tone: 'stale', label: `no change for ${Math.floor(hours)} h` } : { tone: 'working', label: 'working' };
 }
+
+/**
+ * Where to unblock a card: the first http(s) address in its note, when the card waits on a human
+ * (cardStatus «blocked»). The roadmap shows it as a «Unblock →» button (playground #630).
+ */
+export function unblockHref(item: Pick<RoadmapItem, 'note'>, status: CardStatus | null): string | null {
+  if (status?.tone !== 'blocked') return null;
+  const m = /https?:\/\/[^\s<>«»"]+[^\s<>«»".,;:!?)]/.exec(item.note);
+  return m ? m[0] : null;
+}
