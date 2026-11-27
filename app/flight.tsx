@@ -8,7 +8,7 @@
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { REPO, shortLabel } from './links';
-import { settledByMerge, useMergedPrs } from './merged';
+import { allMerged, settledByMerge, useMergedPrs } from './merged';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
@@ -156,9 +156,12 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
         );
       })}
       {flights.map((f) => {
-        const tone = flightTone(f, now);
+        // A wait whose PRs are all merged is over, even if the agent hasn't said so yet (#856):
+        // grey, «… merged», instead of «waiting for … PR 107».
+        const over = f.state === 'waiting' && allMerged(f.text, merged ?? new Set());
+        const tone = over ? 'idle' : flightTone(f, now);
         const shown = labelOf(f.participant, participants);
-        const sentence = flightSentence(f, now, shown);
+        const sentence = over ? `${shown}: «${f.text}» is merged` : flightSentence(f, now, shown);
         return (
           <span key={f.participant} data-flight={tone} title={sentence} className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
             {/* The whole sentence for screen readers, also on a phone where the words are hidden. */}
@@ -172,7 +175,9 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
                 <span className="flex-none text-muted max-sm:hidden">· {flightAge(f.since, now)}</span>
               </>
             )}
-            {tone === 'idle' && <span className="text-muted max-sm:hidden">idle</span>}
+            {tone === 'idle' && (over
+              ? <span data-merged="" className="max-w-[32ch] truncate text-muted max-sm:hidden">«<FlightStepsText text={f.text} participants={participants} hidden />» merged</span>
+              : <span className="text-muted max-sm:hidden">idle</span>)}
             </span>
           </span>
         );
