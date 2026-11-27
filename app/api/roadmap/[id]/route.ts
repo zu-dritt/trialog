@@ -16,9 +16,23 @@ export const PATCH = safe(async (request: Request, ctx: Ctx) => {
   if (!ROADMAP_ID.test(id)) return error(404, 'No such card.');
   const [body, bad] = await readJson(request, 4 * 1024);
   if (bad) return bad;
-  const input = parseItemChange(body, loadRoster().participants.map((p) => p.name));
+  const roster = loadRoster().participants;
+  const input = parseItemChange(body, roster.map((p) => p.name));
   if (!input.ok) return error(input.status, input.error);
-  const item = await (await getStore()).updateRoadmapItem(id, input.change, me);
+  const store = await getStore();
+  const { owner, ...rest } = input.change;
+  // The orchestrator may hand a card to anyone. An agent changes the owner only through the claim
+  // lock: take a free card, or let go of its own, never overwrite someone else's claim.
+  if (owner !== undefined && roster.find((p) => p.name === me)?.kind !== 'human') {
+    if (owner !== null && owner !== me) return error(403, 'Agents take cards for themselves only: use POST /api/roadmap/<id>/claim.');
+    const result = owner === me ? await store.claimRoadmapItem(id, me, null) : await store.releaseRoadmapItem(id, me);
+    if (result.status === 'not_found') return error(404, 'No such card.');
+    if (result.status === 'taken') return json({ error: `Already ${result.owner}'s. Nothing changed.`, owner: result.owner, item: result.item }, 409);
+    if (result.status === 'done' && owner === me) return json({ error: 'This card is done; there is nothing to claim.', item: result.item }, 409);
+    if (!Object.keys(rest).length) return json({ item: result.item });
+  }
+  const change = owner !== undefined && roster.find((p) => p.name === me)?.kind === 'human' ? input.change : rest;
+  const item = await store.updateRoadmapItem(id, change, me);
   return item ? json({ item }) : error(404, 'No such card.');
 });
 

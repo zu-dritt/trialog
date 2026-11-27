@@ -91,4 +91,5 @@ export function parseClaim(body: unknown): { ok: true; note: string | null } | F
 export type ClaimResult =
   | { status: 'ok'; item: RoadmapItem }
   | { status: 'taken'; owner: string; item: RoadmapItem }
+  | { status: 'done'; item: RoadmapItem }
   | { status: 'not_found' };

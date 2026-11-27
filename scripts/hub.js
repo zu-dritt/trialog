@@ -383,7 +383,7 @@ async function main() {
       console.log(`removed ${id}`);
       return;
     }
-    usage('roadmap | roadmap add <column> <title> | roadmap move <id> <column> | roadmap drop <id>');
+    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap release <id> | roadmap move <id> <column> | roadmap drop <id>');
   }
 
 
