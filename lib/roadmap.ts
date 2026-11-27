@@ -34,6 +34,8 @@ export interface RoadmapItem {
   attachments: Attachment[];
   /** Who reviews it: a participant, or null (migrations/018). «Claude builds · Grok reviews». */
   reviewer: string | null;
+  /** Who added the card, or null for cards from before migrations/019 (playground #670). Never changed by an edit. */
+  raised_by: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };

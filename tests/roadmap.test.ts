@@ -294,6 +294,28 @@ test('a reviewer on a card: set when adding or later, any participant or none; �
   assert.equal(res.status, 404);
 });
 
+test('who raised a card: whoever added it, kept through edits, claims and moves (playground #670)', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'next', title: 'Raised', note: '', owner: null, by: 'david' }))!;
+    assert.equal(c.raised_by, 'david');
+    assert.equal((await store.updateRoadmapItem(c.id, { note: 'x', column: 'now' }, 'grok'))!.raised_by, 'david', 'an edit by someone else keeps it');
+    const claimed = await store.claimRoadmapItem(c.id, 'claude', null);
+    assert.equal('item' in claimed ? claimed.item.raised_by : null, 'david', 'a claim keeps it');
+    assert.equal((await store.listRoadmap()).find((i) => i.id === c.id)!.raised_by, 'david');
+  }
+  assert.ok(!('raised_by' in (parseItemChange({ raised_by: 'grok', note: 'x' }, NAMES) as { change: object }).change), 'a change cannot set it');
+});
+
+test('a card from before migration 019 reads raised_by null (PGlite)', async () => {
+  const pg = new PGlite();
+  const store = createSqlStore(pgliteDb(pg));
+  await store.ensure();
+  const c = (await store.addRoadmapItem({ column: 'next', title: 'Old card', note: '', owner: null, by: 'grok' }))!;
+  await pg.query('UPDATE roadmap_items SET raised_by = NULL WHERE id = $1', [c.id]); // as an old row has it
+  assert.equal((await store.listRoadmap()).find((i) => i.id === c.id)!.raised_by, null);
+  assert.equal((await store.updateRoadmapItem(c.id, { note: 'x' }, 'claude'))!.raised_by, null, 'an edit does not invent one');
+});
+
 test('Grok\'s nits on PR 78: no side door for owners on POST; a claim that keeps losing a race is «busy», not 404; the page says why', async () => {
   const forGrok = await list.POST(req('claude', 'POST', { column: 'next', title: 'For Grok', owner: 'grok' }));
   assert.equal(forGrok.status, 403, 'an agent cannot hand a new card to someone else');

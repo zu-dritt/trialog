@@ -770,6 +770,8 @@ const SCHEMA = [
      position         SMALLINT NOT NULL DEFAULT 0
    )`,
   `CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position)`,
+  // Who raised each card (migrations/019-roadmap-raised-by.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS raised_by TEXT CONSTRAINT roadmap_items_raised_by_shape CHECK (raised_by ~ ${NAME_SHAPE})`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -958,7 +960,7 @@ const toFlight = (r: Row): Flight => ({
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
 });
-const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer,
+const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer, raised_by,
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
             'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY p.position, a.id), '[]'::json)
      FROM roadmap_pictures p JOIN attachments a ON a.id = p.attachment_id WHERE p.roadmap_item_id = roadmap_items.id) AS attachments`;
@@ -978,6 +980,7 @@ const toRoadmap = (r: Row): RoadmapItem => ({
   progress_at: iso(r.progress_at) ?? null,
   description: String(r.description ?? ''),
   reviewer: r.reviewer == null ? null : String(r.reviewer),
+  raised_by: r.raised_by == null ? null : String(r.raised_by),
   attachments: (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments ?? [])).map(toAttachment),
 });
 const toBreak = (r: Row): StreakBreak => ({
@@ -1111,7 +1114,7 @@ async function insertRoadmapItem(tx: RoadmapTx, { column, title, note, owner, by
   if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
   const id = newRoadmapId();
   await tx.query(
-    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text)`,
+    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer, raised_by) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $7::text)`,
     [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
   );
   for (const [position, aid] of attachments.entries()) {
@@ -2510,7 +2513,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const item: RoadmapItem = {
         id: newRoadmapId(), column, position: top ? 0 : inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
         title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
-        progress: null, status: '', progress_at: null, description, reviewer: reviewer === null ? null : shaped(reviewer),
+        progress: null, status: '', progress_at: null, description, reviewer: reviewer === null ? null : shaped(reviewer), raised_by: shaped(by),
         attachments: pictures.map(({ id, content_type, width, height, bytes, scale }) => ({ id, content_type, width, height, bytes, scale })),
       };
       for (const upload of pictures) upload.roadmap_item_id = item.id;
