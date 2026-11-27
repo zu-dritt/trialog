@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 const EXTENSION: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
 // GET /api/attachments/<id> → the image bytes. Bearer token required, like every other endpoint;
-// there is no public address for an image. Until a message links an upload, only its uploader can read it.
+// there is no public address for an image. Until a message or a roadmap card links an upload, only its uploader can read it.
 export const GET = safe(async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const [me, denied] = authenticate(request);
   if (denied) return denied;
@@ -16,7 +16,8 @@ export const GET = safe(async (request: Request, { params }: { params: Promise<{
   const notFound = () => error(404, 'No such attachment.');
   if (!ATTACHMENT_ID.test(id)) return notFound();
   const found = await (await getStore()).getAttachment(id);
-  if (!found || (found.attachment.message_id === null && found.attachment.sender !== me)) return notFound();
+  // Linked to a message or a roadmap card: anyone signed in. Not yet linked: only its uploader.
+  if (!found || (found.attachment.message_id === null && !found.attachment.roadmap_item_id && found.attachment.sender !== me)) return notFound();
   const { attachment, data } = found;
   return new Response(new Uint8Array(data), {
     headers: {

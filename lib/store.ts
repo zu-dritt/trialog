@@ -59,6 +59,8 @@ export interface StoredAttachment extends Attachment {
   sender: Sender;
   /** null until a message links it. */
   message_id: number | null;
+  /** The roadmap card it is a picture of, or null (migrations/018). */
+  roadmap_item_id?: string | null;
 }
 /** Thrown by add() when an attachment can't be linked. Nothing is stored in that case. */
 /** Thrown by add() when `reply_to` names a message that does not exist. Nothing is stored in that case. */
@@ -90,7 +92,7 @@ export class AttachmentLinkError extends Error {
     super({
       unknown: `Attachment ${attachmentId} does not exist (uploads that are not linked within an hour are deleted).`,
       'not yours': `Attachment ${attachmentId} was uploaded by someone else. You can only attach your own uploads.`,
-      'already linked': `Attachment ${attachmentId} already belongs to a message.`,
+      'already linked': `Attachment ${attachmentId} already belongs to a message or a roadmap card.`,
     }[reason]);
     this.name = 'AttachmentLinkError';
   }
@@ -345,9 +347,10 @@ export interface Store {
   /** The roadmap (lib/roadmap.ts), by column and position. */
   listRoadmap(): Promise<RoadmapItem[]>;
   /** A new card at the end of its column; null when the roadmap is full. */
-  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender }): Promise<RoadmapItem | null>;
+  /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
+  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean }): Promise<RoadmapItem | null>;
   /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
-  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner'>>, by: Sender): Promise<RoadmapItem | null>;
+  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description'>>, by: Sender): Promise<RoadmapItem | null>;
   deleteRoadmapItem(id: string): Promise<boolean>;
   /** A lock: the card becomes `by`'s if it has no owner (or is already theirs); otherwise «taken» and nothing changes. */
   claimRoadmapItem(id: string, by: Sender, note: string | null): Promise<ClaimResult>;
@@ -752,6 +755,14 @@ const SCHEMA = [
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (progress IS NULL OR progress BETWEEN 0 AND 100)`,
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80)`,
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ`,
+  // A description and pictures on roadmap cards (migrations/018-roadmap-details.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000)`,
+  `CREATE TABLE IF NOT EXISTS roadmap_pictures (
+     attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
+     roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
+     position         SMALLINT NOT NULL DEFAULT 0
+   )`,
+  `CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -939,7 +950,12 @@ const toFlight = (r: Row): Flight => ({
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
 });
-const ROADMAP_COLS = 'id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at';
+const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description,
+  (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
+            'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY p.position, a.id), '[]'::json)
+     FROM roadmap_pictures p JOIN attachments a ON a.id = p.attachment_id WHERE p.roadmap_item_id = roadmap_items.id) AS attachments`;
+// The card an upload is a picture of, if any (roadmap_pictures).
+const CARD_OF = `(SELECT p.roadmap_item_id FROM roadmap_pictures p WHERE p.attachment_id = attachments.id) AS roadmap_item_id`;
 const toRoadmap = (r: Row): RoadmapItem => ({
   id: String(r.id),
   column: r.col as RoadmapColumn,
@@ -952,6 +968,8 @@ const toRoadmap = (r: Row): RoadmapItem => ({
   progress: r.progress == null ? null : Number(r.progress),
   status: String(r.status ?? ''),
   progress_at: iso(r.progress_at) ?? null,
+  description: String(r.description ?? ''),
+  attachments: (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments ?? [])).map(toAttachment),
 });
 const toBreak = (r: Row): StreakBreak => ({
   id: Number(r.id),
@@ -1116,14 +1134,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const linked: Attachment[] = [];
         if (attachments.length) {
           const found = await tx.query(
-            `SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`,
+            `SELECT ${ATTACHMENT_COLS}, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`,
             [attachments],
           );
           for (const id of attachments) {
             const row = found.find((r) => r.id === id);
             if (!row) throw new AttachmentLinkError(id, 'unknown');
             if (row.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
-            if (row.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+            if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(id, 'already linked');
             linked.push(toAttachment(row));
           }
         }
@@ -1152,7 +1170,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         // Clean-up: uploads nobody linked within the hour. Linked attachments are never touched.
         const gone = await tx.query(
           `DELETE FROM attachments
-           WHERE message_id IS NULL AND created_at < now() - $1::int * interval '1 second' RETURNING id`,
+           WHERE message_id IS NULL AND NOT EXISTS (SELECT 1 FROM roadmap_pictures p WHERE p.attachment_id = attachments.id) AND created_at < now() - $1::int * interval '1 second' RETURNING id`,
           [ORPHAN_SECONDS],
         );
         removed = gone.map((r) => r.id as string);
@@ -1182,11 +1200,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async getAttachment(id) {
       await ensure();
-      const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = $1::text`, [id]);
+      const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id, ${CARD_OF} FROM attachments WHERE id = $1::text`, [id]);
       if (!row) return null;
       const data = await blobs.get(db, id);
       if (!data) return null;
-      const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id) };
+      const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id), roadmap_item_id: row.roadmap_item_id == null ? null : String(row.roadmap_item_id) };
       return { attachment, data };
     },
     async list({ since = null, to = null, limit = 200, room = null } = {}) {
@@ -1527,16 +1545,34 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
     },
-    async addRoadmapItem({ column, title, note, owner, by }) {
+    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false }) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
         const [{ n, next }] = await tx.query(`SELECT count(*)::int AS n, coalesce(max(position) FILTER (WHERE col = $1::text), -1) + 1 AS next FROM roadmap_items`, [column]);
         if (Number(n) >= ROADMAP_MAX_ITEMS) return null;
-        const [row] = await tx.query(
-          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text) RETURNING ${ROADMAP_COLS}`,
-          [newRoadmapId(), column, Number(next), title, note, owner, by],
+        // Pictures: the caller's own uploads, not yet on a message or a card. A failure throws and
+        // rolls everything back, so there is never a card with half its pictures.
+        if (attachments.length) {
+          const found = await tx.query(`SELECT id, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`, [attachments]);
+          for (const aid of attachments) {
+            const row = found.find((r) => r.id === aid);
+            if (!row) throw new AttachmentLinkError(aid, 'unknown');
+            if (row.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+            if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(aid, 'already linked');
+          }
+        }
+        // «top»: first in its column (an idea someone wants built next), else last.
+        if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
+        const id = newRoadmapId();
+        await tx.query(
+          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text)`,
+          [id, column, top ? 0 : Number(next), title, note, owner, by, description],
         );
+        for (const [position, aid] of attachments.entries()) {
+          await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
+        }
+        const [row] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
         return toRoadmap(row);
       });
     },
@@ -1554,9 +1590,9 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           position = Number(next);
         }
         const [row] = await tx.query(
-          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now()
+          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text
            WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
-          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by],
+          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description],
         );
         return toRoadmap(row);
       });
@@ -2216,7 +2252,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         const upload = uploads.get(id);
         if (!upload) throw new AttachmentLinkError(id, 'unknown');
         if (upload.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
-        if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+        if (upload.message_id !== null || upload.roadmap_item_id) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
       const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to, room: target });
@@ -2226,14 +2262,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
       // The same check the database makes.
       if (!Number.isInteger(scale) || scale < 1 || scale > MAX_SCALE) throw new Error(`An image's scale must be a whole number from 1 to ${MAX_SCALE}.`);
-      const removed = [...uploads.values()].filter((u) => u.message_id === null && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
+      const removed = [...uploads.values()].filter((u) => u.message_id === null && !u.roadmap_item_id && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
       for (const id of removed) uploads.delete(id);
       if (removed.length) await blobs.delete(noDb, removed);
       const recent = [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
       if (recent >= limitPerHour) return null;
       const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length, scale };
       await blobs.put(noDb, attachment.id, data);
-      uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
+      uploads.set(attachment.id, { ...attachment, sender, message_id: null, roadmap_item_id: null, created: now() });
       return attachment;
     },
     async uploadsInLastHour(sender) {
@@ -2243,7 +2279,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const upload = uploads.get(id);
       const data = upload && (await blobs.get(noDb, id));
       if (!upload || !data) return null;
-      return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id }, data };
+      return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id, roadmap_item_id: upload.roadmap_item_id ?? null }, data };
     },
     async list({ since = null, to = null, limit = 200, room = null } = {}) {
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since) && (room === null || m.room === room));
@@ -2420,16 +2456,26 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async listRoadmap() {
       return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
     },
-    async addRoadmapItem({ column, title, note, owner, by }) {
+    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false }) {
       if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
+      const pictures = attachments.map((aid) => {
+        const upload = uploads.get(aid);
+        if (!upload) throw new AttachmentLinkError(aid, 'unknown');
+        if (upload.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+        if (upload.message_id !== null || upload.roadmap_item_id) throw new AttachmentLinkError(aid, 'already linked');
+        return upload;
+      });
       const inCol = [...roadmap.values()].filter((i) => i.column === column);
+      if (top) for (const i of inCol) i.position += 1;
       const item: RoadmapItem = {
-        id: newRoadmapId(), column, position: inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
+        id: newRoadmapId(), column, position: top ? 0 : inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
         title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
-        progress: null, status: '', progress_at: null,
+        progress: null, status: '', progress_at: null, description,
+        attachments: pictures.map(({ id, content_type, width, height, bytes, scale }) => ({ id, content_type, width, height, bytes, scale })),
       };
+      for (const upload of pictures) upload.roadmap_item_id = item.id;
       roadmap.set(item.id, item);
-      return { ...item };
+      return { ...item, attachments: [...item.attachments] };
     },
     async updateRoadmapItem(id, change, by) {
       const item = roadmap.get(id);
@@ -2441,12 +2487,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       }
       if (change.title !== undefined) item.title = change.title;
       if (change.note !== undefined) item.note = change.note;
+      if (change.description !== undefined) item.description = change.description;
       if (change.owner !== undefined) item.owner = change.owner === null ? null : shaped(change.owner);
       item.updated_by = shaped(by);
       item.updated_at = new Date(now()).toISOString();
       return { ...item };
     },
     async deleteRoadmapItem(id) {
+      for (const [aid, upload] of uploads) if (upload.roadmap_item_id === id) uploads.delete(aid);
       return roadmap.delete(id);
     },
     async claimRoadmapItem(id, by, note) {

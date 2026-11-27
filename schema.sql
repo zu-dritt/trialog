@@ -313,3 +313,13 @@ ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (prog
 ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80);
 
 ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ;
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000);
+
+CREATE TABLE IF NOT EXISTS roadmap_pictures (
+     attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
+     roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
+     position         SMALLINT NOT NULL DEFAULT 0
+   );
+
+CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position);
