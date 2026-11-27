@@ -1,0 +1,44 @@
+// The roadmap page: where a card lands, the board as it renders, and the way to it from the hub.
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
+import type { RoadmapItem } from '../lib/roadmap';
+
+const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
+  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', ...over });
+
+test('a card lands where it is put, from its own column or another', () => {
+  assert.deepEqual(placeAt(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
+  assert.deepEqual(placeAt(['a', 'b', 'c'], 'a', 2), ['b', 'c', 'a']);
+  assert.deepEqual(placeAt(['a', 'b'], 'x', 1), ['a', 'x', 'b'], 'from another column');
+  assert.deepEqual(placeAt(['a', 'b'], 'x', 99), ['a', 'b', 'x'], 'past the end: at the end');
+  assert.deepEqual(placeAt(['a', 'b'], 'b', -1), ['b', 'a'], 'before the start: first');
+});
+
+test('a column lists its cards by position', () => {
+  const items = [card('b', 'next', 1), card('a', 'next', 0), card('d', 'done', 0)];
+  assert.deepEqual(columnOf(items, 'next').map((i) => i.id), ['a', 'b']);
+});
+
+test('the board: four columns, numbered cards, owners, and the controls only when it can change', () => {
+  const items = [card('rm_aaaaaaaa', 'next', 0, { title: 'Deploy button', owner: 'grok', note: 'one click' }), card('rm_bbbbbbbb', 'next', 1, { title: 'Hovercard' })];
+  const view = renderToStaticMarkup(<RoadmapBoard items={items} />);
+  assert.deepEqual([...view.matchAll(/data-column="([a-z]+)"/g)].map((m) => m[1]), ['done', 'now', 'next', 'later']);
+  assert.match(view, /Deploy button<\/div><div class="mt-0\.5 text-xs text-muted"><span class="font-semibold"[^>]*>Grok<\/span> · one click/);
+  assert.ok(!view.includes('↑') && !view.includes('draggable="true"'), 'read-only without actions');
+  const live = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {} }} />);
+  assert.equal(live.match(/draggable="true"/g)?.length, 2);
+  const button = (label: string) => new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`).exec(live)?.[0] ?? '';
+  assert.match(button('Move «Deploy button» up'), /disabled=""/, 'the first card cannot go up');
+  assert.match(button('Move «Hovercard» down'), /disabled=""/, 'the last card cannot go down');
+  assert.doesNotMatch(button('Move «Hovercard» up'), /disabled=""/);
+  assert.match(live, /<span class="sr-only">Column of «Hovercard»<\/span><select/);
+});
+
+test('the hub links the roadmap in the header and in the «⋯» menu, in a tab of its own', () => {
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /href="\/roadmap" target="trialog-roadmap"/);
+  assert.match(page, /\{ label: 'Roadmap', href: '\/roadmap' \}/);
+});
