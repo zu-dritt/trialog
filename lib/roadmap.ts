@@ -59,10 +59,9 @@ const ownerOf = (v: unknown, names: readonly string[]): string | null | Fail => 
   return v;
 };
 
-/** POST: {column, title, note?, owner?}. */
-/** POST: {column, title, note?, owner?, description?, attachments?: ["att_…"], top?: true}. */
+/** POST: {column, title, note?, owner?, reviewer?, description?, attachments?: ["att_…"], top?: true}. */
 export function parseNewItem(body: unknown, names: readonly string[]): { ok: true; column: RoadmapColumn; title: string; note: string; owner: string | null; description: string; attachments: string[]; top: boolean; reviewer: string | null } | Fail {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note": "...", "owner": "claude"}.' };
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note"?, "owner"?, "reviewer"?, "description"?, "attachments"?, "top"?}.' };
   const b = body as Record<string, unknown>;
   if (!isColumn(b.column)) return { ok: false, status: 400, error: `"column" must be one of ${ROADMAP_COLUMNS.join(', ')}.` };
   const title = line(b.title, 'title', 1, ROADMAP_TITLE_MAX);
@@ -177,4 +176,34 @@ export function todayLine(items: readonly RoadmapItem[], now: Date = new Date(),
   const inProgress = items.filter((i) => i.column === 'now').length;
   const fits = Math.max(0, Math.floor((done / hours) * left) - inProgress);
   return { fits, done, hours, left };
+}
+
+/** A card's LED, as in the work-in-flight strip: what state it is in, at a glance. */
+export type CardTone = 'blocked' | 'review' | 'working' | 'stale';
+export interface CardStatus { tone: CardTone; label: string }
+
+/** Hours without a change after which a card in «Now» counts as stale (grey). */
+export const CARD_STALE_HOURS = 3;
+
+/**
+ * The LED for a card, from its own words, so it needs nothing else to load:
+ * - red, blinking: it waits on a human. A human owns it outside «Now» (it waits for their pick),
+ *   or the note says «⛔ …», «waiting on David/the orchestrator/you»
+ *   or starts with «David: …» / «Orchestrator: …» (the same «Name: step» as a flight).
+ * - amber: «in review» (a pull request waits for the other agent).
+ * - green: in «Now» with an owner, changed within the last CARD_STALE_HOURS.
+ * - grey: in «Now», but no change for longer.
+ * A human's own card in «Now» is work they are doing: green like anyone's. Done cards never have an
+ * LED; queued cards in Next and Later have one only when they wait on a human.
+ */
+export function cardStatus(item: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number = Date.now(), humans: readonly string[] = ['david', 'orchestrator']): CardStatus | null {
+  if (item.column === 'done') return null;
+  const note = item.note.trim();
+  const names = humans.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const human = item.column !== 'now' && item.owner !== null && humans.some((h) => h.toLowerCase() === item.owner!.toLowerCase());
+  if (human || /⛔/.test(note) || new RegExp(`waiting on (the )?(${names}|you)\\b`, 'i').test(note) || new RegExp(`^@?(${names})\\s*:`, 'i').test(note)) return { tone: 'blocked', label: 'waiting on you' };
+  if (/\bin review\b/i.test(note)) return { tone: 'review', label: 'in review' };
+  if (item.column !== 'now' || !item.owner) return null;
+  const hours = (now - Date.parse(item.updated_at)) / 3_600_000;
+  return hours > CARD_STALE_HOURS ? { tone: 'stale', label: `no change for ${Math.floor(hours)} h` } : { tone: 'working', label: 'working' };
 }

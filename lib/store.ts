@@ -1645,7 +1645,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async deleteRoadmapItem(id) {
       await ensure();
-      return (await db.query(`DELETE FROM roadmap_items WHERE id = $1::text RETURNING id`, [id])).length > 0;
+      // Its pictures go with it, at once (as in the memory store), not an hour later by the sweeper.
+      const { gone, pictures } = await db.transaction(async (tx) => {
+        const rows = await tx.query(`DELETE FROM attachments WHERE id IN (SELECT attachment_id FROM roadmap_pictures WHERE roadmap_item_id = $1::text) RETURNING id`, [id]);
+        const deleted = (await tx.query(`DELETE FROM roadmap_items WHERE id = $1::text RETURNING id`, [id])).length > 0;
+        return { gone: deleted, pictures: rows.map((r) => r.id as string) };
+      });
+      if (pictures.length) await blobs.delete(db, pictures);
+      return gone;
     },
     async reorderRoadmap(column, ids, by) {
       await ensure();
@@ -2497,7 +2504,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       return { ...item };
     },
     async deleteRoadmapItem(id) {
-      for (const [aid, upload] of uploads) if (upload.roadmap_item_id === id) uploads.delete(aid);
+      const pictures = [...uploads.values()].filter((u) => u.roadmap_item_id === id).map((u) => u.id);
+      for (const aid of pictures) uploads.delete(aid);
+      if (pictures.length) await blobs.delete(noDb, pictures);
       return roadmap.delete(id);
     },
     async claimRoadmapItem(id, by, note) {
