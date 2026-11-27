@@ -149,6 +149,29 @@ test('API: a claim on someone else\'s card is a 409 with the owner', async () =>
   assert.equal((await claimRoute.DELETE(req('grok', 'DELETE', undefined, path), ctx)).status, 200);
 });
 
+test('progress: only the owner (or a human) says how far a card is; the bar and line come back with the card', async () => {
+  for (const store of [createMemoryStore(), await (async () => { const s = createSqlStore(pgliteDb(new PGlite())); await s.ensure(); return s; })()]) {
+    const c = (await store.addRoadmapItem({ column: 'now', title: 'Murten', note: '', owner: null, by: 'david' }))!;
+    assert.equal(c.progress, null);
+    assert.equal((await store.setRoadmapProgress(c.id, 'grok', 40, 'geocoding', false)).status, 'taken', 'claim first');
+    await store.claimRoadmapItem(c.id, 'grok', null);
+    const r = await store.setRoadmapProgress(c.id, 'grok', 60, 'geocoding done', false);
+    assert.equal(r.status, 'ok');
+    assert.equal(r.status === 'ok' && r.item.progress, 60);
+    assert.equal(r.status === 'ok' && r.item.status, 'geocoding done');
+    assert.ok(r.status === 'ok' && r.item.progress_at);
+    assert.equal((await store.setRoadmapProgress(c.id, 'claude', 90, 'x', false)).status, 'taken', 'not the owner');
+    assert.equal((await store.setRoadmapProgress(c.id, 'david', 70, 'checked by the orchestrator', true)).status, 'ok', 'a human may');
+    const cleared = await store.setRoadmapProgress(c.id, 'grok', null, '', false);
+    assert.equal(cleared.status === 'ok' && cleared.item.progress, null);
+  }
+  const { parseProgress } = await import('../lib/roadmap');
+  assert.deepEqual(parseProgress({ progress: 60, status: ' half ' }), { ok: true, progress: 60, status: 'half' });
+  assert.deepEqual(parseProgress({ progress: null }), { ok: true, progress: null, status: '' });
+  assert.deepEqual(parseProgress({ progress: 80 }), { ok: true, progress: 80, status: null }, 'no status: the line stays');
+  for (const bad of [{}, { progress: 101 }, { progress: -1 }, { progress: 2.5 }, { progress: '50' }, { progress: 5, status: 'x'.repeat(81) }]) assert.equal(parseProgress(bad).ok, false, JSON.stringify(bad));
+});
+
 test('the lock has no back door: an agent cannot move a claim with PATCH; the orchestrator can hand a card over; done cards are not claimed', async () => {
   const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler };
   const c = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Back door' }))).json()) as { item: RoadmapItem }).item;
@@ -166,4 +189,30 @@ test('the lock has no back door: an agent cannot move a claim with PATCH; the or
   const late = await claimRoute.POST(req('grok', 'POST', {}, `${path}/claim`), ctx);
   assert.equal(late.status, 409);
   assert.match(((await late.json()) as { error: string }).error, /done/);
+});
+
+test('API: progress is 400 for a bad body, 404 for no card, 409 before the claim or for another agent, 200 for the owner; the line stays without a status', async () => {
+  const route = (await import('../app/api/roadmap/[id]/progress/route')) as unknown as { PUT: Handler };
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler };
+  const c = ((await (await list.POST(req('david', 'POST', { column: 'now', title: 'Progress via HTTP' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: c.id }) };
+  const path = `/api/roadmap/${c.id}/progress`;
+  const put = (who: string, body: unknown, at = ctx) => route.PUT(req(who, 'PUT', body, path), at);
+  assert.equal((await put('grok', { progress: 101 })).status, 400);
+  assert.equal((await put('grok', { progress: 5 }, { params: Promise.resolve({ id: 'rm_00000000' }) })).status, 404);
+  const unclaimed = await put('grok', { progress: 5 });
+  assert.equal(unclaimed.status, 409);
+  assert.match(((await unclaimed.json()) as { error: string }).error, /Claim the card first/);
+  await claimRoute.POST(req('grok', 'POST', {}, `/api/roadmap/${c.id}/claim`), ctx);
+  const other = await put('claude', { progress: 5 });
+  assert.equal(other.status, 409);
+  assert.match(((await other.json()) as { error: string }).error, /grok's card/);
+  assert.equal((await put('grok', { progress: 40, status: 'geocoding' })).status, 200);
+  const kept = ((await (await put('grok', { progress: 60 })).json()) as { item: RoadmapItem }).item;
+  assert.equal(kept.progress, 60);
+  assert.equal(kept.status, 'geocoding', 'no status: the line stays');
+  const byHuman = ((await (await put('david', { progress: 90, status: 'checked' })).json()) as { item: RoadmapItem }).item;
+  assert.equal(byHuman.status, 'checked', 'a human may');
+  const cleared = ((await (await put('grok', { progress: null })).json()) as { item: RoadmapItem }).item;
+  assert.deepEqual([cleared.progress, cleared.status], [null, '']);
 });

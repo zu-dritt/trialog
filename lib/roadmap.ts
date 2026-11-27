@@ -18,6 +18,12 @@ export interface RoadmapItem {
   owner: string | null;
   updated_by: string;
   updated_at: string;
+  /** How far the owner is, 0–100, or null when not said (migrations/017). */
+  progress: number | null;
+  /** A short line on where it stands («geocoding done»). */
+  status: string;
+  /** When progress or status was last set. */
+  progress_at: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };
@@ -94,6 +100,20 @@ export type ClaimResult =
   | { status: 'done'; item: RoadmapItem }
   | { status: 'not_found' };
 
+/**
+ * PUT …/progress: {"progress": 0–100 or null, "status"?: "…"}. Without "status" the line stays as
+ * it was (status null = keep); clearing the bar (progress null) clears the line too.
+ */
+export function parseProgress(body: unknown): { ok: true; progress: number | null; status: string | null } | Fail {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
+  if (!b || !('progress' in b)) return { ok: false, status: 400, error: 'Body must be {"progress": 0–100 or null, "status": "short line"}.' };
+  const p = b.progress;
+  if (p !== null && (typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p > 100)) return { ok: false, status: 400, error: '"progress" must be a whole number 0–100, or null.' };
+  const status = b.status === undefined ? (p === null ? '' : null) : line(b.status, 'status', 0, 80);
+  if (status !== null && typeof status !== 'string') return status;
+  return { ok: true, progress: p as number | null, status };
+}
+
 /** Where «Next» is cut by what we likely still finish today, and the numbers behind it. */
 export interface TodayLine {
   /** How many cards at the top of «Next» are likely done today. */
@@ -127,4 +147,34 @@ export function todayLine(items: readonly RoadmapItem[], now: Date = new Date(),
   const inProgress = items.filter((i) => i.column === 'now').length;
   const fits = Math.max(0, Math.floor((done / hours) * left) - inProgress);
   return { fits, done, hours, left };
+}
+
+/** A card's LED, as in the work-in-flight strip: what state it is in, at a glance. */
+export type CardTone = 'blocked' | 'review' | 'working' | 'stale';
+export interface CardStatus { tone: CardTone; label: string }
+
+/** Hours without a change after which a card in «Now» counts as stale (grey). */
+export const CARD_STALE_HOURS = 3;
+
+/**
+ * The LED for a card, from its own words, so it needs nothing else to load:
+ * - red, blinking: it waits on a human. A human owns it outside «Now» (it waits for their pick),
+ *   or the note says «⛔ …», «waiting on David/the orchestrator/you»
+ *   or starts with «David: …» / «Orchestrator: …» (the same «Name: step» as a flight).
+ * - amber: «in review» (a pull request waits for the other agent).
+ * - green: in «Now» with an owner, changed within the last CARD_STALE_HOURS.
+ * - grey: in «Now», but no change for longer.
+ * A human's own card in «Now» is work they are doing: green like anyone's. Done cards never have an
+ * LED; queued cards in Next and Later have one only when they wait on a human.
+ */
+export function cardStatus(item: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number = Date.now(), humans: readonly string[] = ['david', 'orchestrator']): CardStatus | null {
+  if (item.column === 'done') return null;
+  const note = item.note.trim();
+  const names = humans.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const human = item.column !== 'now' && item.owner !== null && humans.some((h) => h.toLowerCase() === item.owner!.toLowerCase());
+  if (human || /⛔/.test(note) || new RegExp(`waiting on (the )?(${names}|you)\\b`, 'i').test(note) || new RegExp(`^@?(${names})\\s*:`, 'i').test(note)) return { tone: 'blocked', label: 'waiting on you' };
+  if (/\bin review\b/i.test(note)) return { tone: 'review', label: 'in review' };
+  if (item.column !== 'now' || !item.owner) return null;
+  const hours = (now - Date.parse(item.updated_at)) / 3_600_000;
+  return hours > CARD_STALE_HOURS ? { tone: 'stale', label: `no change for ${Math.floor(hours)} h` } : { tone: 'working', label: 'working' };
 }
