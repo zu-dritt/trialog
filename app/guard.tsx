@@ -258,7 +258,8 @@ export function useGuard(api: ApiFn | null, open: boolean): { report: GuardRepor
       }
     };
     void load();
-    const timer = setInterval(() => { void load(); }, open ? GUARD_PANEL_MS : GUARD_RING_MS);
+    // Not while the tab is hidden: nobody sees the ring then, and the database may sleep (playground #761).
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, open ? GUARD_PANEL_MS : GUARD_RING_MS);
     return () => { stopped = true; clearInterval(timer); };
   }, [api, open]);
   return { report, error };
