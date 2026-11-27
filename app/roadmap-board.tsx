@@ -63,11 +63,18 @@ export interface BoardActions {
  * Who builds and who reviews a card, as the card says it: «Claude builds · Grok reviews», in Done
  * «built · reviewed». A human owner is shown by name only (the orchestrator decides, not builds).
  */
-export function cardRoles(card: Pick<RoadmapItem, 'column' | 'owner' | 'reviewer'>, participants: readonly Pick<Participant, 'name' | 'kind'>[] = []): { name: string; role: 'owner' | 'reviewer'; verb: string }[] {
+export function cardRoles(card: Pick<RoadmapItem, 'column' | 'owner' | 'reviewer'> & Partial<Pick<RoadmapItem, 'raised_by'>>, participants: readonly Pick<Participant, 'name' | 'kind'>[] = []): { name: string; role: 'raiser' | 'owner' | 'reviewer'; verb: string }[] {
   const done = card.column === 'done';
   const human = (n: string) => participants.some((p) => p.name === n && p.kind === 'human');
-  const roles: { name: string; role: 'owner' | 'reviewer'; verb: string }[] = [];
-  if (card.owner) roles.push({ name: card.owner, role: 'owner', verb: human(card.owner) ? '' : done ? 'built' : 'builds' });
+  const roles: { name: string; role: 'raiser' | 'owner' | 'reviewer'; verb: string }[] = [];
+  // Who raised it comes first, so David knows whom to ask (playground #670). Raised and built by
+  // the same one reads «Claude raised, builds», not the name twice. Unknown for older cards: nothing.
+  const raiser = card.raised_by ?? null;
+  if (raiser && raiser !== card.owner) roles.push({ name: raiser, role: 'raiser', verb: 'raised' });
+  if (card.owner) {
+    const verb = human(card.owner) ? '' : done ? 'built' : 'builds';
+    roles.push({ name: card.owner, role: 'owner', verb: raiser === card.owner ? (verb ? `raised, ${verb}` : 'raised') : verb });
+  }
   if (card.reviewer && card.reviewer !== card.owner) roles.push({ name: card.reviewer, role: 'reviewer', verb: done ? 'reviewed' : 'reviews' });
   return roles;
 }
@@ -148,12 +155,12 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                     <span className="w-5 flex-none pt-0.5 text-right text-xs tabular-nums text-muted">{index + 1}</span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold leading-snug">{card.title}{(() => { const st = cardStatus(card, at, humans.length ? humans : undefined); return st && <CardLed status={st} />; })()}</div>
-                      {(card.note || card.owner || card.reviewer) && (
+                      {(card.note || card.owner || card.reviewer || card.raised_by) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {cardRoles(card, participants).map((r, i) => (
                             <Fragment key={r.name}>{i > 0 && ' · '}<span data-role={r.role} className="font-semibold" style={{ color: colorOf(r.name, participants) }}>{labelOf(r.name, participants)}</span>{r.verb && ` ${r.verb}`}</Fragment>
                           ))}
-                          {(card.owner || card.reviewer) && card.note && ' · '}<FlightText text={card.note} />
+                          {(card.owner || card.reviewer || card.raised_by) && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
                       <ProgressBar card={card} now={at} />
