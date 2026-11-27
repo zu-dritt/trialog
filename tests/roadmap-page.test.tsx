@@ -56,3 +56,13 @@ test('the roadmap tab is named «Trialog Roadmap»', async () => {
   assert.equal(metadata.title, 'Trialog Roadmap');
   assert.match(readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8'), /document\.title = 'Trialog Roadmap'/);
 });
+
+test('«+ Idee» sits at the top of Later when the page can add, and nowhere else', () => {
+  const html = renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {}, addIdea: async () => true }} />);
+  assert.equal(html.match(/data-idea-box=""/g)?.length, 1);
+  assert.match(html, /data-column="later"[^]*data-idea-box=""/);
+  assert.match(html, /aria-label="Add an idea to Later \(no message, wakes no one\)"/);
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={[]} actions={{ place: () => {} }} />).includes('data-idea-box'));
+  const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /column: 'later', title, note: `💡 idea from \$\{who\}`/);
+});
