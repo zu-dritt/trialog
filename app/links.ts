@@ -66,3 +66,20 @@ export function linksPullRequest(text: string, repo: string | null = REPO): bool
   if (PR_URL.test(prose)) return true;
   return repo !== null && splitPullRequests(prose).some((part) => typeof part !== 'string');
 }
+
+/**
+ * What the hovercard on a link says: the site, then what the address points at. For GitHub,
+ * «github.com · owner/repo · pull request 62»; otherwise the host and the rest of the address.
+ */
+export function cardText(href: string): string {
+  let url: URL;
+  try { url = new URL(href); } catch { return href; }
+  const host = url.hostname.replace(/^www\./, '');
+  const gh = /^\/([^/]+)\/([^/]+)(?:\/(pull|issues)\/(\d+))?\/?$/.exec(url.pathname);
+  if (host === 'github.com' && gh) {
+    const what = gh[3] ? ` · ${gh[3] === 'pull' ? 'pull request' : 'issue'} ${gh[4]}` : '';
+    return `github.com · ${gh[1]}/${gh[2]}${what}`;
+  }
+  const rest = (url.pathname === '/' ? '' : url.pathname) + url.search + url.hash;
+  return rest ? `${host} · ${rest.length > 60 ? `${rest.slice(0, 59)}…` : rest}` : host;
+}

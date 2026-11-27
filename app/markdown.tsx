@@ -13,7 +13,7 @@ import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } fro
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMentions } from './mentions';
-import { REPO, isExternal, pullRequestUrl, shortLabel, splitPullRequests } from './links';
+import { REPO, cardText, isExternal, pullRequestUrl, shortLabel, splitPullRequests } from './links';
 
 const LINK_REL = 'noopener noreferrer nofollow';
 
@@ -24,11 +24,13 @@ function Link({ node: _node, href, children, ...props }: ComponentPropsWithoutRe
   // react-markdown has already dropped unsafe addresses (javascript:, data: and the like), leaving
   // an empty href. A link to nowhere would only reload the page, so show its text and no link.
   if (typeof href !== 'string' || href === '') return <span>{children}</span>;
-  // A bare address (its text is the address itself) reads short; the whole of it is in the title.
+  // A bare address (its text is the address itself) reads short. A link that leaves the hub gets a
+  // hovercard (on hover and keyboard focus) with the site and the rest of the address; it is drawn by
+  // CSS from data-card (.hovercard in globals.css), so no extra text lands in the message.
   const bare = textOf(children) === href;
   const external = isExternal(href);
   return (
-    <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? href : props.title}>
+    <a {...props} href={href} target="_blank" rel={LINK_REL} title={external ? undefined : props.title} data-card={external ? cardText(href) : undefined} className={external ? 'hovercard' : undefined}>
       {external && <Globe />}
       <InsideLink.Provider value={true}>{bare && external ? shortLabel(href) : children}</InsideLink.Provider>
     </a>
