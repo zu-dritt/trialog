@@ -2,7 +2,11 @@
 
 Card: `rm_cc1c9e9c42c911a7` (plan only; no code in this pass).
 
-## Recommendation
+## Update after debate (Claude, hub #788; Grok agrees)
+
+**Docs first, button second.** We can't test a button end to end without real accounts (David's call), and an untested button on a public page is worse than none. Pass 1: a tight «your accounts, your billing» checklist in README and `docs/deploy.md` (~45–60 min). Pass 2, only after David decides about test accounts: the button. The demo hub links to the docs from its ⋯ menu. No organisation names or ids in this repo's docs or tests.
+
+## Original recommendation
 
 Add a **Vercel Deploy Button** that starts a clone of `zu-dritt/trialog` into the visitor's own GitHub and Vercel accounts, and attach the official **Neon** integration so they can create their own Postgres and have `DATABASE_URL` written onto their project.
 
@@ -12,7 +16,7 @@ Where it should appear, when this is built:
 
 - `README.md` (top-level, next to the existing deploy/docs links)
 - `docs/deploy.md` (a short step at the start of «Deploy on Vercel», with the same button)
-- Optionally the **demo hub** header or its docs page (`docs/demo.md`), as a «Deploy your own» control. Do **not** put the button on the Amberleaf playground or the live hub: those are our deployments, not a starter kit.
+- Optionally the **demo hub** header or its docs page (`docs/demo.md`), as a «Deploy your own» control. Do **not** put the button on our own playground or live hub: those are our deployments, not a starter kit.
 
 A typical button is the official markdown image linking at:
 
@@ -42,13 +46,13 @@ Docs-only is a fallback if the button or the Neon integration cannot be wired wi
 - `README.md` — Deploy Button plus one sentence: this provisions on *your* Vercel and Neon, not ours.
 - `docs/deploy.md` — the same button at the start of the Vercel section; keep the manual steps; add an explicit «your accounts, your billing» note.
 - `docs/demo.md` — only if the demo also links out; make clear the demo itself is not the deploy.
-- Optionally a small control in the demo app (e.g. header / overflow), gated so playground and live never show it (a build-time flag such as «this is the public demo», not a hardcoded Amberleaf hostname check spread through the UI).
+- Optionally a small control in the demo app (e.g. header / overflow), gated so playground and live never show it (a build-time flag such as «this is the public demo», not a hardcoded hostname check spread through the UI).
 - No new server routes, no new secrets, no changes to deploy scripts (`trialog-ops`, Vercel project ids).
 
 ## Tests
 
 - A tight test (README and/or `docs/deploy.md`) that the button URL, when present, starts with `https://vercel.com/new/clone`, uses `repository-url=https://github.com/zu-dritt/trialog`, and lists the expected env-var names as prompts.
-- The same test rejects any URL that contains our Vercel project or org ids, a `DATABASE_URL` value, a token, a billing parameter, or a team slug of ours.
+- The same test rejects any URL with a parameter outside an allow-list (repository-url, env, envDescription, project-name, integration/store params), so no ids, tokens, database URLs or billing params can slip in, without listing our ids in the public repo.
 - If a demo-hub control is added: it renders on the demo build, stays a new-tab link to that URL, and does not render when the flag is off.
 - No end-to-end test that actually creates a Vercel or Neon project.
 
@@ -64,5 +68,5 @@ Risk that would stretch it: Vercel's Neon integration id or Deploy Button `store
 
 - A hosted «provisioner» service.
 - One-click custom domains, SSO, or billing plans.
-- Changing how the Amberleaf playground or the live hub is deployed.
+- Changing how our playground or the live hub is deployed.
 - Shipping this plan as a chat post; David reviews it first.
