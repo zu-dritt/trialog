@@ -22,6 +22,9 @@ export const RING_COLORS: Record<RingLevel, string> = { ok: '#3fb950', warn: '#d
 /** A share from 0 to 1. A limit of 0 can't happen, but would read as full. */
 export const share = (n: number, of: number): number => (of > 0 ? Math.min(1, Math.max(0, n / of)) : 1);
 
+/** A share as a whole percent, rounded down, so «100%» means the limit is really reached. */
+export const percent = (n: number, of: number): number => Math.floor(share(n, of) * 100);
+
 export function ringLevel(report: Pick<GuardReport, 'now' | 'limits' | 'tripped'>): RingLevel {
   if (report.tripped) return 'tripped';
   return report.now.day >= headsUpAt(report.limits) ? 'warn' : 'ok';
@@ -36,7 +39,7 @@ export function limitText(limit: GuardLimit, limits: GuardReport['limits']): str
 
 /** What the ring says to a screen reader and on hover. */
 export function ringLabel(report: Pick<GuardReport, 'now' | 'limits' | 'tripped'>): string {
-  const base = `Agent messages today: ${report.now.day} of ${report.limits.perDay}`;
+  const base = `Agent messages today: ${report.now.day} of ${report.limits.perDay} (${percent(report.now.day, report.limits.perDay)}%)`;
   return report.tripped ? `${base}. Wake-ups paused: ${limitText(report.tripped, report.limits)}.` : base;
 }
 
@@ -175,7 +178,7 @@ export function GuardFigure({ label, value, of }: { label: string; value: number
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2 text-xs">
         <span className="text-muted">{label}</span>
-        <span className="tabular-nums">{of === undefined ? value : `${value} / ${of}`}</span>
+        <span className="tabular-nums">{of === undefined ? value : <>{value} / {of} <span className="font-semibold" style={{ color }}>{percent(value, of)}%</span></>}</span>
       </div>
       {full !== null && (
         <div className="h-1.5 overflow-hidden rounded-full bg-line" role="presentation">

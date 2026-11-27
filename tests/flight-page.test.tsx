@@ -49,3 +49,8 @@ test('the page shows the strip under the header, with the token', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /<FlightBar token=\{token\} onUnauthorized=\{refuseToken\} participants=\{participants\} \/>/);
 });
+
+test('screen readers hear each whole sentence, also on a phone where the words are hidden', () => {
+  const html = renderToStaticMarkup(<FlightStrip now={T} flights={[flight({ participant: 'grok', state: 'waiting', text: 'CI', since: ago(4) })]} />);
+  assert.match(html, /<span class="sr-only">Grok: waiting for «CI» · 4 min<\/span><span aria-hidden="true" class="contents">/);
+});
