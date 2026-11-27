@@ -81,3 +81,27 @@ test('only the entries are the live region; «⇅» sits outside it and shows a 
   assert.ok(live, 'the button comes after the live region, not inside it');
   assert.match(html, /<button[^>]*focus-visible:outline-2[^>]*>⇅<\/button>/);
 });
+
+test('a human entry: red and blinking while an agent waits on them, grey otherwise', async () => {
+  const { waitingOn, humanSentence } = await import('../app/flight');
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+  const human = { name: 'david', label: 'Orchestrator' };
+  const flights = [
+    flight({ participant: 'claude', state: 'waiting', text: 'David: merge PR 36' }),
+    flight({ participant: 'grok', state: 'waiting', text: 'orchestrator:  go for the demo' }),
+    flight({ participant: 'grok', state: 'waiting', text: 'review of PR 82' }),
+    flight({ participant: 'claude', state: 'working', text: 'David: not a wait' }),
+  ];
+  assert.deepEqual(waitingOn(flights, human).map((w) => [w.by, w.text]), [['claude', 'merge PR 36'], ['grok', 'go for the demo']], 'by name or label, any case, only «waiting»');
+  assert.deepEqual(waitingOn([flight({ participant: 'claude', state: 'waiting', text: 'review of PR 82' })], human), []);
+  assert.equal(humanSentence('Orchestrator', [], P), 'Orchestrator: nothing waiting on you');
+  assert.equal(humanSentence('Orchestrator', waitingOn(flights.slice(0, 1), human), P), 'Orchestrator: waiting on you (1): merge PR 36 (Claude)');
+  const html = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={flights.slice(0, 1)} />);
+  assert.match(html, /data-human="david" data-waiting=""/);
+  assert.match(html, /blink-red/);
+  assert.match(html, /waiting on you \(1\): merge PR 36/);
+  const calm = renderToStaticMarkup(<FlightStrip now={T} participants={P} flights={[flight({})]} />);
+  assert.match(calm, /data-human="david"/);
+  assert.doesNotMatch(calm, /blink-red/);
+  assert.match(calm, /nothing waiting on you/);
+});

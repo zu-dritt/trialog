@@ -55,6 +55,27 @@ export function flightSentence(f: Flight, now: number, shown: string): string {
   return `${shown}: ${WORD[tone]} «${f.text}» · ${flightAge(f.since, now)}`;
 }
 
+/**
+ * What waits on a human: agents whose flight is «waiting» on that person. An agent says so by
+ * starting its text with the human's name or label and a colon: «David: merge PR 36». The wait ends
+ * by itself when the agent moves on (a new flight), so nothing has to be cleared by hand.
+ */
+export interface WaitOnHuman { by: string; text: string; since: string }
+export function waitingOn(flights: readonly Flight[], human: Pick<Participant, 'name' | 'label'>): WaitOnHuman[] {
+  const names = [human.name, human.label].filter(Boolean).map((n) => String(n).toLowerCase());
+  return flights.flatMap((f) => {
+    if (f.state !== 'waiting' || f.participant === human.name) return [];
+    const m = /^\s*@?([^:]{1,40}):\s*(.+)$/.exec(f.text);
+    return m && names.includes(m[1].trim().toLowerCase()) ? [{ by: f.participant, text: m[2].trim(), since: f.since }] : [];
+  });
+}
+
+/** The words for a human's entry: what waits on them, or that nothing does. */
+export function humanSentence(shown: string, waits: readonly WaitOnHuman[], participants: readonly Participant[] = []): string {
+  if (!waits.length) return `${shown}: nothing waiting on you`;
+  return `${shown}: waiting on you (${waits.length}): ${waits.map((w) => `${w.text} (${labelOf(w.by, participants)})`).join('; ')}`;
+}
+
 /** The strip. Nothing at all when nobody has set a flight. */
 export function FlightStrip({ flights, now, participants = [], position = 'top', onFlip }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void }) {
   if (!flights.length) return null;
@@ -63,6 +84,25 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
       {/* The entries scroll sideways when they don't fit; «⇅» stays in view at the right. Only the
           entries are the live region, so the button isn't read out with every update. */}
       <div role="status" aria-label="Work in flight" className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto">
+      {/* The humans first: red and blinking while an agent waits on them (playground #578). */}
+      {participants.filter((p) => p.kind === 'human').map((h) => {
+        const waits = waitingOn(flights, h);
+        const shown = labelOf(h.name, participants);
+        const sentence = humanSentence(shown, waits, participants);
+        return (
+          <span key={`human-${h.name}`} data-human={h.name} data-waiting={waits.length ? '' : undefined} title={sentence}
+            className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
+            <span className="sr-only">{sentence}</span>
+            <span aria-hidden="true" className="contents">
+              <span className={`inline-block flex-none rounded-full ${waits.length ? 'h-2.5 w-2.5 blink-red' : 'h-2 w-2'}`} style={{ background: waits.length ? '#f85149' : DOT.idle }} />
+              <span className="font-semibold" style={{ color: colorOf(h.name, participants) }}>{shown}</span>
+              {waits.length
+                ? <span className="max-w-[40ch] truncate font-semibold text-[#ff7b72]">waiting on you ({waits.length}): {waits.map((w) => w.text).join(' · ')}</span>
+                : <span className="text-muted max-sm:hidden">nothing waiting on you</span>}
+            </span>
+          </span>
+        );
+      })}
       {flights.map((f) => {
         const tone = flightTone(f, now);
         const shown = labelOf(f.participant, participants);
