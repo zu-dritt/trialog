@@ -185,3 +185,17 @@ test('the roadmap shows the work-in-flight strip above the board: who does what,
   assert.match(page, /data-roadmap-flight=""[^]*<FlightBar token=\{token\} onUnauthorized=\{\(\) => setToken\(''\)\} participants=\{participants\} position="top" \/>/);
   assert.ok(page.indexOf('data-roadmap-flight') < page.indexOf('<RoadmapBoard'), 'above the board');
 });
+
+test('a progress bar on cards that say how far they are: percent, the owner\'s line, how long ago; not in Done', () => {
+  const T = Date.parse('2026-11-27T14:00:00Z');
+  const items = [
+    card('rm_prog0000', 'now', 0, { owner: 'claude', progress: 60, status: 'geocoding done', progress_at: '2026-11-27T13:48:00Z' }),
+    card('rm_none0000', 'now', 1, { owner: 'grok' }),
+    card('rm_done0000', 'done', 0, { owner: 'claude', progress: 100, status: 'live', progress_at: '2026-11-27T13:00:00Z' }),
+  ];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} now={new Date(T)} />);
+  assert.equal(html.match(/role="progressbar"/g)?.length, 1, 'only the card in Now that said how far it is');
+  assert.match(html, /aria-valuenow="60" aria-label="60% done: geocoding done"/);
+  assert.match(html, /style="width:60%"/);
+  assert.match(html, />60%<\/span> · geocoding done · 12 min ago/);
+});

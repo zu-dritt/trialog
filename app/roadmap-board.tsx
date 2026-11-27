@@ -6,7 +6,7 @@
 import { Fragment, useState, type DragEvent } from 'react';
 import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
-import { FlightText, flightLinkLabel } from './flight';
+import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
 import { ComposeIdea, type NewIdea } from './compose-idea';
 import type { Attachment } from '../lib/shared';
@@ -73,6 +73,27 @@ export function cardRoles(card: Pick<RoadmapItem, 'column' | 'owner' | 'reviewer
 }
 
 /** A card's description and pictures, folded: the first line shows, the rest opens on a click. */
+/**
+ * How far a card is: a bar, the percent, the owner's short line and how long ago they said so
+ * (migrations/017, set with `hub.js roadmap progress <id> 60 "geocoding done"`). Not in Done.
+ */
+export function ProgressBar({ card, now }: { card: Pick<RoadmapItem, 'column' | 'progress' | 'status' | 'progress_at'>; now: number }) {
+  if (card.progress === null || card.column === 'done') return null;
+  const pct = Math.max(0, Math.min(100, card.progress));
+  const age = card.progress_at ? flightAge(card.progress_at, now) : '';
+  return (
+    <div className="mt-1.5" data-progress={pct}>
+      <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`${pct}% done${card.status ? `: ${card.status}` : ''}`}
+        className="h-1.5 w-full overflow-hidden rounded-full bg-[#2a2f3a]">
+        <div className="h-full rounded-full bg-[#3fb950]" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted">
+        <span className="font-semibold text-fg/90">{pct}%</span>{card.status && ` · ${card.status}`}{age && ` · ${age === 'now' ? 'just now' : `${age} ago`}`}
+      </div>
+    </div>
+  );
+}
+
 export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'description' | 'attachments'>; load?: LoadImage }) {
   if (!card.description && !card.attachments.length) return null;
   const first = card.description.split('\n')[0];
@@ -134,6 +155,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                           {(card.owner || card.reviewer) && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
+                      <ProgressBar card={card} now={at} />
                       <CardDetails card={card} load={loadImage} />
                       {(() => {
                         // A card that waits on a human, with an address in its note: one click to where it is unblocked.
