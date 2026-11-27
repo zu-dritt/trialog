@@ -1,0 +1,90 @@
+{
+  "desktopDavid": {
+    "buttons": [
+      {
+        "id": "rm_3c7387cbe1bf566f",
+        "text": "🚀 Ship it! PR 98",
+        "disabled": false
+      },
+      {
+        "id": "rm_f2a719932febcb40",
+        "text": "🚀 Ship it! PR 101, PR 102",
+        "disabled": false
+      },
+      {
+        "id": "rm_9eec6b429f715f4c",
+        "text": "🚀 Ship it! PR 103",
+        "disabled": false
+      },
+      {
+        "id": "rm_2e59ab8a71ee3028",
+        "text": "🚀 Ship it! PR 99",
+        "disabled": false
+      }
+    ],
+    "sent": [],
+    "cardCount": 8,
+    "title": "Trialog Roadmap",
+    "errors": []
+  },
+  "phoneDavid": {
+    "buttons": [
+      {
+        "id": "rm_3c7387cbe1bf566f",
+        "text": "🚀 Ship it! PR 98",
+        "disabled": false
+      },
+      {
+        "id": "rm_f2a719932febcb40",
+        "text": "🚀 Ship it! PR 101, PR 102",
+        "disabled": false
+      },
+      {
+        "id": "rm_9eec6b429f715f4c",
+        "text": "🚀 Ship it! PR 103",
+        "disabled": false
+      },
+      {
+        "id": "rm_2e59ab8a71ee3028",
+        "text": "🚀 Ship it! PR 99",
+        "disabled": false
+      }
+    ],
+    "sent": [],
+    "cardCount": 8,
+    "title": "Trialog Roadmap",
+    "errors": []
+  },
+  "desktopClaude": {
+    "buttons": [],
+    "sent": [],
+    "cardCount": 8,
+    "title": "Trialog Roadmap",
+    "errors": []
+  },
+  "afterClick": {
+    "buttons": [
+      {
+        "id": "rm_f2a719932febcb40",
+        "text": "🚀 Ship it! PR 101, PR 102",
+        "disabled": false
+      },
+      {
+        "id": "rm_9eec6b429f715f4c",
+        "text": "🚀 Ship it! PR 103",
+        "disabled": false
+      },
+      {
+        "id": "rm_2e59ab8a71ee3028",
+        "text": "🚀 Ship it! PR 99",
+        "disabled": false
+      }
+    ],
+    "sent": [
+      "🚀 Go sent for PR 98"
+    ],
+    "cardCount": 8,
+    "title": "Trialog Roadmap",
+    "errors": []
+  }
+}
