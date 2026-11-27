@@ -130,8 +130,10 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
   return (
     <div data-position={position} className={`flex min-w-0 items-center gap-3 bg-[#1a1d25] px-4 py-1 text-[13px] ${position === 'top' ? 'border-b border-line' : 'border-t border-line'}`}>
       {/* The entries scroll sideways when they don't fit; «⇅» stays in view at the right. Only the
-          entries are the live region, so the button isn't read out with every update. */}
-      <div role="status" aria-label="Work in flight" className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto">
+          entries are the live region, so the button isn't read out with every update. No scroll bar:
+          with «always show scroll bars» it drew a grey bar above the message box (playground #695);
+          a swipe, a trackpad or Shift+wheel still scrolls, as in the rooms' row. */}
+      <div role="status" aria-label="Work in flight" className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* The humans first: red and blinking while an agent waits on them (playground #578). */}
       {participants.filter((p) => p.kind === 'human').map((h) => {
         const waits = waitingOn(flights, h);

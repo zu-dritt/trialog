@@ -145,3 +145,8 @@ test('a flight with several steps: only «David: …» waits on him (red); «Gro
   const html = renderToStaticMarkup(<FlightStepsText text="David: Ship it on PR 95; Grok: review PR 96" participants={P} />);
   assert.match(html, /data-step-for="david"[^>]*>Orchestrator: <\/span>Ship it on PR 95; <span class="font-semibold" data-step-for="grok"[^>]*>Grok: <\/span>review PR 96/);
 });
+
+test('the strip scrolls sideways without a visible scroll bar (playground #695)', () => {
+  const html = renderToStaticMarkup(<FlightStrip now={0} flights={[{ participant: 'claude', state: 'working', text: 'a long piece of work', since: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), last_message_at: null }]} />);
+  assert.match(html, /aria-label="Work in flight" class="[^"]*overflow-x-auto \[scrollbar-width:none\] \[&amp;::-webkit-scrollbar\]:hidden"/);
+});
