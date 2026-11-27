@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -324,6 +324,52 @@ async function main() {
     })).json();
     console.log(opts.json ? JSON.stringify(status) : `status set: ${status.text} (expires ${status.expires_at})`);
     return;
+  }
+
+
+  if (cmd === 'roadmap') {
+    // roadmap                                         the cards, by column
+    // roadmap add <done|now|next|later> <title> [--note text] [--owner name]
+    // roadmap move <rm_id> <column>                   to the end of that column
+    // roadmap drop <rm_id>                            remove a card
+    const [sub, ...rest] = args;
+    const COLS = ['done', 'now', 'next', 'later'];
+    if (!sub) {
+      const { items } = await (await call('/api/roadmap')).json();
+      if (opts.json) { console.log(JSON.stringify(items)); return; }
+      await loadLabels();
+      for (const col of COLS) {
+        const list = items.filter((i) => i.column === col);
+        console.log(`${col} (${list.length})`);
+        for (const i of list) console.log(`  ${i.id}  ${i.title}${i.note ? ` · ${i.note}` : ''}${i.owner ? ` [${label(i.owner)}]` : ''}`);
+      }
+      return;
+    }
+    if (sub === 'add') {
+      const [col, ...words] = rest;
+      if (!COLS.includes(col) || !words.length) usage('roadmap add <done|now|next|later> <title> [--note text] [--owner name]');
+      const body = { column: col, title: words.join(' ') };
+      if (opts.note !== undefined) body.note = opts.note;
+      if (opts.owner !== undefined) body.owner = opts.owner;
+      const { item } = await (await call('/api/roadmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+      console.log(opts.json ? JSON.stringify(item) : `added ${item.id} to ${item.column}: ${item.title}`);
+      return;
+    }
+    if (sub === 'move') {
+      const [id, col] = rest;
+      if (!id || !COLS.includes(col)) usage('roadmap move <rm_id> <done|now|next|later>');
+      const { item } = await (await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ column: col }) })).json();
+      console.log(opts.json ? JSON.stringify(item) : `moved ${item.id} to ${item.column}`);
+      return;
+    }
+    if (sub === 'drop') {
+      const [id] = rest;
+      if (!id) usage('roadmap drop <rm_id>');
+      await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      console.log(`removed ${id}`);
+      return;
+    }
+    usage('roadmap | roadmap add <column> <title> | roadmap move <id> <column> | roadmap drop <id>');
   }
 
 

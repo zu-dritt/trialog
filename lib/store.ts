@@ -17,6 +17,7 @@ import { decisionSqlPattern, isDecision } from './decision';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { isDemo } from './demo';
 import type { StreakBreak } from './streak';
+import { ROADMAP_MAX_ITEMS, sortRoadmap, type RoadmapColumn, type RoadmapItem } from './roadmap';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 import type { ActivityRow } from './guard';
 
@@ -341,6 +342,15 @@ export interface Store {
   addStreakBreak(input: { participant: Sender; reason: string }): Promise<StreakBreak>;
   /** Every break, oldest first. */
   listStreakBreaks(): Promise<StreakBreak[]>;
+  /** The roadmap (lib/roadmap.ts), by column and position. */
+  listRoadmap(): Promise<RoadmapItem[]>;
+  /** A new card at the end of its column; null when the roadmap is full. */
+  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender }): Promise<RoadmapItem | null>;
+  /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
+  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner'>>, by: Sender): Promise<RoadmapItem | null>;
+  deleteRoadmapItem(id: string): Promise<boolean>;
+  /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
+  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -720,6 +730,18 @@ const SCHEMA = [
      reason      TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
+  // The roadmap (migrations/016-roadmap.sql): cards in four columns, in an order anyone can change.
+  `CREATE TABLE IF NOT EXISTS roadmap_items (
+     id          TEXT PRIMARY KEY CHECK (id ~ '^rm_[a-z0-9]{8,32}$'),
+     col         TEXT NOT NULL CHECK (col IN ('done', 'now', 'next', 'later')),
+     position    INT NOT NULL,
+     title       TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 80),
+     note        TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 120),
+     owner       TEXT CONSTRAINT roadmap_items_owner_shape CHECK (owner ~ ${NAME_SHAPE}),
+     updated_by  TEXT NOT NULL CONSTRAINT roadmap_items_updated_by_shape CHECK (updated_by ~ ${NAME_SHAPE}),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS roadmap_items_col_position ON roadmap_items (col, position)`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -803,6 +825,7 @@ const ROOMS_FINGERPRINT_SQL = `(SELECT coalesce(string_agg(r.id || ':' || coales
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
+const newRoadmapId = (): string => `rm_${randomBytes(8).toString('hex')}`;
 const newDecisionId = (): string => `decision_${randomBytes(12).toString('hex')}`;
 // One entry per poll: messageId:voteCount:latest, so the stream can re-send only what changed.
 // `latest` is the newest of the last vote, the close time and the poll's created_at (so a vote
@@ -905,6 +928,17 @@ const toFlight = (r: Row): Flight => ({
   since: iso(r.since) as string,
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
+});
+const ROADMAP_COLS = 'id, col, position, title, note, owner, updated_by, updated_at';
+const toRoadmap = (r: Row): RoadmapItem => ({
+  id: String(r.id),
+  column: r.col as RoadmapColumn,
+  position: Number(r.position),
+  title: String(r.title),
+  note: String(r.note ?? ''),
+  owner: r.owner == null ? null : String(r.owner),
+  updated_by: String(r.updated_by),
+  updated_at: iso(r.updated_at) as string,
 });
 const toBreak = (r: Row): StreakBreak => ({
   id: Number(r.id),
@@ -1475,6 +1509,60 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         [participant, reason],
       );
       return toBreak(row);
+    },
+    async listRoadmap() {
+      await ensure();
+      return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
+    },
+    async addRoadmapItem({ column, title, note, owner, by }) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [{ n, next }] = await tx.query(`SELECT count(*)::int AS n, coalesce(max(position) FILTER (WHERE col = $1::text), -1) + 1 AS next FROM roadmap_items`, [column]);
+        if (Number(n) >= ROADMAP_MAX_ITEMS) return null;
+        const [row] = await tx.query(
+          `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text) RETURNING ${ROADMAP_COLS}`,
+          [newRoadmapId(), column, Number(next), title, note, owner, by],
+        );
+        return toRoadmap(row);
+      });
+    },
+    async updateRoadmapItem(id, change, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [cur] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return null;
+        const item = toRoadmap(cur);
+        const moved = change.column !== undefined && change.column !== item.column;
+        let position = item.position;
+        if (moved) {
+          const [{ next }] = await tx.query(`SELECT coalesce(max(position), -1) + 1 AS next FROM roadmap_items WHERE col = $1::text`, [change.column]);
+          position = Number(next);
+        }
+        const [row] = await tx.query(
+          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now()
+           WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
+          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by],
+        );
+        return toRoadmap(row);
+      });
+    },
+    async deleteRoadmapItem(id) {
+      await ensure();
+      return (await db.query(`DELETE FROM roadmap_items WHERE id = $1::text RETURNING id`, [id])).length > 0;
+    },
+    async reorderRoadmap(column, ids, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const have = (await tx.query(`SELECT id FROM roadmap_items WHERE col = $1::text`, [column])).map((r) => String(r.id));
+        if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
+        for (const [i, id] of ids.entries()) {
+          await tx.query(`UPDATE roadmap_items SET position = $2::int, updated_by = $3::text, updated_at = now() WHERE id = $1::text AND position <> $2::int`, [id, i, by]);
+        }
+        return sortRoadmap((await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE col = $1::text`, [column])).map(toRoadmap));
+      });
     },
     async listStreakBreaks() {
       await ensure();
@@ -2056,6 +2144,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const statuses = new Map<Sender, ParticipantStatus>();
   const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
   const streakBreaks: StreakBreak[] = [];
+  const roadmap = new Map<string, RoadmapItem>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -2270,6 +2359,44 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async listStreakBreaks() {
       return streakBreaks.map((b) => ({ ...b }));
+    },
+    async listRoadmap() {
+      return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
+    },
+    async addRoadmapItem({ column, title, note, owner, by }) {
+      if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
+      const inCol = [...roadmap.values()].filter((i) => i.column === column);
+      const item: RoadmapItem = {
+        id: newRoadmapId(), column, position: inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
+        title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
+      };
+      roadmap.set(item.id, item);
+      return { ...item };
+    },
+    async updateRoadmapItem(id, change, by) {
+      const item = roadmap.get(id);
+      if (!item) return null;
+      if (change.column !== undefined && change.column !== item.column) {
+        const inCol = [...roadmap.values()].filter((i) => i.column === change.column);
+        item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        item.column = change.column;
+      }
+      if (change.title !== undefined) item.title = change.title;
+      if (change.note !== undefined) item.note = change.note;
+      if (change.owner !== undefined) item.owner = change.owner === null ? null : shaped(change.owner);
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { ...item };
+    },
+    async deleteRoadmapItem(id) {
+      return roadmap.delete(id);
+    },
+    async reorderRoadmap(column, ids, by) {
+      const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);
+      if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
+      const at = new Date(now()).toISOString();
+      ids.forEach((id, i) => { const item = roadmap.get(id)!; if (item.position !== i) { item.position = i; item.updated_by = shaped(by); item.updated_at = at; } });
+      return sortRoadmap([...roadmap.values()].filter((i) => i.column === column)).map((i) => ({ ...i }));
     },
     async listFlights() {
       return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
