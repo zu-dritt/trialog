@@ -126,7 +126,7 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   const { cardStatus } = await import('../lib/roadmap');
   const T = Date.parse('2026-11-27T12:00:00Z');
   const c = (column: RoadmapItem['column'], note: string, over: Partial<RoadmapItem> = {}) => ({ column, note, owner: 'claude', updated_at: '2026-11-27T11:30:00Z', ...over });
-  assert.equal(cardStatus(c('now', '⛔ WAITING ON DAVID: merge apartment-finder PR 37'), T)?.tone, 'blocked');
+  assert.equal(cardStatus(c('now', '⛔ WAITING ON DAVID: merge other-app PR 37'), T)?.tone, 'blocked');
   assert.equal(cardStatus(c('next', 'David: your call on the first breaks'), T)?.tone, 'blocked', 'in Next too: «Name: step», as in a flight');
   assert.equal(cardStatus(c('later', 'waiting on the orchestrator'), T)?.tone, 'blocked');
   assert.equal(cardStatus(c('now', 'Orchestrator: go for the demo'), T)?.tone, 'blocked', 'by label as well');
@@ -141,7 +141,7 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   assert.equal(cardStatus(c('now', 'trying the demo', { owner: 'david' }), T)?.tone, 'working', 'his own card in Now: he is on it, no blink');
 
   const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
-  const items = [card('rm_blocked00', 'now', 0, { owner: 'claude', note: 'David: merge apartment-finder PR 37', updated_at: new Date(T - 60_000).toISOString() }), card('rm_review000', 'now', 1, { owner: 'grok', note: 'PR 87, in review' }), card('rm_done00000', 'done', 0, { owner: 'claude', note: 'live (PR 85)' })];
+  const items = [card('rm_blocked00', 'now', 0, { owner: 'claude', note: 'David: merge other-app PR 37', updated_at: new Date(T - 60_000).toISOString() }), card('rm_review000', 'now', 1, { owner: 'grok', note: 'PR 87, in review' }), card('rm_done00000', 'done', 0, { owner: 'claude', note: 'live (PR 85)' })];
   const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
   assert.match(html, /data-led="blocked"[^>]*><span aria-hidden="true" class="[^"]*blink-red[^"]*" style="background:#f85149"><\/span>waiting on you/);
   assert.match(html, /data-led="review"/);
@@ -153,7 +153,7 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
 
 test('a red card with an address in its note gets «Unblock →», and every address in a note is a link', async () => {
   const { unblockHref, cardStatus } = await import('../lib/roadmap');
-  const url = 'https://github.com/amberleaf-gmbh/apartment-finder/pull/37';
+  const url = 'https://github.com/example-org/other-app/pull/37';
   const T = Date.parse('2026-11-27T12:00:00Z');
   const blocked = { column: 'now' as const, note: `⛔ WAITING ON DAVID: merge ${url}.`, owner: 'claude', updated_at: '2026-11-27T11:50:00Z' };
   assert.equal(unblockHref(blocked, cardStatus(blocked, T)), url, 'the address, without the full stop');
@@ -164,7 +164,7 @@ test('a red card with an address in its note gets «Unblock →», and every add
   const items = [card('rm_unblock00', 'now', 0, { owner: 'claude', note: blocked.note, updated_at: blocked.updated_at }), card('rm_review000', 'now', 1, { owner: 'claude', note: 'PR 88, in review: https://github.com/zu-dritt/trialog/pull/88' })];
   const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
   assert.equal(html.match(/data-unblock=""/g)?.length, 1);
-  assert.match(html, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" data-unblock="" draggable="false"[^>]*>Unblock → apartment-finder PR 37</a>`));
+  assert.match(html, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" data-unblock="" draggable="false"[^>]*>Unblock → other-app PR 37</a>`));
   assert.match(html, /<a href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/88"[^>]*>(?:trialog )?PR 88<\/a>/, 'the review card’s address is a link too');
 });
 

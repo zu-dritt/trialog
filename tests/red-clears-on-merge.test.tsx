@@ -53,9 +53,9 @@ test('the strip and the roadmap ask which PRs are merged; a merged PR is asked o
 });
 
 test('Grok\'s review of PR 108: another repo\'s PR is not ours, and an Agree is not settled by a merge', () => {
-  assert.deepEqual(ownPrs('apartment-finder PR 36 and PR 95', REPO), [95]);
+  assert.deepEqual(ownPrs('other-app PR 36 and PR 95', REPO), [95]);
   assert.deepEqual(ownPrs('https://github.com/example-org/other-app/pull/36 and https://github.com/zu-dritt/trialog/pull/95', REPO), [95]);
-  assert.equal(allMerged('merge apartment-finder PR 36', new Set([36]), REPO), false, 'names no PR of ours');
+  assert.equal(allMerged('merge other-app PR 36', new Set([36]), REPO), false, 'names no PR of ours');
   assert.equal(settledByMerge('Agree on decision card #791 (PR 101)', new Set([101]), REPO), false);
   assert.equal(settledByMerge('Ship it on PR 101', new Set([101]), REPO), true);
   const agree = card('⛔ WAITING ON DAVID: Agree on decision card #791 (PR 101, migration)');

@@ -104,7 +104,7 @@ export function FlightStepsText({ text, participants = [], hidden = false }: { t
   })}</>;
 }
 
-/** A GitHub address as a short name: «PR 36» in this repo, «apartment-finder PR 36» in another. */
+/** A GitHub address as a short name: «PR 36» in this repo, «other-app PR 36» in another. */
 export function flightLinkLabel(href: string, repo: string | null = REPO): string {
   const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(pull|issues)\/(\d+)\/?$/.exec(href);
   if (!m) return shortLabel(href);
