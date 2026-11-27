@@ -212,3 +212,29 @@ test('after a send, only the images that went out leave the composer', () => {
   assert.deepEqual(withoutSent([...sent, failed], sent), [failed]);
   assert.deepEqual(withoutSent(now, []).map((d) => d.key), [1, 2, 3, 4], 'a text-only message takes no image with it');
 });
+
+test('a popped-out image gets a window of its own size, within the screen', async () => {
+  const { popoutSize } = await import('../app/attachments');
+  const screen = { width: 1600, height: 1000 };
+  assert.deepEqual(popoutSize({ width: 800, height: 600, scale: 1 }, screen), { width: 824, height: 624 });
+  assert.deepEqual(popoutSize({ width: 2400, height: 1600, scale: 2 }, screen), { width: 1224, height: 824 }, 'a 2× screenshot opens at its CSS size');
+  assert.deepEqual(popoutSize({ width: 5000, height: 4000, scale: 1 }, screen), { width: 1440, height: 900 }, 'never larger than 90% of the screen');
+  assert.deepEqual(popoutSize({ width: 40, height: 30, scale: 1 }, screen), { width: 320, height: 240 }, 'never too small for the controls');
+  assert.deepEqual(popoutSize(undefined, screen), { width: 924, height: 724 });
+});
+
+test('pop out opens the image already in the page, in one named window', async () => {
+  const { popOut } = await import('../app/attachments');
+  const calls: unknown[][] = [];
+  const g = globalThis as { window?: unknown };
+  const had = 'window' in g;
+  g.window = { screen: { availWidth: 1600, availHeight: 1000 } };
+  try {
+    const opened = popOut({ url: 'blob:https://hub.test/abc', size: { width: 800, height: 600, scale: 1 } }, ((...a: unknown[]) => { calls.push(a); return {} as Window; }) as typeof window.open);
+    assert.equal(opened, true);
+    assert.deepEqual(calls, [['blob:https://hub.test/abc', 'trialog-image', 'popup=yes,width=824,height=624']]);
+    assert.equal(popOut({ url: 'blob:x' }, (() => null) as typeof window.open), false, 'a blocked pop-up keeps the view open');
+  } finally {
+    if (!had) delete g.window;
+  }
+});
