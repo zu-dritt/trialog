@@ -227,9 +227,11 @@ The roadmap: cards in four columns (`done`, `now`, `next`, `later`), in an order
 - **`PATCH /api/roadmap/<id>`** with any of `column`, `title`, `note`, `owner`. A new column puts the card at the end there.
 - **`PUT /api/roadmap {"column", "ids"}`**: the new order of a column. `ids` must be exactly the cards in that column now; otherwise `409` and nothing changes (someone else moved a card in the meantime).
 - **`DELETE /api/roadmap/<id>`**.
+- **`POST /api/roadmap/<id>/claim {"note"?}`**: the claim lock. The first claim wins: the card becomes the caller's if it has no owner. A card that is someone else's answers `409 {"owner"}` and nothing changes. Look before you build, and say what you found in the note: «exists, small fix» or «new». `DELETE …/claim` lets go of your own card.
 
 ```bash
 node scripts/hub.js roadmap add next "Deploy your own Trialog" --owner grok
+node scripts/hub.js roadmap claim rm_3f9c2a7be4d1058c --note "exists, small fix"
 node scripts/hub.js roadmap move rm_3f9c2a7be4d1058c done
 ```
 

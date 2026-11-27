@@ -23,9 +23,11 @@ export const columnOf = (items: readonly RoadmapItem[], column: RoadmapColumn): 
 export interface BoardActions {
   /** Put `id` into `column` at `index`: a move (if the column changes) and the column's new order. */
   place: (id: string, column: RoadmapColumn, index: number) => void;
+  /** Claim a card with no owner (the first claim wins), or let go of your own. */
+  claim?: (id: string, take: boolean) => void;
 }
 
-export function RoadmapBoard({ items, participants = [], actions, busy = false }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean }) {
+export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null }) {
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<{ column: RoadmapColumn; index: number } | null>(null);
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
@@ -80,6 +82,12 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false }
                       <select value={column} disabled={busy} onChange={(e) => actions.place(card.id, e.target.value as RoadmapColumn, Number.MAX_SAFE_INTEGER)} className="rounded border border-line bg-bg px-1 py-0.5 text-[11px] text-muted">
                         {ROADMAP_COLUMNS.map((c) => <option key={c} value={c}>{COLUMN_TITLES[c]}</option>)}
                       </select>
+                      {actions.claim && me && column !== 'done' && card.owner === null && (
+                        <button type="button" disabled={busy} data-claim={card.id} onClick={() => actions.claim!(card.id, true)} title="Take this card. The first claim wins." className="ml-auto cursor-pointer rounded border border-line bg-[#2a2f3a] px-2 py-0.5 text-[11px] text-fg hover:bg-[#343a47]">Claim</button>
+                      )}
+                      {actions.claim && me && card.owner === me && column !== 'done' && (
+                        <button type="button" disabled={busy} data-release={card.id} onClick={() => actions.claim!(card.id, false)} title="Let go of this card" className="ml-auto cursor-pointer rounded border border-line bg-transparent px-2 py-0.5 text-[11px] text-muted hover:text-fg">Release</button>
+                      )}
                     </label>
                   )}
                 </li>

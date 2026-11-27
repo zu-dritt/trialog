@@ -17,7 +17,7 @@ import { decisionSqlPattern, isDecision } from './decision';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { isDemo } from './demo';
 import type { StreakBreak } from './streak';
-import { ROADMAP_MAX_ITEMS, sortRoadmap, type RoadmapColumn, type RoadmapItem } from './roadmap';
+import { ROADMAP_MAX_ITEMS, sortRoadmap, type ClaimResult, type RoadmapColumn, type RoadmapItem } from './roadmap';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
 import type { ActivityRow } from './guard';
 
@@ -349,6 +349,10 @@ export interface Store {
   /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
   updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner'>>, by: Sender): Promise<RoadmapItem | null>;
   deleteRoadmapItem(id: string): Promise<boolean>;
+  /** A lock: the card becomes `by`'s if it has no owner (or is already theirs); otherwise «taken» and nothing changes. */
+  claimRoadmapItem(id: string, by: Sender, note: string | null): Promise<ClaimResult>;
+  /** Lets go of a card: only its owner can; the owner goes back to none. */
+  releaseRoadmapItem(id: string, by: Sender): Promise<ClaimResult>;
   /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
   reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
   /**
@@ -1548,6 +1552,30 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return toRoadmap(row);
       });
     },
+    async claimRoadmapItem(id, by, note) {
+      await ensure();
+      // One statement decides: it only writes when the card is free or already the caller's.
+      const [row] = await db.query(
+        `UPDATE roadmap_items SET owner = $2::text, note = coalesce($3::text, note), updated_by = $2::text, updated_at = now()
+         WHERE id = $1::text AND (owner IS NULL OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
+        [id, by, note],
+      );
+      if (row) return { status: 'ok', item: toRoadmap(row) };
+      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+      return cur ? { status: 'taken', owner: String(cur.owner), item: toRoadmap(cur) } : { status: 'not_found' };
+    },
+    async releaseRoadmapItem(id, by) {
+      await ensure();
+      const [row] = await db.query(
+        `UPDATE roadmap_items SET owner = NULL, updated_by = $2::text, updated_at = now() WHERE id = $1::text AND owner = $2::text RETURNING ${ROADMAP_COLS}`,
+        [id, by],
+      );
+      if (row) return { status: 'ok', item: toRoadmap(row) };
+      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+      if (!cur) return { status: 'not_found' };
+      const item = toRoadmap(cur);
+      return item.owner === null ? { status: 'ok', item } : { status: 'taken', owner: item.owner, item };
+    },
     async deleteRoadmapItem(id) {
       await ensure();
       return (await db.query(`DELETE FROM roadmap_items WHERE id = $1::text RETURNING id`, [id])).length > 0;
@@ -2390,6 +2418,25 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async deleteRoadmapItem(id) {
       return roadmap.delete(id);
+    },
+    async claimRoadmapItem(id, by, note) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item: { ...item } };
+      item.owner = shaped(by);
+      if (note !== null) item.note = note;
+      item.updated_by = by;
+      item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok', item: { ...item } };
+    },
+    async releaseRoadmapItem(id, by) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item: { ...item } };
+      item.owner = null;
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok', item: { ...item } };
     },
     async reorderRoadmap(column, ids, by) {
       const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);
