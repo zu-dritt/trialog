@@ -158,7 +158,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       {(card.note || card.owner || card.reviewer || card.raised_by) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {cardRoles(card, participants).map((r, i) => (
-                            <Fragment key={r.name}>{i > 0 && ' · '}<span data-role={r.role} className="font-semibold" style={{ color: colorOf(r.name, participants) }}>{labelOf(r.name, participants)}</span>{r.verb && ` ${r.verb}`}</Fragment>
+                            <Fragment key={`${r.role}:${r.name}`}>{i > 0 && ' · '}<span data-role={r.role} className="font-semibold" style={{ color: colorOf(r.name, participants) }}>{labelOf(r.name, participants)}</span>{r.verb && ` ${r.verb}`}</Fragment>
                           ))}
                           {(card.owner || card.reviewer || card.raised_by) && card.note && ' · '}<FlightText text={card.note} />
                         </div>

@@ -219,6 +219,9 @@ test('a card says who raised it first, so David knows whom to ask (playground #6
   assert.deepEqual(says({ column: 'next', owner: 'david', reviewer: null, raised_by: 'david' }), ['david raised']);
   assert.deepEqual(says({ column: 'next', owner: null, reviewer: null, raised_by: 'grok' }), ['grok raised'], 'an unclaimed card still says whom to ask');
   assert.deepEqual(says({ column: 'next', owner: null, reviewer: null, raised_by: null }), [], 'older cards: nothing');
+  assert.deepEqual(says({ column: 'now', owner: 'grok', reviewer: 'claude', raised_by: 'claude' }), ['claude raised', 'grok builds', 'claude reviews'], 'one name in two roles');
+  const twice = renderToStaticMarkup(<RoadmapBoard items={[card('rm_twice000', 'now', 0, { owner: 'grok', reviewer: 'claude', raised_by: 'claude' })]} />);
+  assert.equal([...twice.matchAll(/data-role="(raiser|reviewer)"/g)].length, 2, 'both shown (keys by role and name, Grok’s nit)');
   const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_raise000', 'next', 0, { raised_by: 'david', note: '#670' })]} participants={[{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' }] as never} />);
   assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · #670/);
 });
