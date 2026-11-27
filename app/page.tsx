@@ -11,7 +11,7 @@ import { DEMO_BUILD, demoLink } from '../lib/demo';
 import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
-import { FlightBar } from './flight';
+import { FlightBar, readFlightPosition, writeFlightPosition, type FlightPosition } from './flight';
 import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../lib/build';
@@ -48,6 +48,9 @@ export default function Page() {
   const newVersion = isOtherBuild(BUILD_ID, serverBuild);
   const newVersionWaitsLong = useWaitingLong(newVersion);
   const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
+  // Where the work-in-flight strip sits; read from this browser once the page is in it.
+  const [flightPosition, setFlightPosition] = useState<FlightPosition>('top');
+  useEffect(() => { setFlightPosition(readFlightPosition(localStorage)); }, []);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [pageNotice, setPageNotice] = useState('');
   const [splitOn, setSplitOn] = useState(false);
@@ -221,8 +224,22 @@ export default function Page() {
   const tabs = (className: string) => (
     <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
   );
+  // The work-in-flight strip sits under the header or right above the message box (its «⇅»).
+  // In split view there is no single message box, so it stays at the top there.
+  const flightAtBottom = flightPosition === 'bottom' && !splitVisible;
+  const flipFlight = () => {
+    const next: FlightPosition = flightPosition === 'top' ? 'bottom' : 'top';
+    writeFlightPosition(localStorage, next);
+    setFlightPosition(next);
+  };
+  const flightBar = (
+    <FlightBar token={token} onUnauthorized={refuseToken} participants={participants} position={flightAtBottom ? 'bottom' : 'top'} onFlip={splitVisible ? undefined : flipFlight} />
+  );
   const statusBar = (
-    <StatusBar participants={participants} token={token} onUnauthorized={refuseToken} />
+    <>
+      {flightAtBottom && flightBar}
+      <StatusBar participants={participants} token={token} onUnauthorized={refuseToken} />
+    </>
   );
   const paneShared = {
     token,
@@ -290,7 +307,7 @@ export default function Page() {
         {tabs('flex min-w-0 flex-1')}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
       </div>
-      <FlightBar token={token} onUnauthorized={refuseToken} participants={participants} />
+      {!flightAtBottom && flightBar}
       <TourPanel tour={tour} me={me} participants={participants} />
       <WakeTargetsLine me={me} participants={participants} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}

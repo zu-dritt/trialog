@@ -5,10 +5,21 @@
 // Agents set their flight with `hub.js flight working "…"` (PUT /api/flight); the page reads it.
 //   🟢 working · 🟡 waiting · ⚪ idle · 🔴 quiet: «working», but no message for 20 minutes.
 // On a phone only the dots and names fit; a tap on a name shows its text as a tooltip (title).
+// «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { useEffect, useRef, useState } from 'react';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
+
+/** Where the strip sits: under the header, or right above the message box. Kept in this browser. */
+export type FlightPosition = 'top' | 'bottom';
+export const FLIGHT_POSITION_KEY = 'trialogFlightPosition';
+export function readFlightPosition(storage: Pick<Storage, 'getItem'> | undefined): FlightPosition {
+  try { return storage?.getItem(FLIGHT_POSITION_KEY) === 'bottom' ? 'bottom' : 'top'; } catch { return 'top'; }
+}
+export function writeFlightPosition(storage: Pick<Storage, 'setItem'> | undefined, position: FlightPosition): void {
+  try { storage?.setItem(FLIGHT_POSITION_KEY, position); } catch { /* private mode: it simply isn't kept */ }
+}
 
 export type FlightTone = 'working' | 'waiting' | 'idle' | 'quiet';
 
@@ -45,10 +56,12 @@ export function flightSentence(f: Flight, now: number, shown: string): string {
 }
 
 /** The strip. Nothing at all when nobody has set a flight. */
-export function FlightStrip({ flights, now, participants = [] }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[] }) {
+export function FlightStrip({ flights, now, participants = [], position = 'top', onFlip }: { flights: readonly Flight[]; now: number; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void }) {
   if (!flights.length) return null;
   return (
-    <div role="status" aria-label="Work in flight" className="flex min-w-0 items-center gap-x-5 gap-y-1 overflow-x-auto border-b border-line bg-[#1a1d25] px-4 py-1 text-[13px]">
+    <div role="status" aria-label="Work in flight" data-position={position} className={`flex min-w-0 items-center gap-3 bg-[#1a1d25] px-4 py-1 text-[13px] ${position === 'top' ? 'border-b border-line' : 'border-t border-line'}`}>
+      {/* The entries scroll sideways when they don't fit; «⇅» stays in view at the right. */}
+      <div className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto">
       {flights.map((f) => {
         const tone = flightTone(f, now);
         const shown = labelOf(f.participant, participants);
@@ -61,21 +74,31 @@ export function FlightStrip({ flights, now, participants = [] }: { flights: read
             <span className="inline-block h-2 w-2 flex-none rounded-full" style={{ background: DOT[tone] }} />
             <span className="font-semibold" style={{ color: colorOf(f.participant, participants) }}>{shown}</span>
             {tone !== 'idle' && (
-              <span className="max-w-[44ch] truncate text-fg/90 max-sm:hidden">
-                {WORD[tone]} «{f.text}» <span className="text-muted">· {flightAge(f.since, now)}</span>
-              </span>
+              <>
+                <span className="max-w-[32ch] truncate text-fg/90 max-sm:hidden">{WORD[tone]} «{f.text}»</span>
+                <span className="flex-none text-muted max-sm:hidden">· {flightAge(f.since, now)}</span>
+              </>
             )}
             {tone === 'idle' && <span className="text-muted max-sm:hidden">idle</span>}
             </span>
           </span>
         );
       })}
+      </div>
+      {onFlip && (
+        <button
+          type="button" onClick={onFlip} data-flip=""
+          title={position === 'top' ? 'Move this strip right above the message box' : 'Move this strip to the top'}
+          aria-label={position === 'top' ? 'Move the work-in-flight strip above the message box' : 'Move the work-in-flight strip to the top'}
+          className="flex-none cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg"
+        >⇅</button>
+      )}
     </div>
   );
 }
 
 /** Reads GET /api/flight every 15 s (and when the tab comes back), and moves the minutes on. */
-export function FlightBar({ token, onUnauthorized, participants = [] }: { token: string; onUnauthorized: () => void; participants?: readonly Participant[] }) {
+export function FlightBar({ token, onUnauthorized, participants = [], position = 'top', onFlip }: { token: string; onUnauthorized: () => void; participants?: readonly Participant[]; position?: FlightPosition; onFlip?: () => void }) {
   const [flights, setFlights] = useState<Flight[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const onUnauthRef = useRef(onUnauthorized);
@@ -107,5 +130,5 @@ export function FlightBar({ token, onUnauthorized, participants = [] }: { token:
     };
   }, [token]);
 
-  return <FlightStrip flights={flights} now={now} participants={participants} />;
+  return <FlightStrip flights={flights} now={now} participants={participants} position={position} onFlip={onFlip} />;
 }
