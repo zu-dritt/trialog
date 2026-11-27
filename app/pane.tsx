@@ -24,6 +24,8 @@ import {
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
+import { SHIP_EMOJI, ShipIt } from './ship';
+import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { heldBack, markSeen, readSeen, seenElsewhere, seenKey, settled } from './rooms';
@@ -913,7 +915,15 @@ export function RoomPane({
                     />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
-                  <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
+                  {(() => {
+                    const onToggle = (emoji: string, on: boolean) => { void toggleReaction(m, emoji, on); };
+                    const ship = linksPullRequest(m.text);
+                    return (
+                      <ReactionBar message={m} me={me} participants={participants} onToggle={onToggle} hide={ship ? [SHIP_EMOJI] : []}>
+                        {ship && <ShipIt message={m} me={me} participants={participants} onToggle={onToggle} />}
+                      </ReactionBar>
+                    );
+                  })()}
                   <ReadReceipts messageId={m.id} reads={reads} participants={participants} me={me} />
                   <UnseenFlag message={m} reads={reads} participants={participants} now={unseenNow} />
                 </div>

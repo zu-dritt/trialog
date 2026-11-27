@@ -4,7 +4,7 @@
 // (👍❤️👎😂🎉 plus more), pills for the current tally sit under the text, and a quiet hint
 // is in the panel. The allow-list is the picker catalog. The panel is fixed, so it is not
 // clipped by the stream, and it opens upward when there is no room above the message box.
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { REACTION_HINT, type Message, type Reaction, type Sender } from '../lib/core';
 import { labelOf, type Participant } from '../lib/shared';
@@ -74,14 +74,19 @@ interface BarProps {
   /** PUT or DELETE the emoji, then hand the updated message back. */
   onToggle: (emoji: string, on: boolean) => void;
   className?: string;
+  /** Reactions shown some other way on this message (the 🚀 of «Ship it!»), left out of the pills. */
+  hide?: readonly string[];
+  /** Shown first in the row, before the pills (the «Ship it!» button and chips). */
+  children?: ReactNode;
 }
 
 /** The pills under a message. The react button itself lives in the action row. */
-export function ReactionBar({ message, me, onToggle, participants = [] }: BarProps) {
-  const reactions = message.reactions ?? [];
-  if (!reactions.length) return null;
+export function ReactionBar({ message, me, onToggle, participants = [], hide = [], children }: BarProps) {
+  const reactions = (message.reactions ?? []).filter((r) => !hide.includes(r.emoji));
+  if (!reactions.length && !children) return null;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1">
+      {children}
       {reactions.map((r) => {
         const mine = me !== null && r.by.includes(me);
         return (

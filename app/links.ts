@@ -47,3 +47,22 @@ export function shortLabel(href: string): string {
   if (url.protocol === 'https:' && url.hostname === 'github.com' && gh && !url.search && !url.hash) return `${gh[1] === 'pull' ? 'PR' : 'issue'} ${gh[2]}`;
   return href;
 }
+
+/** A pull request address on GitHub: github.com/<owner>/<repo>/pull/<n>. */
+const PR_URL = /https?:\/\/(?:www\.)?github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}\/pull\/\d{1,6}(?![0-9])/i;
+
+/** Text without code blocks and code spans, which the page leaves as written (no PR links there). */
+function withoutCode(text: string): string {
+  return text.replace(/```[\s\S]*?(```|$)/g, ' ').replace(/`[^`\n]*`/g, ' ');
+}
+
+/**
+ * Whether a message's text links a pull request, as the page shows it: a github.com/…/pull/N
+ * address, or «PR 62» / «PR #62» / «pull request 62» when this build has a repository to link to.
+ * Code is not counted. This is what puts the «🚀 Ship it!» button on a message.
+ */
+export function linksPullRequest(text: string, repo: string | null = REPO): boolean {
+  const prose = withoutCode(text);
+  if (PR_URL.test(prose)) return true;
+  return repo !== null && splitPullRequests(prose).some((part) => typeof part !== 'string');
+}
