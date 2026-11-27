@@ -1,0 +1,34 @@
+{
+  "desktop-1280x800": {
+    "flights": [
+      {
+        "tone": "waiting",
+        "text": "Claude: waiting for «PR 109 waiting on review» · now Claude waiting for «PR 109 waiting on review» · now",
+        "merged": false
+      },
+      {
+        "tone": "idle",
+        "text": "Grok: «PR 107 waiting on Claude» is merged Grok «PR 107 waiting on Claude» merged",
+        "merged": true
+      }
+    ],
+    "strip": "Orchestrator: nothing waiting on you\nOrchestrator\nnothing waiting on you\nClaude: waiting for «PR 109 waiting on review» · now\nClaude\nwaiting for «PR 109 waiting on review»\n· now\nGrok: «PR 107 waiting on Claude» is merged\nGrok\n«PR 107 waiting on Claude» merged",
+    "errors": []
+  },
+  "phone-390x844": {
+    "flights": [
+      {
+        "tone": "waiting",
+        "text": "Claude: waiting for «PR 109 waiting on review» · now Claude",
+        "merged": false
+      },
+      {
+        "tone": "idle",
+        "text": "Grok: «PR 107 waiting on Claude» is merged Grok",
+        "merged": true
+      }
+    ],
+    "strip": "Orchestrator: nothing waiting on you\nOrchestrator\nClaude: waiting for «PR 109 waiting on review» · now\nClaude\nGrok: «PR 107 waiting on Claude» is merged\nGrok",
+    "errors": []
+  }
+}

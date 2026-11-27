@@ -1,0 +1,58 @@
+{
+  "desktop-1280x800": {
+    "main": {
+      "clientWidth": 1000,
+      "scrollWidth": 1000,
+      "overflowX": "hidden",
+      "sideways": false
+    },
+    "overflowWrap": "anywhere",
+    "tables": [
+      {
+        "display": "block",
+        "overflowX": "auto",
+        "clientWidth": 905,
+        "scrollWidth": 905,
+        "canScroll": false
+      }
+    ],
+    "pres": [
+      {
+        "overflowX": "auto",
+        "clientWidth": 903,
+        "scrollWidth": 1812,
+        "canScroll": true
+      }
+    ],
+    "bodyScrollX": false,
+    "errors": []
+  },
+  "phone-390x844": {
+    "main": {
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflowX": "hidden",
+      "sideways": false
+    },
+    "overflowWrap": "anywhere",
+    "tables": [
+      {
+        "display": "block",
+        "overflowX": "auto",
+        "clientWidth": 295,
+        "scrollWidth": 311,
+        "canScroll": true
+      }
+    ],
+    "pres": [
+      {
+        "overflowX": "auto",
+        "clientWidth": 293,
+        "scrollWidth": 1812,
+        "canScroll": true
+      }
+    ],
+    "bodyScrollX": false,
+    "errors": []
+  }
+}
