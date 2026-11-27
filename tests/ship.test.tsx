@@ -46,6 +46,11 @@ test('the gate: without a repository «PR 62» is not a link, but a GitHub pull 
   assert.deepEqual(pullRequestNumbers('PR 62 and https://github.com/zu-dritt/trialog/pull/62', REPO), [62], 'the same number once');
   assert.deepEqual(pullRequestNumbers('PR 62 is ready', null), []);
   assert.deepEqual(pullRequestNumbers('https://github.com/zu-dritt/trialog/pull/62', null), [62]);
+
+  const HUB = 'zu-dritt/trialog';
+  assert.equal(linksPullRequest('apartment-finder PR 36 is ready', HUB), false, 'another repo is not Ship it for this hub');
+  assert.equal(linksPullRequest('trialog PR 36 is ready', HUB), true);
+  assert.deepEqual(pullRequestNumbers('apartment-finder PR 36 and PR 95 and trialog PR 7', HUB), [95, 7]);
 });
 
 test('the go is a 🚀 reaction the reactions API accepts', () => {

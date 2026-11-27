@@ -83,7 +83,7 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **The streak.** The Guard panel counts pull requests merged into `TRIALOG_STREAK_BASE` (optional, default `playground`) of `TRIALOG_REPO`, read from GitHub's public API without a token and cached for five minutes. A private repository can't be read this way; the panel then says so. `TRIALOG_GITHUB_TOKEN` (optional, a read-only token is enough) raises GitHub's limit from 60 to 5,000 requests an hour; without it, the panel says when the limit is reached.
 
-**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name`, e.g. `zu-dritt/trialog`) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» is never changed: in the chat it means message 62. It is read at build time.
+**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name`, e.g. `zu-dritt/trialog`) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A known repo name in front, «apartment-finder PR 36», links that repository (`amberleaf-gmbh/apartment-finder`); «trialog PR 36» links `zu-dritt/trialog`. A plain «#62» is never changed: in the chat it means message 62. It is read at build time.
 
 ## 5. Deploy on Vercel
 
