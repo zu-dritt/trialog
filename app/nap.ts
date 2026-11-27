@@ -49,7 +49,8 @@ export function watchNap(
     awake(signal) {
       if (!napping || signal?.aborted) return Promise.resolve();
       return new Promise<void>((resolve) => {
-        const done = () => { waiters.delete(done); resolve(); };
+        // Either way, both are cleaned up, so the pane's signal doesn't collect a listener per nap.
+        const done = () => { waiters.delete(done); signal?.removeEventListener('abort', done); resolve(); };
         waiters.add(done);
         signal?.addEventListener('abort', done, { once: true });
       });
@@ -61,4 +62,14 @@ export function watchNap(
       wake();
     },
   };
+}
+
+/** A signal that aborts when either does. Like AbortSignal.any, which Safari has only since 17.4. */
+export function eitherSignal(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const both = new AbortController();
+  if (a.aborted || b.aborted) { both.abort(); return both.signal; }
+  const stop = () => { a.removeEventListener('abort', stop); b.removeEventListener('abort', stop); both.abort(); };
+  a.addEventListener('abort', stop);
+  b.addEventListener('abort', stop);
+  return both.signal;
 }

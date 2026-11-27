@@ -8,7 +8,7 @@ import type { Message, Poll, Sender } from '../lib/core';
 import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } from '../lib/shared';
 import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
-import { watchNap } from './nap';
+import { eitherSignal, watchNap } from './nap';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision } from './decision';
@@ -365,7 +365,7 @@ export function RoomPane({
       let firstRooms = true;
       const query = params.toString() ? `?${params}` : '';
       conn = new AbortController();
-      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: AbortSignal.any([abort.signal, conn.signal]) });
+      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: eitherSignal(abort.signal, conn.signal) });
       if (!res.body) throw new Error('no stream');
       const opened = Date.now();
       let goodbye = false;

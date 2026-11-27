@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
 import { test } from 'vitest';
-import { NAP_AFTER_MS, watchNap } from '../app/nap';
+import { NAP_AFTER_MS, eitherSignal, watchNap } from '../app/nap';
 
 function fakeTab(hidden: boolean) {
   const listeners = new Set<() => void>();
@@ -82,10 +82,34 @@ test('a tab opened in the background naps too; leaving the page stops waiting an
 test('the pane ends its stream on a nap and skips the poll fallback while napping', () => {
   const pane = readFileSync(new URL('../app/pane.tsx', import.meta.url), 'utf8');
   assert.match(pane, /const nap = watchNap\(document, \(\) => conn\.abort\(\)\);/);
-  assert.match(pane, /signal: AbortSignal\.any\(\[abort\.signal, conn\.signal\]\)/);
+  assert.match(pane, /signal: eitherSignal\(abort\.signal, conn\.signal\)/);
   assert.match(pane, /if \(nap\.napping\) \{\s+if \(lead\) setStatus\?\.\('live · napping while hidden'\);\s+await nap\.awake\(abort\.signal\);/);
   assert.match(pane, /while \(!stopped && !nap\.napping && Date\.now\(\) < until\)/);
   assert.match(pane, /nap\.stop\(\);/);
   const guard = readFileSync(new URL('../app/guard.tsx', import.meta.url), 'utf8');
   assert.match(guard, /if \(!document\.hidden\) void load\(\); \}, open \? GUARD_PANEL_MS : GUARD_RING_MS/);
+});
+
+test('eitherSignal aborts when either signal does, also in browsers without AbortSignal.any', () => {
+  const a = new AbortController(); const b = new AbortController();
+  const both = eitherSignal(a.signal, b.signal);
+  assert.equal(both.aborted, false);
+  b.abort();
+  assert.equal(both.aborted, true);
+  const c = new AbortController(); c.abort();
+  assert.equal(eitherSignal(c.signal, new AbortController().signal).aborted, true, 'already aborted');
+});
+
+test('waiting for the tab leaves no abort listener behind once the tab is shown', async () => {
+  const tab = fakeTab(true);
+  const nap = watchNap(tab.doc, () => {}, tab.timers);
+  tab.advance(NAP_AFTER_MS);
+  const abort = new AbortController();
+  let removed = 0;
+  const remove = abort.signal.removeEventListener.bind(abort.signal);
+  abort.signal.removeEventListener = (...args: Parameters<typeof remove>) => { removed++; return remove(...args); };
+  const waiting = nap.awake(abort.signal);
+  tab.show(false);
+  await waiting;
+  assert.equal(removed, 1);
 });
