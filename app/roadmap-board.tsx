@@ -58,6 +58,19 @@ export interface BoardActions {
   upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
 }
 
+/**
+ * Who builds and who reviews a card, as the card says it: «Claude builds · Grok reviews», in Done
+ * «built · reviewed». A human owner is shown by name only (the orchestrator decides, not builds).
+ */
+export function cardRoles(card: Pick<RoadmapItem, 'column' | 'owner' | 'reviewer'>, participants: readonly Pick<Participant, 'name' | 'kind'>[] = []): { name: string; role: 'owner' | 'reviewer'; verb: string }[] {
+  const done = card.column === 'done';
+  const human = (n: string) => participants.some((p) => p.name === n && p.kind === 'human');
+  const roles: { name: string; role: 'owner' | 'reviewer'; verb: string }[] = [];
+  if (card.owner) roles.push({ name: card.owner, role: 'owner', verb: human(card.owner) ? '' : done ? 'built' : 'builds' });
+  if (card.reviewer && card.reviewer !== card.owner) roles.push({ name: card.reviewer, role: 'reviewer', verb: done ? 'reviewed' : 'reviews' });
+  return roles;
+}
+
 /** A card's description and pictures, folded: the first line shows, the rest opens on a click. */
 export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'description' | 'attachments'>; load?: LoadImage }) {
   if (!card.description && !card.attachments.length) return null;
@@ -112,10 +125,12 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                     <span className="w-5 flex-none pt-0.5 text-right text-xs tabular-nums text-muted">{index + 1}</span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold leading-snug">{card.title}{(() => { const st = cardStatus(card, at, humans.length ? humans : undefined); return st && <CardLed status={st} />; })()}</div>
-                      {(card.note || card.owner) && (
+                      {(card.note || card.owner || card.reviewer) && (
                         <div className="mt-0.5 text-xs text-muted">
-                          {card.owner && <span className="font-semibold" style={{ color: colorOf(card.owner, participants) }}>{labelOf(card.owner, participants)}</span>}
-                          {card.owner && card.note && ' · '}<FlightText text={card.note} />
+                          {cardRoles(card, participants).map((r, i) => (
+                            <Fragment key={r.name}>{i > 0 && ' · '}<span data-role={r.role} className="font-semibold" style={{ color: colorOf(r.name, participants) }}>{labelOf(r.name, participants)}</span>{r.verb && ` ${r.verb}`}</Fragment>
+                          ))}
+                          {(card.owner || card.reviewer) && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
                       <CardDetails card={card} load={loadImage} />
