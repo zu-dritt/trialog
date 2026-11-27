@@ -305,3 +305,13 @@ test('who raised a card: whoever added it, kept through edits, claims and moves 
   }
   assert.ok(!('raised_by' in (parseItemChange({ raised_by: 'grok', note: 'x' }, NAMES) as { change: object }).change), 'a change cannot set it');
 });
+
+test('a card from before migration 019 reads raised_by null (PGlite)', async () => {
+  const pg = new PGlite();
+  const store = createSqlStore(pgliteDb(pg));
+  await store.ensure();
+  const c = (await store.addRoadmapItem({ column: 'next', title: 'Old card', note: '', owner: null, by: 'grok' }))!;
+  await pg.query('UPDATE roadmap_items SET raised_by = NULL WHERE id = $1', [c.id]); // as an old row has it
+  assert.equal((await store.listRoadmap()).find((i) => i.id === c.id)!.raised_by, null);
+  assert.equal((await store.updateRoadmapItem(c.id, { note: 'x' }, 'claude'))!.raised_by, null, 'an edit does not invent one');
+});
