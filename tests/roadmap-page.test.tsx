@@ -42,3 +42,11 @@ test('the hub links the roadmap in the header and in the «⋯» menu, in a tab 
   assert.match(page, /href="\/roadmap" target="trialog-roadmap"/);
   assert.match(page, /\{ label: 'Roadmap', href: '\/roadmap' \}/);
 });
+
+test('a card with no owner offers «Claim»; your own offers «Release»; done cards neither', () => {
+  const items = [card('rm_cccccccc', 'next', 0), card('rm_dddddddd', 'next', 1, { owner: 'claude' }), card('rm_eeeeeeee', 'next', 2, { owner: 'grok' }), card('rm_ffffffff', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} me="claude" actions={{ place: () => {}, claim: () => {} }} />);
+  assert.deepEqual([...html.matchAll(/data-claim="([^"]+)"/g)].map((m) => m[1]), ['rm_cccccccc']);
+  assert.deepEqual([...html.matchAll(/data-release="([^"]+)"/g)].map((m) => m[1]), ['rm_dddddddd']);
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, claim: () => {} }} />).includes('data-claim'), 'no claim without knowing who you are');
+});

@@ -103,3 +103,48 @@ test('API: a token is needed; add, reorder with a fresh list only, move, remove'
   const { items } = (await (await list.GET(req('david', 'GET'))).json()) as { items: RoadmapItem[] };
   assert.deepEqual(items.map((i) => [i.column, i.title]), [['done', 'Hovercard']]);
 });
+
+async function claimRules(store: Store) {
+  const card = (await store.addRoadmapItem({ column: 'next', title: 'Chime', note: '', owner: null, by: 'david' }))!;
+  // Two claims at the same moment: exactly one wins.
+  const [a, b] = await Promise.all([store.claimRoadmapItem(card.id, 'claude', 'exists, small fix'), store.claimRoadmapItem(card.id, 'grok', 'new')]);
+  const winners = [a, b].filter((r) => r.status === 'ok');
+  assert.equal(winners.length, 1, 'one claim wins');
+  const loser = [a, b].find((r) => r.status === 'taken');
+  assert.ok(loser && loser.status === 'taken');
+  const owner = winners[0].status === 'ok' ? winners[0].item.owner : '';
+  assert.equal(loser.owner, owner, 'the loser is told who has it');
+  // Claiming your own again only updates the note; the other can't release it.
+  const again = await store.claimRoadmapItem(card.id, owner as string, 'look done: exists');
+  assert.equal(again.status, 'ok');
+  assert.equal(again.status === 'ok' && again.item.note, 'look done: exists');
+  const other = owner === 'claude' ? 'grok' : 'claude';
+  assert.equal((await store.releaseRoadmapItem(card.id, other)).status, 'taken');
+  assert.equal((await store.releaseRoadmapItem(card.id, owner as string)).status, 'ok');
+  const free = await store.claimRoadmapItem(card.id, other, null);
+  assert.equal(free.status === 'ok' && free.item.owner, other, 'free again, so the other can claim it');
+  assert.equal(free.status === 'ok' && free.item.note, 'look done: exists', 'no note keeps the note');
+  assert.equal((await store.claimRoadmapItem('rm_00000000', 'claude', null)).status, 'not_found');
+}
+
+test('claim lock (memory): one wins, the other learns who', async () => { await claimRules(createMemoryStore()); });
+test('claim lock (PGlite): one wins, the other learns who', async () => {
+  const pg = new PGlite();
+  const store = createSqlStore(pgliteDb(pg));
+  await store.ensure();
+  await claimRules(store);
+});
+
+test('API: a claim on someone else\'s card is a 409 with the owner', async () => {
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler; DELETE: Handler };
+  const created = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Claim me' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: created.id }) };
+  const path = `/api/roadmap/${created.id}/claim`;
+  const first = await claimRoute.POST(req('grok', 'POST', { note: 'new' }, path), ctx);
+  assert.equal(first.status, 200);
+  const second = await claimRoute.POST(req('claude', 'POST', {}, path), ctx);
+  assert.equal(second.status, 409);
+  assert.equal(((await second.json()) as { owner: string }).owner, 'grok');
+  assert.equal((await claimRoute.DELETE(req('claude', 'DELETE', undefined, path), ctx)).status, 409);
+  assert.equal((await claimRoute.DELETE(req('grok', 'DELETE', undefined, path), ctx)).status, 200);
+});

@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] | claim <id> [--note t] | release <id> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -360,6 +360,20 @@ async function main() {
       if (!id || !COLS.includes(col)) usage('roadmap move <rm_id> <done|now|next|later>');
       const { item } = await (await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ column: col }) })).json();
       console.log(opts.json ? JSON.stringify(item) : `moved ${item.id} to ${item.column}`);
+      return;
+    }
+    if (sub === 'claim' || sub === 'release') {
+      // roadmap claim <rm_id> --note "exists, small fix"   look first, then claim: the first claim wins
+      const [id] = rest;
+      if (!id) usage(`roadmap ${sub} <rm_id>${sub === 'claim' ? ' [--note "exists, small fix" | "new"]' : ''}`);
+      const res = await fetch(`${base}/api/roadmap/${encodeURIComponent(id)}/claim`, {
+        method: sub === 'claim' ? 'POST' : 'DELETE', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: sub === 'claim' ? JSON.stringify(opts.note !== undefined ? { note: opts.note } : {}) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) { await loadLabels(); fail(`not yours: ${id} is ${label(data.owner)}'s. Nothing changed.`); }
+      if (!res.ok) fail(data.error || `HTTP ${res.status}`);
+      console.log(opts.json ? JSON.stringify(data.item) : sub === 'claim' ? `claimed ${id}: ${data.item.title}${data.item.note ? ` · ${data.item.note}` : ''}` : `released ${id}`);
       return;
     }
     if (sub === 'drop') {

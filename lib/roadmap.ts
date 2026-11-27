@@ -75,3 +75,20 @@ export function parseOrder(body: unknown): { ok: true; column: RoadmapColumn; id
 export function sortRoadmap(items: readonly RoadmapItem[]): RoadmapItem[] {
   return [...items].sort((a, b) => ROADMAP_COLUMNS.indexOf(a.column) - ROADMAP_COLUMNS.indexOf(b.column) || a.position - b.position || a.id.localeCompare(b.id));
 }
+
+/**
+ * A claim: {"note": "…"}, the line that says what the claimer found when looking first
+ * («exists, small fix» or «new»). Optional; without it the card's note stays as it was.
+ */
+export function parseClaim(body: unknown): { ok: true; note: string | null } | Fail {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be a JSON object: {} or {"note": "exists, small fix"}.' };
+  const raw = (body as { note?: unknown }).note;
+  if (raw === undefined || raw === null) return { ok: true, note: null };
+  const note = line(raw, 'note', 1, ROADMAP_NOTE_MAX);
+  return typeof note === 'string' ? { ok: true, note } : note;
+}
+
+export type ClaimResult =
+  | { status: 'ok'; item: RoadmapItem }
+  | { status: 'taken'; owner: string; item: RoadmapItem }
+  | { status: 'not_found' };

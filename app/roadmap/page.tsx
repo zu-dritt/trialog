@@ -17,6 +17,7 @@ export default function RoadmapPage() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [me, setMe] = useState<string | null>(null);
 
   useEffect(() => { setToken(localStorage.getItem(TOKEN_KEY) || ''); document.title = 'Roadmap · Trialog'; }, []);
 
@@ -37,7 +38,7 @@ export default function RoadmapPage() {
   useEffect(() => {
     if (!token) return undefined;
     void load();
-    void api('/api/participants').then((d) => setParticipants((d as { participants: Participant[] }).participants)).catch(() => {});
+    void api('/api/participants').then((d) => { const p = d as { me?: string; participants: Participant[] }; setParticipants(p.participants); setMe(p.me ?? null); }).catch(() => {});
     const timer = setInterval(() => { if (!document.hidden) void load(); }, POLL_MS);
     return () => clearInterval(timer);
   }, [token, load, api]);
@@ -61,6 +62,20 @@ export default function RoadmapPage() {
     }
   }, [items, api, load]);
 
+  const claim = useCallback(async (id: string, take: boolean) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? '{}' : undefined });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; owner?: string };
+      if (res.status === 409) setError(`Already ${participants.find((p) => p.name === data.owner)?.label ?? data.owner}'s. Nothing changed.`);
+      else if (!res.ok) setError(data.error || `HTTP ${res.status}`);
+      else setError('');
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [token, participants, load]);
+
   if (token === null) return null;
   if (!token) {
     return (
@@ -78,7 +93,7 @@ export default function RoadmapPage() {
         <a href="/" className="ml-auto text-sm">← Hub</a>
       </header>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard items={items} participants={participants} actions={{ place: (id, c, i) => { void place(id, c, i); } }} busy={busy} />
+      <RoadmapBoard items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); } }} />
     </main>
   );
 }
