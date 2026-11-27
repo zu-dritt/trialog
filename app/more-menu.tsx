@@ -2,13 +2,13 @@
 
 // On a phone the header has no room for every button. Export .md and Switch token, which are not
 // needed often, move into a small «⋯» menu there. They do exactly what the header buttons do on a
-// wider screen. Escape, a pick or a press anywhere else closes the menu.
+// wider screen, and a link to the demo hub where the hub has one. Escape, a pick or a press anywhere else closes the menu.
 import { useEffect, useId, useRef, useState } from 'react';
 
-export interface MoreItem {
-  label: string;
-  onPick: () => void;
-}
+/** A menu item does something (`onPick`) or opens a page in a new tab (`href`). */
+export type MoreItem = { label: string; onPick: () => void; href?: undefined } | { label: string; href: string; onPick?: undefined };
+
+const ITEM = 'cursor-pointer whitespace-nowrap border-none bg-transparent px-3 py-1.5 text-left text-[13px] text-fg hover:bg-[#2a2f3a]';
 
 /** The «⋯» button and, when open, its list. `className` decides where it shows (e.g. only below sm). */
 export function MoreMenu({ items, className = '', initiallyOpen = false }: { items: readonly MoreItem[]; className?: string; initiallyOpen?: boolean }) {
@@ -46,10 +46,16 @@ export function MoreMenu({ items, className = '', initiallyOpen = false }: { ite
       >⋯</button>
       {open && (
         <div id={menuId} role="menu" className="absolute right-0 top-full z-40 mt-1.5 flex min-w-[10rem] flex-col rounded-md border border-line bg-panel py-1 shadow-lg shadow-black/50">
-          {items.map((item) => (
+          {items.map((item) => item.href !== undefined ? (
+            <a
+              key={item.label} role="menuitem" href={item.href} target="_blank" rel="noopener noreferrer"
+              className={`${ITEM} no-underline`}
+              onClick={() => setOpen(false)}
+            >{item.label} ↗</a>
+          ) : (
             <button
               key={item.label} type="button" role="menuitem"
-              className="cursor-pointer whitespace-nowrap border-none bg-transparent px-3 py-1.5 text-left text-[13px] text-fg hover:bg-[#2a2f3a]"
+              className={ITEM}
               onClick={() => { setOpen(false); item.onPick(); }}
             >{item.label}</button>
           ))}

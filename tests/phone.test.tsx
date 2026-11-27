@@ -41,3 +41,15 @@ test('the header hides «You» and the two buttons below sm, and shows the «⋯
   assert.match(page, /h-dvh/);
   assert.match(page, /pt-\[env\(safe-area-inset-top\)\]/);
 });
+
+test('a menu item with an address is a link that opens in a new tab', () => {
+  const html = renderToStaticMarkup(<MoreMenu items={[...items, { label: 'Demo hub', href: 'https://demo.example/' }]} initiallyOpen />);
+  assert.match(html, /<a role="menuitem" href="https:\/\/demo.example\/" target="_blank" rel="noopener noreferrer"[^>]*>Demo hub ↗<\/a>/);
+});
+
+test('the header shows the demo link only when the build has one', () => {
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const DEMO_LINK = demoLink\(\);/);
+  assert.match(page, /\{DEMO_LINK && <a [^>]*href=\{DEMO_LINK\} target="_blank" rel="noopener noreferrer"/);
+  assert.match(page, /\.\.\.\(DEMO_LINK \? \[\{ label: 'Demo hub', href: DEMO_LINK \}\] : \[\]\)/);
+});

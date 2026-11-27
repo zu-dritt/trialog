@@ -5,6 +5,20 @@
 /** On the page: whether this build is the demo hub (next.config.ts writes TRIALOG_DEMO in at build time). */
 export const DEMO_BUILD: boolean = process.env.TRIALOG_DEMO === '1';
 
+/**
+ * Where the demo hub is, for a link in the header of another hub (TRIALOG_DEMO_URL, written in at
+ * build time). Only an https address counts; anything else, and the demo hub itself, gets no link.
+ */
+export function demoLink(value: string | undefined = process.env.TRIALOG_DEMO_URL, demo: boolean = DEMO_BUILD): string | null {
+  if (demo || !value) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** On the server: true on the demo hub, TRIALOG_DEMO=1. */
 export function isDemo(env: Record<string, string | undefined> = process.env): boolean {
   return env.TRIALOG_DEMO === '1';

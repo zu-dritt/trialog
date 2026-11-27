@@ -103,3 +103,11 @@ test('an empty group is left out of the folded list', () => {
   const html = renderToStaticMarkup(<FoldedList id="f" {...look} decided={[]} pinned={[message(2, 'pinned note')]} />);
   assert.doesNotMatch(html, />Decided</);
 });
+
+test('the folded list closes on Escape and on a press outside the bar, like the «⋯» menu', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../app/pinned-bar.tsx', import.meta.url), 'utf8');
+  assert.match(src, /addEventListener\('pointerdown', onPointer\)/);
+  assert.match(src, /if \(!rootRef\.current\?\.contains\(e\.target as Node \| null\)\) setUnfolded\(false\)/);
+  assert.match(src, /removeEventListener\('pointerdown', onPointer\)/);
+});
