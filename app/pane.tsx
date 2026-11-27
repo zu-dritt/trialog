@@ -652,9 +652,14 @@ export function RoomPane({
       }
       case 'compose': boxRef.current?.focus(); return true;
       case 'search': {
-        const field = document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]');
+        // By a data attribute, not the label (PR 98 renamed it and «/» stopped working). On a phone the
+        // field is folded away behind the magnifier: open it first (Grok's nit on PR 79).
+        const field = document.querySelector<HTMLInputElement>('input[data-search-field]');
         if (!field) return false;
-        field.focus();
+        if (field.offsetParent === null) {
+          document.querySelector<HTMLButtonElement>('button[data-search-opener]')?.click();
+          requestAnimationFrame(() => field.focus());
+        } else field.focus();
         return true;
       }
       case 'help': setHelpOpen((v) => !v); return true;

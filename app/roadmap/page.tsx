@@ -5,7 +5,7 @@
 // stays current while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
 import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
-import type { RoadmapColumn, RoadmapItem } from '../../lib/roadmap';
+import { ROADMAP_NOTE_MAX, type RoadmapColumn, type RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
 import { uploadRequest, useImageLoader } from '../attachments';
 import { FlightBar } from '../flight';
@@ -78,12 +78,16 @@ export default function RoadmapPage() {
       const answer = window.prompt('Look first: what did you find? e.g. «new» or «exists, small fix» (empty: keep the note)', '');
       if (answer === null) return; // cancelled: no claim
       note = answer.trim() || null;
+      // Said here, not only by the API after the round trip (Grok's nit on PR 78).
+      if (note && [...note].length > ROADMAP_NOTE_MAX) { setError(`The note is ${[...note].length} characters; at most ${ROADMAP_NOTE_MAX}. Nothing changed.`); return; }
     }
     setBusy(true);
     try {
       const res = await fetch(`/api/roadmap/${id}/claim`, { method: take ? 'POST' : 'DELETE', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: take ? JSON.stringify(note ? { note } : {}) : undefined });
       const data = (await res.json().catch(() => ({}))) as { error?: string; owner?: string };
-      if (res.status === 409) setError(`Already ${participants.find((p) => p.name === data.owner)?.label ?? data.owner}'s. Nothing changed.`);
+      // A 409 is a card someone else holds, or a done card, or one that changed meanwhile: say which.
+      if (res.status === 409 && data.owner) setError(`Already ${participants.find((p) => p.name === data.owner)?.label ?? data.owner}'s. Nothing changed.`);
+      else if (res.status === 409) setError(data.error || 'Nothing changed.');
       else if (!res.ok) setError(data.error || `HTTP ${res.status}`);
       else setError('');
     } finally {

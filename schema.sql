@@ -325,3 +325,5 @@ CREATE TABLE IF NOT EXISTS roadmap_pictures (
    );
 
 CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS raised_by TEXT CONSTRAINT roadmap_items_raised_by_shape CHECK (raised_by ~ '^[a-z][a-z0-9-]{0,23}$');
