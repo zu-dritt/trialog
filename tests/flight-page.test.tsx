@@ -118,3 +118,15 @@ test('an address in a flight is a link: the waiting pill opens the right pull re
   const agent = html.slice(html.indexOf('data-flight='));
   assert.match(agent, /<a href="https:\/\/github\.com\/amberleaf-gmbh\/apartment-finder\/pull\/36" tabindex="-1"/, 'in the agent’s own (hidden) text: clickable, not a tab stop');
 });
+
+test('«waiting for David: …» and «waiting on the orchestrator: …» count as waits on him; the pill does not cut a link on a phone', async () => {
+  const { waitingOn } = await import('../app/flight');
+  const human = { name: 'david', label: 'Orchestrator' };
+  const f = (text: string) => ({ participant: 'claude', state: 'waiting', text, since: '2026-11-27T11:00:00Z' }) as Flight;
+  assert.deepEqual(waitingOn([f('waiting for David: merge PR 37')], human).map((w) => w.text), ['merge PR 37']);
+  assert.deepEqual(waitingOn([f('Waiting on Orchestrator: go for the demo')], human).map((w) => w.text), ['go for the demo']);
+  assert.deepEqual(waitingOn([f('waiting for review: PR 87')], human), [], 'someone else');
+  const src = readFileSync(new URL('../app/flight.tsx', import.meta.url), 'utf8');
+  assert.match(src, /font-semibold text-\[#ff7b72\] sm:max-w-\[60ch\] sm:truncate/, 'truncated only from sm up');
+  assert.match(src, /max-sm:w-\[calc\(100vw-4\.5rem\)\] max-sm:whitespace-normal/, 'on a phone a wait takes the width and wraps');
+});
