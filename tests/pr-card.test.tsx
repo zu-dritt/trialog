@@ -75,8 +75,15 @@ test('on a phone: the first tap previews, and the card is a sheet at the bottom 
   const { tapToPreview } = await import('../app/pr-card');
   assert.equal(tapToPreview(), false, 'no window: no tap preview');
   const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
-  assert.match(css, /@media \(max-width: 640px\) \{\n  \.pr-card \{ position: fixed; left: 8px; right: 8px;[^}]*width: auto; max-height: 60vh/);
+  assert.match(css, /@media \(max-width: 640px\), \(hover: none\) \{\n  \.pr-card \{ position: fixed; left: 8px; right: 8px;[^}]*width: auto; max-height: 60vh/);
   const src = readFileSync(new URL('../app/pr-card.tsx', import.meta.url), 'utf8');
   assert.match(src, /if \(open \|\| !tapToPreview\(\)\) return;\n    e\.preventDefault\(\);/, 'the first tap does not follow the link');
   assert.match(src, /document\.addEventListener\('pointerdown', away\)/, 'a tap elsewhere closes it');
+});
+
+test('on a touch screen a synthetic mouseleave or blur does not close the card; it says it is loading', () => {
+  const src = readFileSync(new URL('../app/pr-card.tsx', import.meta.url), 'utf8');
+  assert.match(src, /onMouseLeave=\{leave\} onFocus=\{show\} onBlur=\{leave\}/);
+  assert.match(src, /const leave = \(\) => \{ if \(!tapToPreview\(\)\) hide\(\); \};/);
+  assert.match(src, /data-pr-loading=""[^>]*>Loading PR \{n\}…/);
 });

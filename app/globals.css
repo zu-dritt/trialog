@@ -119,6 +119,6 @@
   background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 0.5); white-space: normal; text-align: left;
 }
 /* On a phone the card is a sheet at the bottom of the screen, so it never runs off the edge. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (hover: none) {
   .pr-card { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; max-height: 60vh; overflow-y: auto; }
 }

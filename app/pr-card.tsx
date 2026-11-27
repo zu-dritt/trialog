@@ -72,6 +72,9 @@ export function PrLink({ n, children, linkProps }: { n: number; children: ReactN
     timer.current = setTimeout(() => { setOpen(true); void load(n).then((c) => c && setCard(c)); }, 250);
   };
   const hide = () => { clearTimeout(timer.current); setOpen(false); };
+  // On a touch screen the card is closed by a tap elsewhere only: a phone sends a synthetic
+  // mouseleave or blur right after the tap, which would close it before it is seen.
+  const leave = () => { if (!tapToPreview()) hide(); };
   const box = useRef<HTMLSpanElement>(null);
   const tap = (e: MouseEvent) => {
     if (open || !tapToPreview()) return;
@@ -86,9 +89,10 @@ export function PrLink({ n, children, linkProps }: { n: number; children: ReactN
     return () => document.removeEventListener('pointerdown', away);
   }, [open]);
   return (
-    <span ref={box} className="relative inline" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+    <span ref={box} className="relative inline" onMouseEnter={show} onMouseLeave={leave} onFocus={show} onBlur={leave}>
       <a {...linkProps} onClick={tap}>{children}</a>
       {open && card && <PrCardView summary={card.summary} picture={card.picture} />}
+      {open && !card && <span role="status" className="pr-card text-xs text-muted" data-pr-loading="">Loading PR {n}…</span>}
     </span>
   );
 }
