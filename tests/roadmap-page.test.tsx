@@ -126,3 +126,20 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   assert.ok(done.includes('draggable="true"'), 'a done card can still be dragged back');
   assert.equal(html.match(/<select/g)?.length, 2, 'the menu stays on the cards in Now');
 });
+
+test('a red card with an address in its note gets «Unblock →», and every address in a note is a link', async () => {
+  const { unblockHref, cardStatus } = await import('../lib/roadmap');
+  const url = 'https://github.com/amberleaf-gmbh/apartment-finder/pull/37';
+  const T = Date.parse('2026-11-27T12:00:00Z');
+  const blocked = { column: 'now' as const, note: `⛔ WAITING ON DAVID: merge ${url}.`, owner: 'claude', updated_at: '2026-11-27T11:50:00Z' };
+  assert.equal(unblockHref(blocked, cardStatus(blocked, T)), url, 'the address, without the full stop');
+  assert.equal(unblockHref({ note: `PR 88, in review: ${url}` }, { tone: 'review', label: 'in review' }), null, 'only red cards');
+  assert.equal(unblockHref({ note: '⛔ your call on the breaks' }, { tone: 'blocked', label: 'waiting on you' }), null, 'no address, no button');
+
+  const P = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_unblock00', 'now', 0, { owner: 'claude', note: blocked.note, updated_at: blocked.updated_at }), card('rm_review000', 'now', 1, { owner: 'claude', note: 'PR 88, in review: https://github.com/zu-dritt/trialog/pull/88' })];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={P} now={new Date(T)} actions={{ place: () => {} }} />);
+  assert.equal(html.match(/data-unblock=""/g)?.length, 1);
+  assert.match(html, new RegExp(`<a href="${url}" target="_blank" rel="noopener noreferrer" data-unblock="" draggable="false"[^>]*>Unblock → apartment-finder PR 37</a>`));
+  assert.match(html, /<a href="https:\/\/github\.com\/zu-dritt\/trialog\/pull\/88"[^>]*>(?:trialog )?PR 88<\/a>/, 'the review card’s address is a link too');
+});
