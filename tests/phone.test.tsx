@@ -31,12 +31,11 @@ test('the viewport reaches the screen edges, so the page can pad itself by the s
   assert.equal(viewport.width, 'device-width');
 });
 
-test('the header hides «You» and the two buttons below sm, and shows the «⋯» menu there instead', () => {
+test('the header keeps Roadmap and «?» out of the phone row, and «⋯» shows on every screen', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /font-semibold max-sm:hidden">You: /);
-  assert.match(page, /max-sm:hidden`\} onClick=\{\(\) => \{ void exportTranscript\(\); \}\}>Export \.md/);
-  assert.match(page, /max-sm:hidden`\} onClick=\{forgetToken\}>Switch token/);
-  assert.match(page, /<MoreMenu\s+className="sm:hidden"/);
+  assert.match(page, /no-underline hover:opacity-90 max-sm:hidden" href="\/roadmap"/);
+  assert.match(page, /<TourButton [^>]*className="mx-1 max-sm:hidden" \/>/);
+  assert.match(page, /<MoreMenu\s+heading=/, 'no sm:hidden on the menu any more');
   // The page is as tall as what is visible, and padded by the safe area.
   assert.match(page, /h-dvh/);
   assert.match(page, /pt-\[env\(safe-area-inset-top\)\]/);
@@ -50,6 +49,6 @@ test('a menu item with an address is a link that opens in a new tab', () => {
 test('the header shows the demo link only when the build has one', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /const DEMO_LINK = demoLink\(\);/);
-  assert.match(page, /\{DEMO_LINK && <a [^>]*href=\{DEMO_LINK\} target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(page, /\{DEMO_LINK && <a /, 'the demo link lives in «⋯» only');
   assert.match(page, /\.\.\.\(DEMO_LINK \? \[\{ label: 'Demo hub', href: DEMO_LINK \}\] : \[\]\)/);
 });

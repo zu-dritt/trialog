@@ -12,7 +12,7 @@ import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
 import { FlightBar, readFlightPosition, writeFlightPosition, type FlightPosition } from './flight';
-import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
+import { wakeTargetsText, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
 import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../lib/build';
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
@@ -25,7 +25,6 @@ const TOKEN_KEY = 'collabHubToken';
 
 // The demo hub, for a link in the header (TRIALOG_DEMO_URL); none on the demo hub itself.
 const DEMO_LINK = demoLink();
-const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
 
 /** Until the server has said which rooms there are, the page shows the one that always exists. */
 const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
@@ -257,6 +256,8 @@ export default function Page() {
     onTour: noteTour,
   };
 
+  const wakeText = wakeTargetsText(me, participants);
+
   return (
     // dvh is the height that is really visible: on a phone 100vh is taller, and the page would scroll
     // the header up under the clock. The safe-area padding keeps everything clear of the notch
@@ -268,8 +269,6 @@ export default function Page() {
         <h1 className="m-0 flex-none text-[17px] font-bold">Trialog</h1>
         <span className={`min-w-0 truncate text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
         <SoundToggle on={sound.on} onToggle={sound.toggle} />
-        {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
-        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
         {/* The "New version available" pill comes directly after the status, so the state of the
             page reads in one spot. On a narrow screen it sits on a line of its own, under the
             status. An empty holder takes no room in the row. */}
@@ -287,19 +286,18 @@ export default function Page() {
           participants={participants}
           rooms={rooms}
         />
-        {/* On a phone there is no room for these three: «You» is left out, the two buttons go into «⋯». */}
-        {me && <span className="min-w-0 truncate text-[13px] font-semibold max-sm:hidden">You: {shown(me)}</span>}
-        <button className={`${BUTTON} flex-none max-sm:hidden`} onClick={() => { void exportTranscript(); }}>Export .md</button>
-        <button className={`${BUTTON} flex-none bg-transparent max-sm:hidden`} onClick={forgetToken}>Switch token</button>
-        <a className={`${BUTTON} flex-none bg-transparent text-fg no-underline max-sm:hidden`} href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
-        {DEMO_LINK && <a className={`${BUTTON} flex-none bg-transparent text-fg no-underline max-sm:hidden`} href={DEMO_LINK} target="_blank" rel="noopener noreferrer" title="The demo hub: public tokens, try anything">Demo hub ↗</a>}
+        {/* By how often they are used (playground #539): the roadmap, the tour's «?», then «⋯» with the
+            rest. On a phone the roadmap goes into «⋯» too, and «?» to the end of the rooms' row. */}
+        <a className="flex-none cursor-pointer rounded-md border border-accent bg-accent px-3 py-[5px] font-semibold text-[#0f1115] no-underline hover:opacity-90 max-sm:hidden" href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="mx-1 max-sm:hidden" />}
         <MoreMenu
-          className="sm:hidden"
+          heading={me ? <>Signed in as <span className="font-semibold text-accent">{shown(me)}</span></> : undefined}
           items={[
-            { label: 'Export .md', onPick: () => { void exportTranscript(); } },
-            { label: 'Switch token', onPick: forgetToken },
-            { label: 'Roadmap', href: '/roadmap', target: 'trialog-roadmap' },
+            { label: 'Roadmap', href: '/roadmap', target: 'trialog-roadmap', className: 'sm:hidden' },
             ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
+            ...(wakeText ? [{ label: wakeText, info: true as const }] : []),
+            { label: 'Export .md', onPick: () => { void exportTranscript(); } },
+            { label: 'Switch token', onPick: forgetToken, divider: true },
           ]}
         />
       </header>
@@ -310,7 +308,6 @@ export default function Page() {
       </div>
       {!flightAtBottom && flightBar}
       <TourPanel tour={tour} me={me} participants={participants} />
-      <WakeTargetsLine me={me} participants={participants} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
       {splitVisible && statusBar}
 
