@@ -1,0 +1,51 @@
+// The work-in-flight strip: which state shows, how long, and what fits on a phone.
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { FlightStrip, flightAge, flightSentence, flightTone } from '../app/flight';
+import type { Flight } from '../lib/shared';
+
+const T = Date.parse('2026-11-27T08:00:00.000Z');
+const ago = (min: number) => new Date(T - min * 60_000).toISOString();
+const flight = (over: Partial<Flight>): Flight => ({ participant: 'claude', state: 'working', text: 'Journal 01', since: ago(5), updated_at: ago(1), last_message_at: ago(2), ...over });
+
+test('working turns quiet only when both the flight and the last message are 20 minutes old', () => {
+  assert.equal(flightTone(flight({}), T), 'working');
+  assert.equal(flightTone(flight({ since: ago(30), last_message_at: ago(5) }), T), 'working', 'wrote recently');
+  assert.equal(flightTone(flight({ since: ago(3), last_message_at: ago(90) }), T), 'working', 'just started');
+  assert.equal(flightTone(flight({ since: ago(25), last_message_at: ago(21) }), T), 'quiet');
+  assert.equal(flightTone(flight({ since: ago(25), last_message_at: null }), T), 'quiet', 'no message in a day');
+  assert.equal(flightTone(flight({ state: 'waiting', since: ago(90), last_message_at: null }), T), 'waiting', 'waiting is never quiet');
+  assert.equal(flightTone(flight({ state: 'idle', text: '' }), T), 'idle');
+});
+
+test('the age reads «now», «4 min», «1 h 05»', () => {
+  assert.equal(flightAge(ago(0.5), T), 'now');
+  assert.equal(flightAge(ago(4), T), '4 min');
+  assert.equal(flightAge(ago(65), T), '1 h 05');
+  assert.equal(flightAge(new Date(T + 60_000).toISOString(), T), 'now', 'a clock a little ahead is no negative age');
+});
+
+test('the strip: one entry per flight with its dot, name and words; the words hide on a phone', () => {
+  const html = renderToStaticMarkup(<FlightStrip now={T} flights={[
+    flight({}),
+    flight({ participant: 'grok', state: 'waiting', text: 'review of PR 63', since: ago(4) }),
+    flight({ participant: 'david', state: 'idle', text: '' }),
+  ]} />);
+  assert.match(html, /role="status" aria-label="Work in flight"/);
+  assert.deepEqual([...html.matchAll(/data-flight="([a-z]+)"/g)].map((m) => m[1]), ['working', 'waiting', 'idle']);
+  assert.match(html, /title="Claude: working on «Journal 01» · 5 min"/);
+  assert.match(html, /waiting for «review of PR 63»/);
+  assert.match(html, /max-sm:hidden/);
+  assert.equal(renderToStaticMarkup(<FlightStrip now={T} flights={[]} />), '', 'nobody in flight: no strip');
+});
+
+test('a quiet flight says so', () => {
+  assert.equal(flightSentence(flight({ since: ago(40), last_message_at: ago(30) }), T, 'Claude'), 'Claude: quiet, last on «Journal 01» · 40 min');
+});
+
+test('the page shows the strip under the header, with the token', () => {
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /<FlightBar token=\{token\} onUnauthorized=\{refuseToken\} participants=\{participants\} \/>/);
+});
