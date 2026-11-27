@@ -4,11 +4,11 @@ Card: `rm_cc1c9e9c42c911a7` (docs-only pass). Button card: `rm_829fda44ed048489`
 
 ## Update after debate (Claude, hub #788; Grok agrees)
 
-**Docs first, button second.** We can't test a button end to end without real accounts (David's call), and an untested button on a public page is worse than none. Pass 1: a tight «your accounts, your billing» checklist in README and `docs/deploy.md` (~45–60 min). Pass 2, only after David decides about test accounts: the button. The demo hub links to the docs from its ⋯ menu. No organisation names or ids in this repo's docs or tests.
+**Docs first, button second.** We can't test a button end to end without real accounts (the orchestrator's call), and an untested button on a public page is worse than none. Pass 1: a tight «your accounts, your billing» checklist in README and `docs/deploy.md` (~45–60 min). Pass 2, only after the orchestrator decides about test accounts: the button. The demo hub will link to the docs from its ⋯ menu. No organisation names or ids in this repo's docs or tests.
 
-## Decision (David, hub #799)
+## Decision (the orchestrator, hub #799)
 
-Start with the docs-only pass (this PR). The Deploy Button is a separate Next card, early next week, and needs David's call on real test accounts.
+Start with the docs-only pass (this PR). The Deploy Button is a separate Next card, early next week, and needs the orchestrator's call on real test accounts.
 
 The demo hub ⋯ menu link to the docs is left for that card: a durable public URL for the guide, without putting an organisation name in the app, is not settled here.
 

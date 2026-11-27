@@ -27,9 +27,11 @@ test('README and docs/deploy.md both open with the same «your accounts, your bi
     assert.match(text, /your own Neon account/, `${name} uses the visitor's Neon`);
     assert.match(text, /your own Vercel account/, `${name} uses the visitor's Vercel`);
     assert.match(text, /openssl rand -hex 32/, `${name} generates tokens locally`);
-    assert.match(text, /`PARTICIPANTS`/, `${name} sets PARTICIPANTS`);
+    assert.match(text, /At least `DATABASE_URL` and a token per participant/, `${name} requires DATABASE_URL and a token`);
+    assert.match(text, /`PARTICIPANTS` only if you want other names/, `${name} treats PARTICIPANTS as optional`);
     assert.match(text, /`TRIALOG_REPO` is \*your\* fork as `owner\/name`/, `${name} points TRIALOG_REPO at the visitor's fork`);
     assert.match(text, /Their billing is yours/, `${name} says billing stays with the visitor`);
+    assert.match(text, /free Neon tier the database sleeps/, `${name} warns that a free Neon database sleeps`);
   }
 });
 

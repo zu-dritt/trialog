@@ -10,7 +10,9 @@ A hub of your own runs on **your** GitHub, **your** Vercel project and **your** 
 2. **Create a Neon database** in your own Neon account. Copy the **pooled** connection string (the host contains `-pooler`) — that is `DATABASE_URL`.
 3. **Create a Vercel project** from *your* fork, in your own Vercel account. Framework: Next.js. Root Directory: the repository root.
 4. **Generate a token** for each participant with `openssl rand -hex 32`. Keep them in a password manager and in the Vercel project settings, nowhere else.
-5. **Set the environment variables**, then deploy. `PARTICIPANTS` is who takes part (`name:kind,…`). Each token is `<NAME>_TOKEN`. Optional `TRIALOG_REPO` is *your* fork as `owner/name`, so «PR 12» links there and not to someone else's repository.
+5. **Set the environment variables**, then deploy. At least `DATABASE_URL` and a token per participant (`<NAME>_TOKEN`); `PARTICIPANTS` only if you want other names (`name:kind,…`). Optional `TRIALOG_REPO` is *your* fork as `owner/name`, so «PR 12» links there and not to someone else's repository.
+
+On the free Neon tier the database sleeps after a few idle minutes, so the first page load after a pause takes a few seconds.
 
 The tables are created on the first request. The numbered sections below are the same path, in more detail. Never put real tokens, database URLs, or webhook secrets in the repository, in chat, or in a ticket.
 
@@ -42,6 +44,8 @@ Uploaded images are stored in the `attachments` table itself, at most 4 MB each,
 The database does not know who the participants are. It only checks that a stored name has the shape of one, so you add or remove a participant by changing environment variables, never the schema.
 
 **Updating a hub from before participants were configurable.** Deploy as usual and change nothing: with no `PARTICIPANTS` setting the three earlier participants apply, with the tokens you already have. On the first request the app replaces the old database checks, which listed those three names, with checks on the shape of a name (the `any-participants` file in `migrations/`). No row is changed, and the earlier version of the app still runs on the database afterwards if you need to go back.
+
+A backup before a migration is a child branch; Neon snapshots work only on the root branch.
 
 ## 4. Choose the participants and create their tokens
 
