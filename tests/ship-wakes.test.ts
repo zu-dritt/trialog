@@ -37,3 +37,15 @@ test('a go message gets no «Build it» chip', async () => {
   assert.equal(isBuildableMessage({ sender: 'david', text: '🚀 Ship it! Go on #1004.' }, humans, false), false);
   assert.equal(isBuildableMessage({ sender: 'david', text: 'A new idea for the roadmap' }, humans, false), true, 'other messages keep it');
 });
+
+test('a go given again after taking it back sends no second message (Grok, PR 123)', async () => {
+  const { alreadySaid } = await import('../app/ship');
+  const notice = { text: '🚀 Ship it! Go on #1004.', reply_to: 1004 };
+  const said = [{ sender: 'david', reply_to: 1004, text: '🚀 Ship it! Go on #1004.' }];
+  assert.equal(alreadySaid(said, notice, 'david'), true);
+  assert.equal(alreadySaid(said, { text: '🚀 Ship it! Go on #1005.', reply_to: 1005 }, 'david'), false, 'another message');
+  assert.equal(alreadySaid([{ sender: 'grok', reply_to: 1004, text: notice.text }], notice, 'david'), false, 'someone else');
+  assert.equal(alreadySaid([], notice, 'david'), false);
+  const pane = readFileSync(new URL('../app/pane.tsx', import.meta.url), 'utf8');
+  assert.match(pane, /if \(notice && me && !alreadySaid\(messages, notice, me\)\)/);
+});
