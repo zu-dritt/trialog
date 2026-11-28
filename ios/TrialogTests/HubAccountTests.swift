@@ -58,4 +58,68 @@ final class HubAccountTests: XCTestCase {
         XCTAssertNotNil(Unlock.messageAfter(LAError(.authenticationFailed)))
         XCTAssertNotNil(Unlock.messageAfter(nil))
     }
+
+    func testAFreshInstallClearsALeftoverAccountOnce() {
+        let suite = "test.trialog.fresh-install.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            return XCTFail("could not make a UserDefaults suite")
+        }
+        defaults.removePersistentDomain(forName: suite)
+        var cleared = 0
+        AccountLaunch.prepareAccount(defaults: defaults, clear: { cleared += 1 })
+        XCTAssertEqual(cleared, 1)
+        XCTAssertTrue(defaults.bool(forKey: AccountLaunch.didLaunchBeforeKey))
+        AccountLaunch.prepareAccount(defaults: defaults, clear: { cleared += 1 })
+        XCTAssertEqual(cleared, 1, "a later launch leaves the account")
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func testAReinstallClearsALeftoverAccount() {
+        let suite = "test.trialog.reinstall.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            return XCTFail("could not make a UserDefaults suite")
+        }
+        defaults.removePersistentDomain(forName: suite)
+        var cleared = 0
+        AccountLaunch.prepareAccount(defaults: defaults, clear: { cleared += 1 })
+        XCTAssertEqual(cleared, 1)
+        // Uninstall wipes UserDefaults but leaves the Keychain.
+        defaults.removePersistentDomain(forName: suite)
+        AccountLaunch.prepareAccount(defaults: defaults, clear: { cleared += 1 })
+        XCTAssertEqual(cleared, 2, "a reinstall starts at Setup")
+        XCTAssertTrue(defaults.bool(forKey: AccountLaunch.didLaunchBeforeKey))
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func testPushUnregisterIsDeleteWithTheToken() {
+        let account = HubAccount(hubURL: URL(string: "https://hub.example.com/")!, token: "test-token-16chars")
+        let request = Push.unregisterRequest(account: account, tokenHex: "00abff")
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.absoluteString, "https://hub.example.com/api/push/devices")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token-16chars")
+        let body = try! JSONSerialization.jsonObject(with: request.httpBody!) as! [String: String]
+        XCTAssertEqual(body, ["token": "00abff"])
+    }
+
+    func testPushRegisterIsPostWithTheTokenAndEnv() {
+        let account = HubAccount(hubURL: URL(string: "https://hub.example.com/")!, token: "test-token-16chars")
+        let request = Push.registerRequest(account: account, tokenHex: "00abff")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://hub.example.com/api/push/devices")
+        let body = try! JSONSerialization.jsonObject(with: request.httpBody!) as! [String: String]
+        XCTAssertEqual(body["token"], "00abff")
+        XCTAssertEqual(body["platform"], "ios")
+        XCTAssertTrue(body["env"] == "sandbox" || body["env"] == "production", body["env"] ?? "missing")
+    }
+
+    func testRememberedDeviceTokenIsWhatUnregisterWouldSend() {
+        let suite = "test.trialog.apns.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            return XCTFail("could not make a UserDefaults suite")
+        }
+        defaults.removePersistentDomain(forName: suite)
+        Push.rememberDeviceToken(Data([0x00, 0xab, 0xff]), defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: Push.lastTokenKey), "00abff")
+        defaults.removePersistentDomain(forName: suite)
+    }
 }
