@@ -68,9 +68,14 @@ why, so you can judge it without having worked at Google. We revisit them as we 
    *Why.* Google wrote short design notes so a team didn't build the wrong thing. Our builds take
    6 to 20 minutes, so «more than an afternoon» was far too long a threshold. A picture is how the
    human gets the idea at a glance.
-6. **Fast by default, the human for high stakes.** The reviewer merges when the review is clean
-   and CI is green. Database changes, money, secrets, the live hub and `main` wait for the
-   orchestrator. *(Still being discussed.)*
+6. **Fast by default, always getting faster; the human for high stakes** (#1291, wording from
+   #1295). The reviewer merges when the review is clean and CI is green; the author never merges
+   their own pull request. The database (after a snapshot), money, secrets, new services, the live
+   hub and `main` wait for the orchestrator's go, and only theirs: an agent's 🚀 never counts.
+   *Why.* At Google the gates were for everything; for us, the slow part is waiting, not checking.
+   So we get faster by removing waits, never by skipping a check: a review starts within 15
+   minutes, and a card goes from go to live within an hour. We track both numbers and revisit this
+   with them. The few things that can't be undone cheaply stay with the human.
 
 ## Use a no-reply address for your commits
 
