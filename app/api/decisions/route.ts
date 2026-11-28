@@ -1,6 +1,7 @@
 import { waitUntil } from '@vercel/functions';
 import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parseDecisionInput } from '../../../lib/core';
-import { authenticate, error, json, readJson, roomError, safe } from '../../../lib/http';
+import { MAIN_ROOM } from '../../../lib/shared';
+import { authenticate, error, json, readJson, roomError, roomFromQuery, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
 import { ReplyTargetError, RoomError, getStore } from '../../../lib/store';
 import { postGuardNotice } from '../../../lib/guard-hub';
@@ -10,6 +11,26 @@ import { getWakeup } from '../../../lib/webhook';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+
+// GET /api/decisions?room=<id>|all
+// Every decision card, with the message's recipient and room, so the status-bar chip can show
+// those still waiting on the caller (playground #1186, #1188). Without `room`, every room.
+export const GET = safe(async (request: Request) => {
+  const [me, denied] = authenticate(request);
+  if (denied) return denied;
+  const store = await getStore();
+  const [room, noRoom] = await roomFromQuery(new URL(request.url).searchParams, store, null);
+  if (noRoom) return noRoom;
+  const cards = await store.listDecisions(room);
+  const messages = await store.listMessagesByIds(cards.map((c) => c.message_id));
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const decisions = cards.map((decision) => {
+    const m = byId.get(decision.message_id);
+    return { decision, recipient: m?.recipient ?? null, room: m?.room ?? MAIN_ROOM };
+  });
+  return json({ me, decisions });
+});
 
 // POST /api/decisions {"prompt": "...", "to": "<name>", "reply_to": 45, "room": "<id>"}
 // Creates a message and an attached decision card. The creator is the owner of the Bearer token;

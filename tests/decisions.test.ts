@@ -17,7 +17,7 @@ const TOKENS: Record<string, string> = {
 };
 
 type Handler = (request: Request, ctx?: { params: Promise<{ id: string }> }) => Promise<Response>;
-let createRoute: { POST: Handler };
+let createRoute: { POST: Handler; GET: Handler };
 let positionRoute: { PUT: Handler };
 let messagesRoute: { GET: Handler };
 
@@ -235,4 +235,79 @@ test('the API takes the participant from the token and only returns the list whe
   const listed = await messagesRoute.GET(req('/api/messages?decisions=1', { headers: auth('david') }));
   const listedBody = await listed.json() as { decisions: { id: string }[] };
   assert.equal(listedBody.decisions.some((c) => c.id === body.decision.id), true);
+});
+
+test('a human-addressed decision: only that human may Agree, on the server, and one Agree settles it', async () => {
+  const req = (path: string, init: RequestInit = {}) => new Request(`http://hub.test${path}`, init);
+  const created = await createRoute.POST(req('/api/decisions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth('grok') },
+    body: JSON.stringify({ prompt: 'Ship the status-bar chip?', to: 'david' }),
+  }));
+  assert.equal(created.status, 201);
+  const body = await created.json() as { message: Message; decision: { id: string; agreed_at: string | null } };
+  assert.equal(body.message.recipient, 'david');
+  assert.equal(body.decision.agreed_at, null);
+
+  const asClaude = await positionRoute.PUT(req(`/api/decisions/${body.decision.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('claude') },
+    body: JSON.stringify({ stance: 'agree', participant: 'david' }),
+  }), params(body.decision.id));
+  assert.equal(asClaude.status, 403);
+  const claudeBody = await asClaude.json() as { error: string };
+  assert.match(claudeBody.error, /person this decision is addressed to/i);
+
+  const listed = await createRoute.GET(req('/api/decisions', { headers: auth('david') }));
+  assert.equal(listed.status, 200);
+  const listBody = await listed.json() as { me: string; decisions: { decision: { id: string }; recipient: string | null; room: string }[] };
+  assert.equal(listBody.me, 'david');
+  const found = listBody.decisions.find((d) => d.decision.id === body.decision.id);
+  assert.ok(found);
+  assert.equal(found!.recipient, 'david');
+  assert.equal(found!.room, 'main');
+
+  assert.equal((await createRoute.GET(req('/api/decisions'))).status, 401);
+
+  const asDavid = await positionRoute.PUT(req(`/api/decisions/${body.decision.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('david') },
+    body: JSON.stringify({ stance: 'agree' }),
+  }), params(body.decision.id));
+  assert.equal(asDavid.status, 200);
+  const after = await asDavid.json() as { decision: { agreed_at: string | null; positions: { participant: string; stance: string }[] } };
+  assert.ok(after.decision.agreed_at, 'the addressee\'s Agree settles a human-addressed card');
+  assert.equal(after.decision.positions.find((p) => p.participant === 'david')?.stance, 'agree');
+
+  const again = await positionRoute.PUT(req(`/api/decisions/${body.decision.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...auth('claude') },
+    body: JSON.stringify({ stance: 'agree' }),
+  }), params(body.decision.id));
+  assert.equal(again.status, 403, 'still refused after it is agreed');
+});
+
+test('store: an agent cannot record a stance on a human-addressed card (memory and PGlite)', async () => {
+  const people = [
+    { name: 'grok', kind: 'agent' as const, color: 0 },
+    { name: 'claude', kind: 'agent' as const, color: 1 },
+    { name: 'david', kind: 'human' as const, color: 2 },
+  ];
+  const run = async (store: Store) => {
+    const created = must(await store.createDecision({ creator: 'grok', prompt: 'Go?', recipient: 'david' }, THREE));
+    await assert.rejects(
+      () => store.recordDecisionPosition(created.decision.id, 'claude', 'agree', null, THREE, undefined, people),
+      (e: unknown) => e instanceof DecisionError && e.reason === 'forbidden',
+    );
+    const ok = await store.recordDecisionPosition(created.decision.id, 'david', 'agree', null, THREE, undefined, people);
+    assert.equal(ok.status, 'ok');
+    if (ok.status === 'ok') {
+      assert.ok(ok.decision.agreed_at);
+      assert.equal(ok.decision.positions.find((p) => p.participant === 'david')?.stance, 'agree');
+    }
+  };
+  await run(createMemoryStore());
+  const pg = new PGlite();
+  const sql = createSqlStore(pgliteDb(pg));
+  await run(sql);
 });

@@ -16,6 +16,7 @@ import { DecisionBadge, isDecision } from './decision';
 import { PinnedBar } from './pinned-bar';
 import { Guard } from './guard';
 import { HealthChips } from './health';
+import { OpenDecisionChips } from './open-decisions';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
 import { leadingHandle } from './mentions';
@@ -95,6 +96,7 @@ export function RoomPane({
   onMissingRoom,
   seek,
   onJumped,
+  onGoToMessage,
   picker,
   lead = false,
   roomInfo,
@@ -121,6 +123,8 @@ export function RoomPane({
   onMissingRoom: (missing: string) => void;
   seek?: { room: string; id: number } | null;
   onJumped?: () => void;
+  /** Jump to a message, possibly in another room (the page looks up which). Used by the open-decisions chip. */
+  onGoToMessage?: (id: number) => void;
   picker?: React.ReactNode;
   /** The leading pane also loads who takes part, follows storage from other windows, and reports live status. */
   lead?: boolean;
@@ -1143,6 +1147,15 @@ export function RoomPane({
             // In split view the ring is shown once, in the leading pane: the guard is the hub's, not the room's.
             guard={lead && token ? <Guard api={api} participants={participants} /> : undefined}
             health={lead && token ? <HealthChips api={api} participants={participants} /> : undefined}
+            openDecisions={lead && token && me ? (
+              <OpenDecisionChips
+                api={api}
+                me={me}
+                participants={participants}
+                onJump={(id) => { if (onGoToMessage) onGoToMessage(id); else void goToMessage(id); }}
+                onAgree={async (cardId) => { await recordDecisionPosition(cardId, 'agree', null); }}
+              />
+            ) : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>

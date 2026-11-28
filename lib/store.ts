@@ -14,6 +14,8 @@ import {
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Flight, type FlightState, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
+import { canRecordDecisionPosition, decisionShouldMarkAgreed } from './open-decisions';
+import type { Participant } from './shared';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { isDemo } from './demo';
 import type { StreakBreak } from './streak';
@@ -110,10 +112,11 @@ export class PollError extends Error {
   }
 }
 export class DecisionError extends Error {
-  constructor(readonly reason: 'not found' | 'note required') {
+  constructor(readonly reason: 'not found' | 'note required' | 'forbidden') {
     super({
       'not found': 'Decision card not found.',
       'note required': 'An Object needs a note that says why.',
+      'forbidden': 'Only the person this decision is addressed to may Agree or Object.',
     }[reason]);
     this.name = 'DecisionError';
   }
@@ -442,10 +445,11 @@ export interface Store {
   createDecision(input: NewDecision, roster?: readonly string[], limitPerMin?: number): Promise<{ message: Message; decision: DecisionCard } | null>;
   /**
    * Records or changes the caller's Agree or Object. `roster` is the current participants:
-   * when every one of them has agreed, the message is pinned and agreed_at is set.
+   * when the card should be marked agreed (`decisionShouldMarkAgreed`), the message is pinned and agreed_at is set.
+   * `participants`, when given, enforces that only the addressee may answer a human-addressed card.
    * Returns rate_limited when this sender has recorded 30 positions in the last minute (a no-op change is not counted).
    */
-  recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
+  recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number, participants?: readonly Participant[]): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
   /** Every decision card of one room, or of every room when none is named. For since-poll. */
   listDecisions(room?: string | null): Promise<DecisionCard[]>;
   /**
@@ -2103,7 +2107,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { message: { ...toMessage(rows[0]), attachments: [], poll: null, decision, reactions: [] }, decision };
       });
     },
-    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN, participants = []) {
       await ensure();
       if (stance === 'object' && !note) throw new DecisionError('note required');
       return db.transaction(async (tx) => {
@@ -2111,6 +2115,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
         const [card] = await tx.query(`SELECT id, message_id, agreed_at FROM decision_cards WHERE id = $1::text FOR UPDATE`, [cardId]);
         if (!card) throw new DecisionError('not found');
+        const [messageRow] = await tx.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [card.message_id]);
+        if (!messageRow) throw new DecisionError('not found');
+        const addressed = toMessage(messageRow);
+        if (!canRecordDecisionPosition(participant, addressed.recipient, participants)) {
+          throw new DecisionError('forbidden');
+        }
         const [already] = await tx.query(
           `SELECT stance, note FROM decision_positions WHERE card_id = $1::text AND participant = $2::text`,
           [cardId, participant],
@@ -2138,7 +2148,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const [cardRow] = await tx.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c WHERE c.id = $1::text`, [cardId]);
         const decision = toDecision(cardRow.decision);
         if (!decision) throw new DecisionError('not found');
-        const agreed = decisionIsAgreed(decision, roster);
+        const agreed = decisionShouldMarkAgreed(decision, roster, addressed.recipient, participants);
         const wasAgreed = card.agreed_at != null;
         const [{ at }] = await tx.query(`SELECT now() AS at`, []);
         // When everyone has agreed, the card is a decision: pin it, using one timestamp so we can
@@ -2908,7 +2918,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const decision = assembleDecision(row);
       return { message: copy(message), decision };
     },
-    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN, participants = []) {
       shaped(participant);
       if (stance === 'object' && !note) throw new DecisionError('note required');
       const row = decisionRows.get(cardId);
@@ -2918,13 +2928,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const same = existing && existing.stance === stance && existing.note === (note ?? null);
       const message = rows.find((m) => m.id === row.message_id);
       if (!message) throw new DecisionError('not found');
+      if (!canRecordDecisionPosition(participant, message.recipient, participants)) {
+        throw new DecisionError('forbidden');
+      }
       if (same) return { status: 'ok' as const, decision: assembleDecision(row), message: copy(message), reply: null };
       const cutoff = now() - 60_000;
       const recent = rows.filter((m) => m.sender === participant && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return { status: 'rate_limited' as const };
       positionRows.set(key, { card_id: cardId, participant, stance, note: note ?? null, updated_at: timestamp() });
       const current = assembleDecision(row);
-      const agreed = decisionIsAgreed(current, roster);
+      const agreed = decisionShouldMarkAgreed(current, roster, message.recipient, participants);
       const wasAgreed = row.agreed_at != null;
       if (agreed) {
         row.agreed_at = row.agreed_at ?? timestamp();
