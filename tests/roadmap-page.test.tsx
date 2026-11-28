@@ -223,5 +223,5 @@ test('a card says who raised it first, so David knows whom to ask (playground #6
   const twice = renderToStaticMarkup(<RoadmapBoard items={[card('rm_twice000', 'now', 0, { owner: 'grok', reviewer: 'claude', raised_by: 'claude' })]} />);
   assert.equal([...twice.matchAll(/data-role="(raiser|reviewer)"/g)].length, 2, 'both shown (keys by role and name, Grok’s nit)');
   const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_raise000', 'next', 0, { raised_by: 'david', note: '#670' })]} participants={[{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' }] as never} />);
-  assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · #670/);
+  assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · <a href="\/#m-670"[^>]*>#670<\/a>/);
 });

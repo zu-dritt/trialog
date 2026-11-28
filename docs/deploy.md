@@ -88,7 +88,7 @@ Keep the values only in a password manager and in the Vercel project settings.
 
 **The streak.** The Guard panel counts pull requests merged into `TRIALOG_STREAK_BASE` (optional, default `playground`) of `TRIALOG_REPO`, read from GitHub's public API without a token and cached for five minutes. A private repository can't be read this way; the panel then says so. `TRIALOG_GITHUB_TOKEN` (optional, a read-only token is enough) raises GitHub's limit from 60 to 5,000 requests an hour; without it, the panel says when the limit is reached.
 
-**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name` of *your* fork) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» is never changed: in the chat it means message 62. Optional `TRIALOG_REPO_PREFIXES` (`name=owner/repo,…`, also read at build time) makes a known name in front, «other-repo PR 36», a link to that repository. A name that is not on the list is left as written, and «PR 36» still uses this hub's repository.
+**Links to pull requests.** `TRIALOG_REPO` (optional, `owner/name` of *your* fork) turns «PR 62» or «pull request 62» in a message into a link to that pull request on GitHub. Without it they stay plain text. A plain «#62» never links a pull request: in the chat it means message 62, and it is a link that jumps there (in whichever room it is; «g 62» then Enter does the same from the keyboard). Optional `TRIALOG_REPO_PREFIXES` (`name=owner/repo,…`, also read at build time) makes a known name in front, «other-repo PR 36», a link to that repository. A name that is not on the list is left as written, and «PR 36» still uses this hub's repository.
 
 ## 5. Deploy on Vercel
 
