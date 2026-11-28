@@ -25,10 +25,10 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 These rules start from what made code review work at Google in its early years (roughly
 2004–2008), adjusted for how we work now: one human and AI agents from different makers. Typing
 code is almost free for us; a careful review and the human's attention are the scarce parts. Each
-rule was agreed by all three of us in the playground hub (decision number in brackets) and says
+rule was agreed by all three of us in the playground hub (the hub decision is named with each rule) and says
 why, so you can judge it without having worked at Google. We revisit them as we gather data.
 
-1. **Small: one idea per pull request** (#1253). A reviewer can check every line in about 10
+1. **Small: one idea per pull request** (hub decision 1253). A reviewer can check every line in about 10
    minutes; tests and generated files don't count. Risky parts (sign-in, money, database changes,
    deletes) go in their own short pull request, even when the feature around them is big. A big
    feature ships in slices, each live on the playground. A review starts within 15 minutes of the
@@ -39,7 +39,7 @@ why, so you can judge it without having worked at Google. We revisit them as we 
    hole in pull request 138 (an agent could post the orchestrator's go) was found only because the
    change was small, and was fixed in 10 minutes. We aim for the clock, not the size: Google aimed
    for a review within a day, and ours take minutes.
-2. **Code health, not perfection** (#1260). Approve when the change leaves the code better than it
+2. **Code health, not perfection** (hub decision 1260). Approve when the change leaves the code better than it
    was. A **must-fix** is anything the orchestrator or a user could feel: a bug, a security or
    privacy problem, lost data, a broken promise in the API. It comes with the steps to see it, and
    the author answers each one with «fixed in <commit>» or why not. Everything else is a **nit**,
@@ -47,19 +47,19 @@ why, so you can judge it without having worked at Google. We revisit them as we 
    *Why.* At Google this rule kept reviews from stalling on taste. With cheap reverts and changes
    live within the hour, «better than before» is the right bar; holding out for perfect only slows
    the next fix. Steps for every must-fix make it quick to agree on what is wrong.
-3. **Reviews spread knowledge** (#1269). Every review ends with three short lines: what I ran,
+3. **Reviews spread knowledge** (hub decision 1269). Every review ends with three short lines: what I ran,
    what I looked at, and what I didn't check, said plainly (for example «I didn't run the iOS
    tests»). No other ceremony.
    *Why.* At Google, review was how knowledge of the code spread from one person to the next. Here
    the reviewer is a different model from a different maker, with different blind spots, so a
    second look catches more. The three lines tell the orchestrator how far the review went.
-4. **Show the tests** (#1274). Each pull request names a test that would fail without it. What
+4. **Show the tests** (hub decision 1274). Each pull request names a test that would fail without it. What
    tests can't reach (a screen, the phone) gets a picture, with a yellow box around what changed, or
    a run in a headless browser. Green CI is needed, but not enough.
    *Why.* Google's culture expected tests with every change. For agents a test costs minutes, so we
    ask for more: a test that proves this change, not only a count of passing ones. What wasn't run
    is said, so nobody takes «all green» for more than it is.
-5. **A short note before the big things** (#1281). Before work on the database, the API,
+5. **A short note before the big things** (hub decision 1281). Before work on the database, the API,
    security or how we work, or anything over about two hours: three lines on the roadmap card (what,
    why, which slices), and a picture. For something you'll see, a quick mock with a yellow box
    around what changes; for the backend, a small diagram or a before/after example; pure plumbing
@@ -68,8 +68,8 @@ why, so you can judge it without having worked at Google. We revisit them as we 
    *Why.* Google wrote short design notes so a team didn't build the wrong thing. Our builds take
    6 to 20 minutes, so «more than an afternoon» was far too long a threshold. A picture is how the
    human gets the idea at a glance.
-6. **Fast by default, always getting faster; the human for high stakes** (#1291, wording from
-   #1295). The reviewer merges when the review is clean and CI is green; the author never merges
+6. **Fast by default, always getting faster; the human for high stakes** (hub decision 1291, wording
+   from hub messages 1295 and 1296). The reviewer merges when the review is clean and CI is green; the author never merges
    their own pull request. The database (after a snapshot), money, secrets, new services, the live
    hub and `main` wait for the orchestrator's go, and only theirs: an agent's 🚀 never counts.
    *Why.* At Google the gates were for everything; for us, the slow part is waiting, not checking.
