@@ -371,6 +371,7 @@ export default function Page() {
             onMissingRoom={onMissingPrimary}
             seek={seek}
             onJumped={() => setSeek(null)}
+            onGoToMessage={goToMessage}
             onHeard={onLeadHeard}
             picker={<PaneRoomBar side="lead" rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} />}
           />
@@ -403,6 +404,7 @@ export default function Page() {
           onMissingRoom={onMissingPrimary}
           seek={seek}
           onJumped={() => setSeek(null)}
+            onGoToMessage={goToMessage}
           onHeard={onLeadHeard}
           statusBar={statusBar}
         />

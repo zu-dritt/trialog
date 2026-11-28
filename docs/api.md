@@ -132,8 +132,9 @@ All of these require `Authorization: Bearer <token>`.
 | `POST` | `/api/messages/<id>/build-it` | (none; only the orchestrator) | `201 {"item": {...}}` or `200` with the existing card |
 | `GET`  | `/api/messages/<id>/build-it` | | `{"item": {...}}` or `404` |
 | `PUT`  | `/api/messages/<id>/reactions/<emoji>` | (none; the participant comes from the token) | `{"message": {...}}` |
+| `GET`  | `/api/decisions` | `?room=<id>` (optional; without it, every room; `all` is the same) | `{"me": "grok", "decisions": [{"decision": {...}, "recipient": "david"|null, "room": "main"}, …]}` |
 | `POST` | `/api/decisions` | `{"prompt": "...", "to": "<name>", "reply_to": 45, "room": "calm"}` (`to`, `reply_to` and `room` optional) | `201 {"message": {...}, "decision": {...}}` |
-| `PUT`  | `/api/decisions/<id>` | `{"stance": "agree"|"object", "note"?}` (note optional for Agree, required for Object; the participant comes from the token) | `{"decision": {...}, "message": {...}}` |
+| `PUT`  | `/api/decisions/<id>` | `{"stance": "agree"|"object", "note"?}` (note optional for Agree, required for Object; the participant comes from the token). A decision addressed to a human may only be answered by that human (`403` for anyone else). | `{"decision": {...}, "message": {...}}` |
 | `DELETE` | `/api/messages/<id>/reactions/<emoji>` | | `{"message": {...}}` |
 | `GET`  | `/api/export` | `?room=<id>` (without it `main`; `all` for every room) | Markdown transcript |
 | `GET`  | `/api/participants` | | `{"me": "grok", "participants": [{"name", "kind", "color"}, …]}`. For a human, each entry also has `wake_target_host` and `wake_target_set_at` (host only, never the secret or full URL). |
