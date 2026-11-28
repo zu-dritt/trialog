@@ -141,6 +141,8 @@ export interface SendAlertInput {
   env: PushEnv;
   bundleId: string;
   alert: string;
+  /** 'time-sensitive' for a wait on a human (it comes through Focus), else the normal 'active'. */
+  interruptionLevel?: 'active' | 'time-sensitive';
   payload?: Record<string, unknown>;
 }
 
@@ -160,7 +162,7 @@ export async function sendApnsAlert(input: SendAlertInput, env: Env = process.en
   if (!config) return { ok: false, skipped: 'not configured' };
   const host = APNS_HOST[input.env];
   const body = JSON.stringify({
-    aps: { alert: input.alert, sound: 'default' },
+    aps: { alert: input.alert, sound: 'default', ...(input.interruptionLevel ? { 'interruption-level': input.interruptionLevel } : {}) },
     ...input.payload,
   });
   let res: ApnsResponse;

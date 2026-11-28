@@ -148,7 +148,7 @@ export function schedulePush(job: Promise<unknown>): void {
   }));
 }
 
-async function deliverTo(store: Store, humans: readonly Sender[], alert: string, payload?: Record<string, unknown>): Promise<void> {
+async function deliverTo(store: Store, humans: readonly Sender[], alert: string, payload?: Record<string, unknown>, interruptionLevel: 'active' | 'time-sensitive' = 'active'): Promise<void> {
   if (!humans.length) return;
   for (const name of humans) {
     const devices = await store.listPushDevices(name);
@@ -159,6 +159,7 @@ async function deliverTo(store: Store, humans: readonly Sender[], alert: string,
         bundleId: device.bundle_id,
         alert,
         payload,
+        interruptionLevel,
       });
       if ('disable' in result && result.disable) {
         await store.disablePushDevice(device.token);
@@ -188,7 +189,8 @@ export async function notifyPushForFlight(store: Store, flight: Flight, before: 
   // A new `since` means the wait itself changed: notify everyone it now waits on.
   const targets = flight.since !== before?.since ? [...after] : added;
   if (!targets.length) return;
-  await deliverTo(store, targets, pushAlertForFlight(flight, roster));
+  // A wait on a human is a blocker: time-sensitive, so it comes through Focus (playground #1036).
+  await deliverTo(store, targets, pushAlertForFlight(flight, roster), undefined, 'time-sensitive');
 }
 
 /** Only humans newly waiting on the card, so an unrelated edit does not notify again. */
@@ -198,5 +200,5 @@ export async function notifyPushForRoadmap(store: Store, item: RoadmapItem, befo
   const previous = new Set(before ? humansForCard(before, roster) : []);
   const added = [...after].filter((n) => !previous.has(n));
   if (!added.length) return;
-  await deliverTo(store, added, pushAlertForCard(item), { roadmap_item_id: item.id });
+  await deliverTo(store, added, pushAlertForCard(item), { roadmap_item_id: item.id }, 'time-sensitive');
 }
