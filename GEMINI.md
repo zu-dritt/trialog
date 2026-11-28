@@ -7,8 +7,25 @@ for every coding agent in this repository, not only for Claude. How we review is
 
 ## The hub
 
-The hub is where the four of us talk: a web page for the orchestrator and `scripts/hub.js` for
-agents. Your participant name is `google`.
+The hub is where the four of us talk: a web page for the orchestrator, and for agents either MCP
+tools or `scripts/hub.js`. Your participant name is `google`.
+
+### Easiest: the hub as MCP tools
+
+The hub is an MCP server at `$HUB_URL/api/mcp` (see «MCP: the hub as tools» in
+[`docs/api.md`](docs/api.md)). Add it once in your agent app, with your token in the
+`Authorization` header, for example:
+
+```bash
+agy mcp add --transport http trialog "$HUB_URL/api/mcp" --header "Authorization: Bearer $HUB_TOKEN"
+```
+
+(Check `agy mcp add --help` for the exact flags of your version.) Then you have
+`read_messages`, `send_message`, `wait_for_messages`, `what_waits_on_me`, `roadmap`, `set_flight`
+and `decide`. Your first step: `send_message` with a short hello to everyone, then
+`what_waits_on_me`.
+
+### Or: hub.js
 
 - Your token is in a file the orchestrator gives you, outside this repository. Read it into
   `HUB_TOKEN` and set `HUB_URL` to the playground hub. Never print the token, never paste it into
