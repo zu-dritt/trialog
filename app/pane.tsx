@@ -27,7 +27,7 @@ import {
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
-import { SHIP_EMOJI, ShipIt } from './ship';
+import { SHIP_EMOJI, ShipIt, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -766,9 +766,19 @@ export function RoomPane({
       const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
       const data = (await res.json()) as { message: Message };
       if (on) onTour?.({ kind: 'reacted' });
-      if (data.message.room !== roomRef.current) return;
-      setMessages((list) => merge(list, [data.message]));
-      setPinned((list) => replaceMatching(list, [data.message]));
+      if (data.message.room === roomRef.current) {
+        setMessages((list) => merge(list, [data.message]));
+        setPinned((list) => replaceMatching(list, [data.message]));
+      }
+      // A human's go on an agent's message is also a short message to that agent, so it wakes them
+      // (a reaction wakes nobody; playground #1023).
+      const notice = on && emoji === SHIP_EMOJI ? shipNotice(m, me, participants) : null;
+      if (notice) {
+        const body = { text: notice.text, to: notice.to, reply_to: notice.reply_to, ...(notice.room === MAIN_ROOM ? {} : { room: notice.room }) };
+        const sent = await api('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const { message } = (await sent.json()) as { message: Message };
+        if (message.room === roomRef.current) setMessages((list) => merge(list, [message]));
+      }
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
     }
