@@ -2,7 +2,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { forYou } from '../lib/for-you';
+import { forYou, forYouPushText } from '../lib/for-you';
 import { ForYouList, forYouLabel } from '../app/for-you';
 import type { RoadmapItem } from '../lib/roadmap';
 
@@ -57,4 +57,16 @@ test('the list in the header', () => {
   const html = renderToStaticMarkup(<ForYouList items={forYou({ ...base, me: 'david' })} onMessage={() => {}} />);
   assert.match(html, /data-kind="decision"[^]*<button/);
   assert.match(html, /href="\/roadmap#rm_wait0000" target="trialog-roadmap"/);
+});
+
+test('each item keeps its key between polls: the decision, the card or the agent', () => {
+  assert.deepEqual(forYou({ ...base, me: 'david' }).map((i) => i.key), ['decision-d10', 'flight-grok', 'card-rm_wait0000']);
+});
+
+test('the morning push: the count and the oldest item, cut for a lock screen', () => {
+  const items = forYou({ ...base, me: 'david' });
+  assert.equal(forYouPushText(items), '⛔ 3 for you. Oldest: Agree or Object: Ship v0.4?');
+  assert.equal(forYouPushText(items.slice(1, 2)), '⛔ 1 for you: Grok waits: merge PR 160');
+  const long = forYouPushText([{ ...items[0], text: 'x'.repeat(300) }]);
+  assert.ok([...long].length < 140 && long.endsWith('…'));
 });

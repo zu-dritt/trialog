@@ -57,7 +57,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | retro [preview] [--release <pr>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | pick <id|-> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | for-you [notify] [--json] | retro [preview] [--release <pr>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | pick <id|-> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -459,6 +459,24 @@ async function main() {
     console.log(`streak: ${s.current} now · record ${s.record}${s.problem ? ` (${s.problem})` : ''}`);
     await loadLabels();
     for (const p of s.points.filter((x) => x.break).slice(-5)) console.log(`  ended at ${p.break.ended} by ${label(p.break.by)}: ${p.break.reason}`);
+    return;
+  }
+
+
+  if (cmd === 'for-you') {
+    // for-you                   what waits on you, oldest first: decisions, cards and agents' flights
+    // for-you notify            send yourself that list as one push, if it isn't empty (humans; the 08:00 job)
+    if (args[0] === 'notify' && args.length === 1) {
+      const data = await (await call('/api/for-you/notify', { method: 'POST' })).json();
+      if (opts.json) console.log(JSON.stringify(data));
+      else console.log(!data.items ? 'nothing waits on you: no push' : `${data.items} for you: ${data.sent ? `push sent to ${data.devices} device(s)` : 'no device took the push'}`);
+      return;
+    }
+    if (args.length) usage('for-you | for-you notify');
+    const { items } = await (await call('/api/for-you')).json();
+    if (opts.json) console.log(JSON.stringify(items));
+    else if (!items.length) console.log('nothing waits on you');
+    else for (const i of items) console.log(`${i.text}${i.message ? ` (#${i.message.id})` : i.href ? ` ${i.href}` : ''}`);
     return;
   }
 

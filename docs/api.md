@@ -234,6 +234,14 @@ curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/prs-today"
 # {"count":28,"goal":100,"day":"2026-11-28","repo":"owner/repo","problem":null}
 ```
 
+### `GET /api/for-you` and `POST /api/for-you/notify`
+
+«What waits on you»: one list of what only the caller can move on, oldest first. It is built from the hub's own data each time; nothing is stored.
+
+- **`GET /api/for-you`** → `{items: [{kind, key, text, href, since, message?}]}`. `kind` is `decision` (a decision card the caller hasn't answered; `message` is `{id, room}` to jump to), `card` (a roadmap card that waits on a human, unless a merged pull request named in its note settled it; `href` is the card or the address in its note) or `flight` (an agent whose flight waits on the caller). An agent gets only its decisions. A card's `since` is its last edit: the hub doesn't record when a card turned red. The header shows the list as «⛔ n for you».
+- **`POST /api/for-you/notify`** → `{sent, items, devices}`: sends the caller their own list as one iPhone push («⛔ 3 for you. Oldest: …»), when it isn't empty. Only a human, and only to themself (`403` for an agent), so nobody can push someone else. `sent` is false when the list is empty or no device took the push. The morning job calls it at 08:00: see [morning-push.md](morning-push.md).
+- `hub.js for-you [notify] [--json]`.
+
 ### `GET /api/retro` and `POST /api/retro`
 
 The retro card after a release («Retro-Karte nach jedem Release», playground #1406). A release is a pull request merged into `TRIALOG_RETRO_BASE` (default `test`: the agents bring playground there). The card says what shipped (the PRs merged into `TRIALOG_STREAK_BASE` since the release before, with the count), the streak at that moment, and what went wrong as the hub knows it: the streak's breaks in that time, each with its reason. Three empty lines are left for the people (what went well, what went wrong, what we change), to fill in with the card's edit window. Releases and merges are read from GitHub for `TRIALOG_REPO` (cached like the streak); nothing new is stored, so there is no migration.
@@ -953,7 +961,8 @@ The hub sends a short alert (the sender, a snippet, and `#N` for a message) when
 
 - a message is addressed to a human participant (not a broadcast, not an agent);
 - a flight starts waiting on a named human, or that wait's text changes;
-- a roadmap card starts waiting on a human (a blocked note, or a human owner outside Now).
+- a roadmap card starts waiting on a human (a blocked note, or a human owner outside Now);
+- the human asks for their «for you» list (`POST /api/for-you/notify`, the 08:00 job).
 
 Sending uses token-based APNs (an ES256 JWT and HTTP/2) to `api.sandbox.push.apple.com` or `api.push.apple.com`, with the device's stored `bundle_id` as the topic. It needs `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_KEY_P8`. `APNS_BUNDLE_ID` is optional (the default topic when a registration omits `bundle_id`). If the key is not set, the sender no-ops. A `410` or `BadDeviceToken` from Apple disables that device. Tokens, keys and team ids are never logged or written to the repository.
 
