@@ -8,9 +8,11 @@ import { settledByMerge, waitingOn } from '../app/waits';
 import { openDecisionsFor, promptPreview, type DecisionListing } from './open-decisions';
 import { cardStatus, unblockHref, type RoadmapItem } from './roadmap';
 import type { Flight, Participant } from './shared';
+import { silentAgents } from './silent';
+import type { Message } from './core';
 
 export interface ForYouItem {
-  kind: 'decision' | 'card' | 'flight';
+  kind: 'decision' | 'card' | 'flight' | 'silent';
   /** Stable across polls: the decision, the card or the agent it is about. */
   key: string;
   /** What to do, in a line: «Agree or Object: …», «Card: …», «Grok waits: …». */
@@ -32,8 +34,10 @@ export function forYou(input: {
   merged: ReadonlySet<number>;
   repo: string | null;
   now: number;
+  /** The latest messages, for agents that went quiet after being asked (lib/silent.ts). */
+  messages?: readonly Pick<Message, 'id' | 'sender' | 'recipient' | 'text' | 'room' | 'created_at'>[];
 }): ForYouItem[] {
-  const { me, participants, decisions, roadmap, flights, merged, repo, now } = input;
+  const { me, participants, decisions, roadmap, flights, merged, repo, now, messages = [] } = input;
   const person = participants.find((p) => p.name === me);
   // Only a human gives goes; an agent's list is the decisions addressed to it, nothing more.
   const human = person?.kind === 'human';
@@ -52,6 +56,10 @@ export function forYou(input: {
     for (const w of waitingOn(flights, person, merged, repo)) {
       const label = participants.find((p) => p.name === w.by)?.label ?? w.by;
       items.push({ kind: 'flight', key: `flight-${w.by}`, text: `${label} waits: ${w.text}`, href: null, since: w.since });
+    }
+    for (const s of silentAgents(messages, participants, now)) {
+      const label = participants.find((p) => p.name === s.agent)?.label ?? s.agent;
+      items.push({ kind: 'silent', key: `silent-${s.agent}`, text: `${label} silent ${s.minutes} min since #${s.message.id}: its listener may have stopped`, href: null, since: s.message.created_at, message: { id: s.message.id, room: s.message.room } });
     }
   }
   return items.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));

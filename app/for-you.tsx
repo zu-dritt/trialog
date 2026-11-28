@@ -18,7 +18,7 @@ export function ForYouList({ items, onMessage }: { items: readonly ForYouItem[];
   return (
     <ol data-for-you-list="" className="m-0 flex list-none flex-col gap-1 p-0">
       {items.map((item) => {
-        const icon = item.kind === 'decision' ? '🗳' : item.kind === 'card' ? '🗂' : '⏳';
+        const icon = item.kind === 'decision' ? '🗳' : item.kind === 'card' ? '🗂' : item.kind === 'silent' ? '💤' : '⏳';
         const line = <><span aria-hidden="true" className="mr-1.5">{icon}</span>{item.text}</>;
         const cls = 'block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg hover:bg-[#2a2f3a]';
         return (
