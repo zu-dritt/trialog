@@ -481,3 +481,19 @@ test('moves and picks (migration 021): a drag, the column menu and Build it are 
   await store.ensure();
   await moveAndPickRules(store);
 });
+
+test('API: picks are for agents, only on a card in Next, and hub.js can set them (#1327)', async () => {
+  const route = (await import('../app/api/roadmap/picks/route')) as unknown as { GET: Handler; PUT: Handler };
+  const next = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Pick me' }))).json()) as { item: RoadmapItem }).item;
+  const later = ((await (await list.POST(req('david', 'POST', { column: 'later', title: 'Not yet' }))).json()) as { item: RoadmapItem }).item;
+  const put = (who: string, item_id: unknown) => route.PUT(req(who, 'PUT', { item_id }, '/api/roadmap/picks'));
+  assert.equal((await put('david', next.id)).status, 403, 'the orchestrator orders by dragging');
+  assert.equal((await put('claude', later.id)).status, 409, 'only a card in Next');
+  assert.equal((await put('claude', 'nope')).status, 400);
+  assert.equal((await put('claude', next.id)).status, 200);
+  const { picks } = (await (await route.GET(req('grok', 'GET', undefined, '/api/roadmap/picks'))).json()) as { picks: { participant: string; item_id: string }[] };
+  assert.ok(picks.some((p) => p.participant === 'claude' && p.item_id === next.id));
+  assert.equal((await put('claude', null)).status, 200, 'null clears it');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../scripts/hub.js', import.meta.url), 'utf8'), /roadmap pick <rm_id\|->/);
+});

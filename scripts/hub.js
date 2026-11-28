@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | pick <id|-> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -388,6 +388,14 @@ async function main() {
       console.log(opts.json ? JSON.stringify(item) : `moved ${item.id} to ${item.column}`);
       return;
     }
+    if (sub === 'pick') {
+      // roadmap pick <rm_id>   the card in Next you'd take next (one per agent); roadmap pick -   clears it
+      const [id] = rest;
+      if (!id) usage('roadmap pick <rm_id|->');
+      const { picks } = await (await call('/api/roadmap/picks', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: id === '-' ? null : id }) })).json();
+      console.log(opts.json ? JSON.stringify(picks) : id === '-' ? 'pick cleared' : `picked ${id}`);
+      return;
+    }
     if (sub === 'claim' || sub === 'release') {
       // roadmap claim <rm_id> --note "exists, small fix"   look first, then claim: the first claim wins
       const [id] = rest;
@@ -430,7 +438,7 @@ async function main() {
       console.log(`removed ${id}`);
       return;
     }
-    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap release <id> | roadmap reviewer <id> <name|-> | roadmap move <id> <column> | roadmap drop <id>');
+    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap pick <id|-> | roadmap release <id> | roadmap reviewer <id> <name|-> | roadmap move <id> <column> | roadmap drop <id>');
   }
 
 

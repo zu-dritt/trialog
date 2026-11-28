@@ -116,14 +116,24 @@ export function shortAge(iso: string, now: number): string {
 }
 
 /**
- * Why a card in «Next» stands where it does (playground #1327, slice 1 of #1337), from what a card
- * already stores: who last placed or changed it, and when. A card that waits on a human already
- * says so with its red light. Slice 2 (a migration, hub decision 1338) will tell a drag from an
- * edit, and add picks and «Oldest».
+ * Why a card in «Next» stands where it does (playground #1327, migration 021):
+ * - a human dragged it there: «📌 David moved it here · 12 min ago» (their override, and it stays put);
+ * - otherwise how long it has waited: «In Next for 3 d»;
+ * - a card from before migration 021 says who last changed it.
+ * A card that waits on a human already says so with its red light.
  */
-export function whyHere(card: Pick<RoadmapItem, 'column' | 'updated_by' | 'updated_at'>, participants: readonly Participant[], now: number): string | null {
+export function whyHere(card: Pick<RoadmapItem, 'column' | 'updated_by' | 'updated_at'> & Partial<Pick<RoadmapItem, 'moved_by' | 'moved_at' | 'entered_next_at'>>, participants: readonly Participant[], now: number): string | null {
   if (card.column !== 'next') return null;
+  const human = participants.some((p) => p.name === card.moved_by && p.kind === 'human');
+  if (human && card.moved_by && card.moved_at) return `📌 ${labelOf(card.moved_by, participants)} moved it here · ${shortAge(card.moved_at, now)}`;
+  if (card.entered_next_at) return `In Next for ${shortAge(card.entered_next_at, now).replace(/ ago$/, '').replace(/^just now$/, 'a moment')}`;
   return `Last change: ${labelOf(card.updated_by, participants)} · ${shortAge(card.updated_at, now)}`;
+}
+
+/** The agents whose one pick is this card («Claude's pick»), in the roster's order. */
+export function picksOf(cardId: string, picks: readonly { participant: string; item_id: string }[], participants: readonly Participant[]): string[] {
+  const who = new Set(picks.filter((p) => p.item_id === cardId).map((p) => p.participant));
+  return participants.filter((p) => who.has(p.name)).map((p) => labelOf(p.name, participants));
 }
 
 /**
@@ -182,7 +192,7 @@ export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'descripti
 }
 
 
-export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now, loadImage, merged = new Set() }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date; loadImage?: LoadImage; /** PRs known to be merged (useMergedPrs). */ merged?: ReadonlySet<number> }) {
+export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now, loadImage, merged = new Set(), picks = [] }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date; loadImage?: LoadImage; /** PRs known to be merged (useMergedPrs). */ merged?: ReadonlySet<number>; /** Each agent's one pick in Next (GET /api/roadmap/picks). */ picks?: readonly { participant: string; item_id: string }[] }) {
   const today = todayLine(items, now);
   const at = (now ?? new Date()).getTime();
   const humans = participants.filter((p) => p.kind === 'human').flatMap((p) => [p.name, p.label ?? '']).filter(Boolean);
@@ -247,9 +257,17 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       )}
                       {(() => {
                         const why = whyHere(card, participants, at);
-                        return why && (
-                          <div data-why="" title="Who last placed or changed this card. Coming next: a drag shown apart from an edit, and each agent's pick."
-                            className="mt-0.5 whitespace-nowrap text-[11px] text-muted">{why}</div>
+                        if (!why) return null;
+                        const picked = picksOf(card.id, picks, participants);
+                        return (
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+                            <span data-why="" className="whitespace-nowrap">{why}</span>
+                            {picked.length > 0 && (
+                              <span data-picks="" className="whitespace-nowrap font-semibold text-fg/80" title={`${picked.join(' and ')} would take this card next`}>
+                                ⭐ {picked.map((n) => `${n}'s pick`).join(' · ')}
+                              </span>
+                            )}
+                          </div>
                         );
                       })()}
                       <ProgressBar card={card} now={at} />
