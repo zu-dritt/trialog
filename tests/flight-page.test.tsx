@@ -150,3 +150,16 @@ test('the strip scrolls sideways without a visible scroll bar (playground #695)'
   const html = renderToStaticMarkup(<FlightStrip now={0} flights={[{ participant: 'claude', state: 'working', text: 'a long piece of work', since: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), last_message_at: null }]} />);
   assert.match(html, /aria-label="Work in flight" class="[^"]*overflow-x-auto \[scrollbar-width:none\] \[&amp;::-webkit-scrollbar\]:hidden"/);
 });
+
+test('an agent without a flight is in the strip too: grey, «no flight yet» (a new teammate, #1617)', () => {
+  const T = Date.parse('2026-11-28T18:00:00Z');
+  const people = [
+    { name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' },
+    { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' },
+    { name: 'google', kind: 'agent', label: 'Google', color: 'green' },
+  ] as never;
+  const html = renderToStaticMarkup(<FlightStrip now={T} participants={people} flights={[{ participant: 'claude', state: 'working', text: 'MCP', since: '2026-11-28T17:50:00Z', updated_at: '2026-11-28T17:50:00Z', last_message_at: null }]} />);
+  assert.match(html, /data-flight="none" title="Google: no flight yet"/);
+  assert.ok(!html.includes('Claude: no flight yet'), 'an agent with a flight shows it, not this');
+  assert.ok(!/David: no flight|Orchestrator: no flight/.test(html), 'humans keep their own line');
+});
