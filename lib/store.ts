@@ -241,6 +241,20 @@ export type AddReactionResult =
   | { status: 'ok'; message: Message }
   | { status: 'not_found' }
   | { status: 'rate_limited' };
+export type PushPlatform = 'ios';
+export type PushEnv = 'sandbox' | 'production';
+/** A registered iPhone device token. `bundle_id` is the APNs topic for this device. */
+export interface PushDevice {
+  participant: Sender;
+  token: string;
+  platform: PushPlatform;
+  env: PushEnv;
+  bundle_id: string;
+  created_at: string;
+  last_seen_at: string;
+  disabled_at: string | null;
+}
+
 export interface Store {
   ensure(): Promise<void>;
   /**
@@ -340,6 +354,17 @@ export interface Store {
   setFlight(input: { participant: Sender; state: FlightState; text: string }): Promise<Flight>;
   /** Everyone's work in flight, with when each last wrote (within a day), by name. */
   listFlights(): Promise<Flight[]>;
+  /**
+   * Registers or updates an iPhone device token for this participant. Re-registering
+   * refreshes last_seen_at, may move the row to a new participant, and re-enables a disabled token.
+   */
+  upsertPushDevice(input: { participant: Sender; token: string; platform: PushPlatform; env: PushEnv; bundle_id: string }): Promise<PushDevice>;
+  /** Drops this participant's device with this token. Returns true when a row was there. */
+  deletePushDevice(participant: Sender, token: string): Promise<boolean>;
+  /** Marks a token disabled (Apple said it is gone). Returns true when a live row was updated. */
+  disablePushDevice(token: string): Promise<boolean>;
+  /** Active (not disabled) devices for this participant. */
+  listPushDevices(participant: Sender): Promise<PushDevice[]>;
   /** Ends the streak: who stepped in or asked for help, and why (lib/streak.ts). */
   addStreakBreak(input: { participant: Sender; reason: string }): Promise<StreakBreak>;
   /** Every break, oldest first. */
@@ -982,6 +1007,16 @@ const toFlight = (r: Row): Flight => ({
   since: iso(r.since) as string,
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
+});
+const toPushDevice = (r: Row): PushDevice => ({
+  participant: r.participant as Sender,
+  token: String(r.token),
+  platform: r.platform as PushPlatform,
+  env: r.env as PushEnv,
+  bundle_id: String(r.bundle_id),
+  created_at: iso(r.created_at) as string,
+  last_seen_at: iso(r.last_seen_at) as string,
+  disabled_at: iso(r.disabled_at),
 });
 const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer, raised_by,
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
@@ -1747,6 +1782,50 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toFlight);
     },
+    async upsertPushDevice({ participant, token, platform, env, bundle_id }) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO push_devices (participant, token, platform, env, bundle_id, created_at, last_seen_at, disabled_at)
+         VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, now(), now(), NULL)
+         ON CONFLICT (token) DO UPDATE
+           SET participant = EXCLUDED.participant,
+               platform = EXCLUDED.platform,
+               env = EXCLUDED.env,
+               bundle_id = EXCLUDED.bundle_id,
+               last_seen_at = now(),
+               disabled_at = NULL
+         RETURNING token, participant, platform, env, bundle_id, created_at, last_seen_at, disabled_at`,
+        [participant, token, platform, env, bundle_id],
+      );
+      return toPushDevice(row);
+    },
+    async deletePushDevice(participant, token) {
+      await ensure();
+      const rows = await db.query(
+        `DELETE FROM push_devices WHERE token = $1::text AND participant = $2::text RETURNING token`,
+        [token, participant],
+      );
+      return rows.length > 0;
+    },
+    async disablePushDevice(token) {
+      await ensure();
+      const rows = await db.query(
+        `UPDATE push_devices SET disabled_at = now() WHERE token = $1::text AND disabled_at IS NULL RETURNING token`,
+        [token],
+      );
+      return rows.length > 0;
+    },
+    async listPushDevices(participant) {
+      await ensure();
+      const rows = await db.query(
+        `SELECT token, participant, platform, env, bundle_id, created_at, last_seen_at, disabled_at
+         FROM push_devices
+         WHERE participant = $1::text AND disabled_at IS NULL
+         ORDER BY last_seen_at DESC, token`,
+        [participant],
+      );
+      return rows.map(toPushDevice);
+    },
     async listStatuses() {
       await ensure();
       await db.query(`DELETE FROM participant_status WHERE expires_at <= now()`, []);
@@ -2312,6 +2391,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
   const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
+  const pushDevices = new Map<string, PushDevice>();
   const streakBreaks: StreakBreak[] = [];
   const roadmap = new Map<string, RoadmapItem>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
@@ -2623,6 +2703,40 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async listFlights() {
       return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
+    },
+    async upsertPushDevice({ participant, token, platform, env, bundle_id }) {
+      const at = timestamp();
+      const previous = pushDevices.get(token);
+      const row: PushDevice = {
+        participant: shaped(participant),
+        token,
+        platform,
+        env,
+        bundle_id,
+        created_at: previous?.created_at ?? at,
+        last_seen_at: at,
+        disabled_at: null,
+      };
+      pushDevices.set(token, row);
+      return { ...row };
+    },
+    async deletePushDevice(participant, token) {
+      const row = pushDevices.get(token);
+      if (!row || row.participant !== participant) return false;
+      pushDevices.delete(token);
+      return true;
+    },
+    async disablePushDevice(token) {
+      const row = pushDevices.get(token);
+      if (!row || row.disabled_at) return false;
+      row.disabled_at = timestamp();
+      return true;
+    },
+    async listPushDevices(participant) {
+      return [...pushDevices.values()]
+        .filter((d) => d.participant === participant && !d.disabled_at)
+        .sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || a.token.localeCompare(b.token))
+        .map((d) => ({ ...d }));
     },
     async listStatuses() {
       const current = now();
