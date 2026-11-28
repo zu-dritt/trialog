@@ -14,11 +14,14 @@ final class Dictation {
     private var task: SFSpeechRecognitionTask?
     private var update: Update?
     private var heard = ""
+    /// Words the recogniser should expect: the team's names (playground #1455: «crack» for «Grok»).
+    private var hints: [String] = []
 
     var isListening: Bool { task != nil }
 
-    func start(_ update: @escaping Update) {
+    func start(hints: [String] = [], _ update: @escaping Update) {
         stop()
+        self.hints = hints
         self.update = update
         heard = ""
         SFSpeechRecognizer.requestAuthorization { status in
@@ -60,6 +63,7 @@ final class Dictation {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
+        request.contextualStrings = hints
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         self.request = request
 

@@ -17,6 +17,12 @@ export function nativeBridge(w: unknown = typeof window === 'undefined' ? undefi
   return (w as WebkitWindow | undefined)?.webkit?.messageHandlers?.trialog ?? null;
 }
 
+/** Each word once (ignoring case), empty ones dropped: «Grok» and «grok» are one hint. */
+export function uniqueWords(words: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return words.map((w) => w.trim()).filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase()));
+}
+
 /** The draft with the spoken words after what was there when you started: one space between. */
 export function withSpoken(before: string, spoken: string): string {
   const said = spoken.trim();
@@ -29,7 +35,7 @@ export function withSpoken(before: string, spoken: string): string {
  * `available` only inside the app. `toggle` starts or stops listening; while listening, every update
  * of the words calls `onText` with the whole draft (what was there + what was said so far).
  */
-export function useDictation(draft: string, onText: (draft: string) => void): { available: boolean; listening: boolean; error: string; toggle: () => void } {
+export function useDictation(draft: string, onText: (draft: string) => void, hints: readonly string[] = []): { available: boolean; listening: boolean; error: string; toggle: () => void } {
   const [available, setAvailable] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState('');
@@ -38,6 +44,8 @@ export function useDictation(draft: string, onText: (draft: string) => void): { 
   draftRef.current = draft;
   const onTextRef = useRef(onText);
   onTextRef.current = onText;
+  const hintsRef = useRef(hints);
+  hintsRef.current = hints;
 
   useEffect(() => {
     if (!nativeBridge()) return undefined;
@@ -60,7 +68,8 @@ export function useDictation(draft: string, onText: (draft: string) => void): { 
       setListening(false);
     } else {
       before.current = draftRef.current;
-      bridge.postMessage({ type: 'dictate', action: 'start' });
+      // The team's names as hints, so the phone hears «Grok», not «crack» (playground #1455).
+      bridge.postMessage({ type: 'dictate', action: 'start', words: uniqueWords(hintsRef.current).slice(0, 30) });
       setListening(true);
     }
   }, [listening]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeBridge, withSpoken } from '../app/dictation';
+import { nativeBridge, uniqueWords, withSpoken } from '../app/dictation';
 
 describe('dictation in the iPhone app', () => {
   it('puts the spoken words after the draft, one space between', () => {
@@ -16,5 +16,11 @@ describe('dictation in the iPhone app', () => {
     expect(nativeBridge({ webkit: { messageHandlers: {} } })).toBeNull();
     expect(nativeBridge({})).toBeNull();
     expect(nativeBridge(undefined)).toBeNull();
+  });
+});
+
+describe('dictation hints', () => {
+  it('sends the team\'s names to the phone once each (#1455)', () => {
+    expect(uniqueWords(['Grok', 'grok', 'Claude', ' ', 'claude', 'Orchestrator', 'david'])).toEqual(['Grok', 'Claude', 'Orchestrator', 'david']);
   });
 });

@@ -84,7 +84,9 @@ struct HubView: UIViewRepresentable {
             if type == "dictate", let action = body["action"] as? String {
                 if action == "stop" { return dictation.stop() }
                 guard action == "start" else { return }
-                dictation.start { [weak view = message.webView] text, final, error in
+                // The team's names as hints for the recogniser (playground #1455), at most 30 short words.
+                let words = (body["words"] as? [Any] ?? []).compactMap { $0 as? String }.filter { !$0.isEmpty && $0.count <= 40 }.prefix(30)
+                dictation.start(hints: Array(words)) { [weak view = message.webView] text, final, error in
                     view?.evaluateJavaScript(Self.dictationCall(text: text, final: final, error: error))
                 }
             }
