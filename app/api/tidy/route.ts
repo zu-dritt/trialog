@@ -1,5 +1,5 @@
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
-import { tidy } from '../../../lib/tidy';
+import { TIDY_PER_MINUTE, tidy, underLimit } from '../../../lib/tidy';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -25,6 +25,7 @@ export const POST = safe(async (request: Request) => {
   if (bad) return bad;
   const text = (body as { text?: unknown } | null)?.text;
   if (typeof text !== 'string') return error(400, 'Body must be {"text": "…"}.');
+  if (!underLimit(me)) return error(429, `At most ${TIDY_PER_MINUTE} tidies a minute. Your text is unchanged.`, { 'Retry-After': '60' });
   const result = await tidy(text);
   if (!result.ok) return error(result.status, result.error);
   console.log(`[tidy] ${me} chars=${[...text].length} in=${result.usage.input_tokens} out=${result.usage.output_tokens}`);

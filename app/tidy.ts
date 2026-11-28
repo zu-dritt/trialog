@@ -3,7 +3,7 @@
 // «✨ Tidy» under the message box (lib/tidy.ts, hub decision 1420): an AI model tidies the draft, the
 // tidied text replaces it in the box, and «↩ Undo» brings the original back until you edit again.
 // Nothing is sent: you read it, then press Send. Offered only when the hub has an API key.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type ApiFn = (path: string, options?: RequestInit) => Promise<Response>;
 
@@ -19,6 +19,9 @@ export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [undo, setUndo] = useState<{ before: string; after: string } | null>(null);
+  // The draft as it is now, so an answer for an older draft is dropped (Grok's nit on PR 154).
+  const current = useRef(draft);
+  current.current = draft;
   useEffect(() => {
     if (!api) return;
     let gone = false;
@@ -35,6 +38,7 @@ export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: strin
       const res = await api('/api/tidy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: draft }) });
       const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
       if (!res.ok || typeof data.text !== 'string') { setError(data.error || `Tidy didn't work (HTTP ${res.status}). Your text is unchanged.`); return; }
+      if (current.current !== draft) { setError('You changed the text while it was being tidied, so it stays as you wrote it. Press Tidy again.'); return; }
       setUndo({ before: draft, after: data.text });
       setDraft(data.text);
     } catch (e) {
