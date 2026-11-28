@@ -5,8 +5,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { defaultSecondRoom, readSplit, splitFits, splitKey, writeSplit, SPLIT_MIN_WIDTH_PX } from '../app/split';
-import { SplitToggle } from '../app/split-ui';
-import { RoomPicker } from '../app/pane';
+import { PaneRoomBar, SplitToggle } from '../app/split-ui';
 import { seenElsewhere } from '../app/rooms';
 
 function storage(initial: Record<string, string> = {}) {
@@ -74,13 +73,20 @@ test('the toggle says whether two rooms are shown, and why it may be unusable', 
   assert.match(tight, /Split view needs a wider window/);
 });
 
-test('the second pane picker names the room in that pane', () => {
+test('each pane has the same room bar: the tabs of every room, its own room marked, and +', () => {
   const rooms = [
     { id: 'main', name: 'Main', created_at: '', created_by: 'hub', last_id: 0 },
     { id: 'calm', name: 'Calm', created_at: '', created_by: 'hub', last_id: 0, unread: 3 },
   ];
-  const html = renderToStaticMarkup(<RoomPicker rooms={rooms} current="calm" onPick={() => {}} />);
-  assert.match(html, /aria-label="Room in this pane"/);
-  assert.match(html, /<option[^>]*value="calm"[^>]*>Calm \(3\)<\/option>/);
-  assert.match(html, /<option[^>]*value="main"[^>]*>Main<\/option>/);
+  const never = async () => '';
+  const left = renderToStaticMarkup(<PaneRoomBar side="lead" rooms={rooms} current="main" onPick={() => {}} onCreate={never} />);
+  const right = renderToStaticMarkup(<PaneRoomBar side="side" rooms={rooms} current="calm" onPick={() => {}} onCreate={never} />);
+  assert.match(left, /aria-label="Rooms, left pane"/);
+  assert.match(right, /aria-label="Rooms, right pane"/);
+  // The same bar at the same fixed height on both sides, so the two rooms start on one line.
+  for (const html of [left, right]) assert.match(html, /^<div class="flex h-11 shrink-0 items-center border-b border-line px-3"/);
+  // The open room is marked; the other shows what is new there; + makes a room.
+  assert.match(right, /aria-current="page"[^>]*>.*?Calm/);
+  assert.match(left, />3</);
+  assert.match(left, /aria-label="New room"/);
 });

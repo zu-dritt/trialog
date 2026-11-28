@@ -1,4 +1,4 @@
-// One room in the hub UI: its live messages, its composer, and (in split view) its room picker.
+// One room in the hub UI: its live messages, its composer, and (in split view) its room bar.
 // The page can show one pane or two side by side; each pane talks to the server for its own room.
 
 'use client';
@@ -6,13 +6,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Message, Poll, Sender } from '../lib/core';
 import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } from '../lib/shared';
-import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, firstLine, labelOf, formatSeen, type Participant } from '../lib/shared';
+import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
+import { eitherSignal, watchNap } from './nap';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
-import { DecisionBadge, isDecision, pinnedListTitle } from './decision';
+import { DecisionBadge, isDecision } from './decision';
+import { PinnedBar } from './pinned-bar';
+import { Guard } from './guard';
 import { insertAtCursor } from './emoji';
-import { MessageBody } from './markdown';
+import { MentionColors, MessageBody } from './markdown';
+import { leadingHandle } from './mentions';
 import { ChipRow } from './chips';
 import { PollCard, PollComposer, withPolls } from './polls';
 import { DecisionCardView, DecisionComposer, withDecisions } from './decisions';
@@ -21,6 +25,10 @@ import {
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
+import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
+import { SHIP_EMOJI, ShipIt } from './ship';
+import { BuildIt, isBuildableMessage } from './build-it';
+import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
 import { ReadReceipts, UnseenFlag, applyReads, useUnseenClock, useVisibleReadMarker } from './reads';
 import { heldBack, markSeen, readSeen, seenElsewhere, seenKey, settled } from './rooms';
@@ -157,6 +165,9 @@ export function RoomPane({
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const cursorAfterInsert = useRef<number | null>(null);
   const markTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Keyboard shortcuts (app/shortcuts.tsx): the message chosen with j / k, and the «?» list.
+  const [selected, setSelected] = useState<number | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const replyToRef = useRef<Message | null>(null);
@@ -231,6 +242,9 @@ export function RoomPane({
     if (!token) return undefined;
     let stopped = false;
     const abort = new AbortController();
+    // The open stream's own switch: a nap (the tab hidden for 15 minutes) ends it, so the database can sleep.
+    let conn = new AbortController();
+    const nap = watchNap(document, () => conn.abort());
     lastId.current = 0;
     setMessages([]);
     setPinned([]);
@@ -350,7 +364,8 @@ export function RoomPane({
       toldStream = seenOfOthers();
       let firstRooms = true;
       const query = params.toString() ? `?${params}` : '';
-      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: abort.signal });
+      conn = new AbortController();
+      const res = await api(`/api/stream${query}`, { headers: { Accept: 'text/event-stream' }, signal: eitherSignal(abort.signal, conn.signal) });
       if (!res.body) throw new Error('no stream');
       const opened = Date.now();
       let goodbye = false;
@@ -388,6 +403,11 @@ export function RoomPane({
 
     const run = async () => {
       while (!stopped) {
+        if (nap.napping) {
+          if (lead) setStatus?.('live · napping while hidden');
+          await nap.awake(abort.signal);
+          if (stopped) return;
+        }
         let clean = false;
         try {
           await loadParticipants();
@@ -397,9 +417,9 @@ export function RoomPane({
           if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
         }
         if (stopped) return;
-        if (clean) continue;
+        if (clean || nap.napping) continue;
         const until = Date.now() + FALLBACK_MS;
-        while (!stopped && Date.now() < until) {
+        while (!stopped && !nap.napping && Date.now() < until) {
           try {
             await pollOnce();
             if (!stopped && lead) setStatus?.('live · polling');
@@ -412,7 +432,7 @@ export function RoomPane({
       }
     };
     void run();
-    return () => { stopped = true; abort.abort(); if (lead) window.removeEventListener('storage', onStorage); };
+    return () => { stopped = true; abort.abort(); nap.stop(); if (lead) window.removeEventListener('storage', onStorage); };
   }, [token, api, room, lead, onMissingRoom, setMe, setParticipants, setRooms, setSeenChanged, setServerBuild, setSetupError, setStatus]);
 
   useEffect(() => { onHeard?.(messages, primed); }, [messages, primed, onHeard]);
@@ -524,7 +544,10 @@ export function RoomPane({
     }
     boxRef.current?.focus();
   };
-  const cancelQuote = (how: 'escape' | 'outside') => {
+  const cancelQuote = (how: 'escape' | 'outside', comment = '') => {
+    // Nothing typed is thrown away: a new quote with words in its comment is kept as a chip (its ×
+    // removes it). Editing an existing chip's comment and cancelling keeps the comment it had.
+    if (commenting?.key === null && comment.trim()) { finishQuote(comment); return; }
     setCommenting(null);
     if (how === 'escape') boxRef.current?.focus();
   };
@@ -608,6 +631,45 @@ export function RoomPane({
     clearTimeout(markTimer.current);
     markTimer.current = setTimeout(() => setMarked(null), 2000);
   };
+
+  // Only the leading pane listens, so in Split view one key press moves one selection.
+  useShortcuts(lead, (action) => {
+    switch (action) {
+      case 'next':
+      case 'previous': {
+        const id = stepTo(messages.map((m) => m.id), selected, action);
+        if (id === null) return false;
+        setSelected(id);
+        const el = listRef.current?.querySelector(`#m-${id}`);
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return true;
+      }
+      case 'reply': {
+        const m = messages.find((x) => x.id === selected);
+        if (!m) return false;
+        startReply(m);
+        return true;
+      }
+      case 'compose': boxRef.current?.focus(); return true;
+      case 'search': {
+        // By a data attribute, not the label (PR 98 renamed it and «/» stopped working). On a phone the
+        // field is folded away behind the magnifier: open it first (Grok's nit on PR 79).
+        const field = document.querySelector<HTMLInputElement>('input[data-search-field]');
+        if (!field) return false;
+        if (field.offsetParent === null) {
+          document.querySelector<HTMLButtonElement>('button[data-search-opener]')?.click();
+          requestAnimationFrame(() => field.focus());
+        } else field.focus();
+        return true;
+      }
+      case 'help': setHelpOpen((v) => !v); return true;
+      case 'escape':
+        if (helpOpen) { setHelpOpen(false); return true; }
+        if (selected !== null) { setSelected(null); return true; }
+        return false;
+      default: return false;
+    }
+  });
 
   const goToMessage = async (id: number) => {
     if (listRef.current?.querySelector(`#m-${id}`) || document.getElementById(`m-${id}`)) { jumpTo(id); onJumped?.(); return; }
@@ -789,6 +851,8 @@ export function RoomPane({
   const byId = new Map(messages.map((m) => [m.id, m]));
   let lastDay = '';
   const color = (name: string) => colorOf(name, participants);
+  // The «to» picker wins over an @name, as in the API; without it the @name at the start addresses.
+  const handle = to ? { kind: 'none' as const } : leadingHandle(draft, names);
   const shown = (name: string) => labelOf(name, participants);
   const others = participants.filter((p) => p.name !== me).slice(0, 2).map((p) => `@${p.name}`);
   const addressHint = `${others.length ? others.join(' / ') : '@name'} to address`;
@@ -799,21 +863,7 @@ export function RoomPane({
     // The tour points at the controls of the leading pane only (data-tour-pane).
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-tour-pane={lead ? 'lead' : 'side'} {...dropHandlers}>
       {picker}
-      {pinned.length > 0 && (
-        <section className="max-h-[25vh] overflow-auto border-b border-line bg-[#1a1712] px-4 py-2">
-          <h2 className="mb-1 text-xs font-bold uppercase tracking-[.08em] text-decision">{pinnedListTitle(pinned, names)}</h2>
-          <ul className="text-sm">
-            {pinned.map((m) => (
-              <li key={m.id} className="overflow-hidden text-ellipsis whitespace-nowrap">
-                <a href={`#m-${m.id}`} onClick={(e) => { e.preventDefault(); void goToMessage(m.id); }}>#{m.id}</a>{' '}
-                <span className="font-bold" style={{ color: color(m.sender) }}>{shown(m.sender)}</span>{' '}
-                {isDecision(m.text, names, m.decision) && <><DecisionBadge />{' '}</>}
-                <span>{firstLine(m, 160)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <PinnedBar list={pinned} names={names} color={color} shown={shown} onJump={(id) => { void goToMessage(id); }} />
 
       {quotable && quotedMessage && !commenting && (
         <QuoteSelectionButton at={quotable} onQuote={() => startQuote(quotedMessage, quotable.text, { top: quotable.top, left: quotable.left })} />
@@ -825,7 +875,9 @@ export function RoomPane({
         />
       )}
 
-      <main className="flex-1 overflow-y-auto px-4 py-3" ref={listRef} onScroll={onScroll}>
+      <MentionColors.Provider value={color}>
+      {/* Never sideways (playground #857): a wide message wraps or scrolls in its own box, so no grey bar shows above the strip. */}
+      <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 && roomInfo && roomInfo.id !== MAIN_ROOM && roomInfo.last_id === 0 && (
           <p className="mt-[18vh] text-center text-sm text-muted">Nothing in {roomInfo.name} yet. The first message is yours.</p>
         )}
@@ -842,14 +894,15 @@ export function RoomPane({
               <article
                 id={`m-${m.id}`}
                 tabIndex={-1}
-                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`}
+                className={`group flex gap-2.5 rounded border-l-[3px] px-2.5 py-2 outline-none transition-shadow duration-300 ${isPinned ? 'bg-[#1f1b12]' : 'hover:bg-panel'} ${marked === m.id || selected === m.id ? 'shadow-[inset_0_0_0_2px_var(--color-accent)]' : ''}`} data-selected={selected === m.id ? '' : undefined}
                 style={{ borderLeftColor: own }}
               >
                 <div className="grid h-[30px] w-[30px] flex-none place-items-center rounded-full text-sm font-bold text-bg" style={{ backgroundColor: own }}>
                   {shown(m.sender)[0] ?? '?'}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 text-[13px] text-muted">
+                  {/* It wraps only when the line is too long, as on a phone; then the actions go to a second line. */}
+                  <div className="flex flex-wrap items-baseline gap-2 text-[13px] text-muted">
                     <span className="font-bold" style={{ color: own }}>{shown(m.sender)}</span>
                     {m.recipient && (
                       <span className={m.recipient === me ? 'font-semibold text-fg' : ''}>→ {shown(m.recipient)}</span>
@@ -869,7 +922,7 @@ export function RoomPane({
                         className={actionClass}
                       />
                       <button
-                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
+                        className={`cursor-pointer rounded border-none bg-transparent px-1.5 text-[13px] ${isPinned ? 'opacity-100' : 'opacity-40 grayscale hover:text-fg focus-visible:opacity-100 group-hover:opacity-100'}`}
                         title={isPinned ? 'Unpin this message' : 'Pin this message'}
                         aria-label={isPinned ? 'Unpin this message' : 'Pin this message'}
                         aria-pressed={isPinned}
@@ -896,7 +949,7 @@ export function RoomPane({
                   })()}
                   {m.text.trim() !== '' && !(m.poll && m.text === m.poll.question) && (
                     <div className="md wrap-anywhere" {...{ [MESSAGE_TEXT_ATTRIBUTE]: m.id }}>
-                      <MessageBody text={m.text} />
+                      <MessageBody text={m.text} names={names} />
                     </div>
                   )}
                   {m.poll && (
@@ -917,7 +970,17 @@ export function RoomPane({
                     />
                   )}
                   <MessageImages attachments={m.attachments ?? []} load={loadImage} />
-                  <ReactionBar message={m} me={me} participants={participants} onToggle={(emoji, on) => { void toggleReaction(m, emoji, on); }} />
+                  {(() => {
+                    const onToggle = (emoji: string, on: boolean) => { void toggleReaction(m, emoji, on); };
+                    const ship = linksPullRequest(m.text);
+                    const build = isBuildableMessage(m, participants, ship);
+                    return (
+                      <ReactionBar message={m} me={me} participants={participants} onToggle={onToggle} hide={ship ? [SHIP_EMOJI] : []}>
+                        {ship && <ShipIt message={m} me={me} participants={participants} onToggle={onToggle} />}
+                        {build && <BuildIt message={m} me={me} participants={participants} api={api} />}
+                      </ReactionBar>
+                    );
+                  })()}
                   <ReadReceipts messageId={m.id} reads={reads} participants={participants} me={me} />
                   <UnseenFlag message={m} reads={reads} participants={participants} now={unseenNow} />
                 </div>
@@ -926,8 +989,10 @@ export function RoomPane({
           );
         })}
       </main>
+      </MentionColors.Provider>
 
       {statusBar}
+      {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
 
       <footer className={`relative border-t px-4 py-2.5 ${dragging ? 'border-accent bg-panel' : 'border-line'}`}>
         {dragging && <div className="mb-1.5 text-[13px] text-accent">Drop the image to attach it.</div>}
@@ -975,8 +1040,31 @@ export function RoomPane({
               addImages(files, true);
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-            className={`${FIELD} block min-h-[60px] w-full resize-none`}
+            className={`${FIELD} block min-h-[60px] w-full resize-none ${handle.kind === 'unknown' ? 'border-bad' : ''}`}
+            aria-describedby={handle.kind === 'none' ? undefined : `handle-${room}`}
           />
+          {/* What the @name at the start does, before Send: who it goes to, or that no one has that name. */}
+          {handle.kind === 'known' && (
+            <p id={`handle-${room}`} className="-mt-1 text-xs text-muted">
+              <span className="font-semibold" style={{ color: color(handle.name) }}>→ {shown(handle.name)}</span>{' '}
+              {participants.find((p) => p.name === handle.name)?.kind === 'agent' ? 'will be woken' : 'is addressed'}
+            </p>
+          )}
+          {handle.kind === 'unknown' && (
+            <p id={`handle-${room}`} role="status" className="-mt-1 text-xs text-bad">
+              @{handle.typed}: no such participant.
+              {handle.suggestion && (
+                <>
+                  {' '}Did you mean{' '}
+                  <button
+                    type="button" className="cursor-pointer border-none bg-transparent p-0 font-semibold underline"
+                    style={{ color: color(handle.suggestion) }}
+                    onClick={() => { setDraft((d) => d.replace(/^(\s*)@[A-Za-z0-9][A-Za-z0-9_-]*/, `$1@${handle.suggestion}`)); boxRef.current?.focus(); }}
+                  >@{handle.suggestion}</button>?
+                </>
+              )}
+            </p>
+          )}
           <input
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
@@ -989,34 +1077,12 @@ export function RoomPane({
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
             send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
+            // In split view the ring is shown once, in the leading pane: the guard is the hub's, not the room's.
+            guard={lead && token ? <Guard api={api} participants={participants} /> : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>
       </footer>
-    </div>
-  );
-}
-
-export function RoomPicker({ rooms, current, onPick }: {
-  rooms: readonly Room[];
-  current: string;
-  onPick: (id: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
-      <label className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-        <span className="shrink-0 text-muted">Room</span>
-        <select
-          className={`${FIELD} min-w-0 flex-1 py-1`}
-          value={current}
-          aria-label="Room in this pane"
-          onChange={(e) => onPick(e.target.value)}
-        >
-          {rooms.map((r) => (
-            <option key={r.id} value={r.id}>{r.name}{r.unread ? ` (${r.unread > 99 ? '99+' : r.unread})` : ''}</option>
-          ))}
-        </select>
-      </label>
     </div>
   );
 }

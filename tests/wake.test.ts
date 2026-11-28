@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { parseParticipants } from '../lib/participants';
 import {
-  ENV_WAKE_PARTICIPANT, assertPublicWakeUrl, isInternalHostname, messagePreview, parseWakeTarget, publicDeliveryError,
+  ENV_WAKE_PARTICIPANT, assertPublicWakeUrl, isInternalHostname, isInternalIp, messagePreview, parseWakeTarget, publicDeliveryError,
   setWakeDnsForTests, wakeupPayload, wakeTargetHost, webhookConfig, whoToWake,
 } from '../lib/webhook';
 
@@ -160,4 +160,25 @@ test('assertPublicWakeUrl resolves DNS and rejects if any address is internal', 
   assert.equal(literal.ok, false);
   assert.equal(lookedUp, 0, 'IP literals are rejected without a lookup');
   setWakeDnsForTests(null);
+});
+
+test('review fixes: more internal ranges are refused (IPv4-compatible, NAT64, site-local, multicast, benchmarking, reserved)', () => {
+  for (const ip of ['::127.0.0.1', '::a00:1', '64:ff9b::7f00:1', 'fec0::1', 'ff02::1', '198.18.0.1', '198.19.255.254', '224.0.0.1', '240.0.0.1', '255.255.255.255']) {
+    assert.equal(isInternalIp(ip), true, ip);
+  }
+  for (const ip of ['2606:4700::1111', '1.1.1.1', '198.20.0.1', '223.255.255.254']) {
+    assert.equal(isInternalIp(ip), false, ip);
+  }
+});
+
+test('review fixes: the stored URL and the secret are measured as the database measures them', () => {
+  // 700 «ä» are 723 characters typed, but 4200+ once the URL is normalised: refused before the database sees it.
+  const long = `https://example.com/${'ä'.repeat(700)}`;
+  assert.ok(long.length < 2048);
+  assert.deepEqual(parseWakeTarget({ url: long, secret: 'x'.repeat(32) }), { ok: false, error: 'The URL is too long.' });
+  // 10 emoji are 20 UTF-16 units but 10 characters for Postgres: too short.
+  const emoji = '🔑'.repeat(10);
+  assert.equal(emoji.length, 20);
+  assert.equal(parseWakeTarget({ url: 'https://example.com/hook', secret: emoji }).ok, false);
+  assert.equal(parseWakeTarget({ url: 'https://example.com/hook', secret: '🔑'.repeat(16) }).ok, true);
 });

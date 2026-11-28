@@ -179,15 +179,15 @@ export function SearchBox({ search, onPick, participants, rooms }: Look & {
       onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node | null)) close(false); }}
     >
       <button
-        ref={opener} type="button" aria-label="Search messages" title="Search messages" aria-expanded={bar}
+        ref={opener} type="button" data-search-opener="" aria-label="Search messages and decisions" title="Search messages and decisions" aria-expanded={bar}
         onClick={() => { setBar(true); setOpen(true); }}
         className="cursor-pointer rounded-md border border-line bg-transparent p-[7px] text-muted hover:text-fg md:hidden"
       ><Magnifier /></button>
-      <div className={`${bar ? 'max-md:flex' : 'max-md:hidden'} min-w-0 items-center gap-2 max-md:fixed max-md:inset-x-0 max-md:top-0 max-md:z-40 max-md:border-b max-md:border-line max-md:bg-bg max-md:px-4 max-md:py-2.5 md:relative md:flex md:w-full md:max-w-[320px]`}>
+      <div className={`${bar ? 'max-md:flex' : 'max-md:hidden'} min-w-0 items-center gap-2 max-md:fixed max-md:inset-x-0 max-md:top-0 max-md:z-40 max-md:border-b max-md:border-line max-md:bg-bg max-md:px-4 max-md:py-2.5 max-md:pt-[calc(0.625rem+env(safe-area-inset-top))] md:relative md:flex md:w-full md:max-w-[520px]`}>
         <input
-          ref={field} type="search" role="combobox" aria-label="Search messages" aria-autocomplete="list"
+          ref={field} type="search" data-search-field="" role="combobox" aria-label="Search messages and decisions" aria-autocomplete="list"
           aria-expanded={open} aria-controls={results.length ? listId : undefined} aria-activedescendant={activeId}
-          placeholder="Search" autoComplete="off" spellCheck={false} maxLength={400}
+          placeholder="Search messages and decisions (/)" autoComplete="off" spellCheck={false} maxLength={400}
           value={text} onChange={(e) => change(e.target.value, decisionsOnly)} onFocus={() => setOpen(true)}
           className="w-full min-w-0 rounded-md border border-line bg-panel px-2.5 py-[5px] text-[13px] placeholder:text-muted"
         />

@@ -11,11 +11,15 @@ import {
   MAIN_ROOM, MAX_ROOMS, ROOM_NAME_MAX_LENGTH,
   MAX_ATTACHMENT_BYTES, NAME_PATTERN, ORPHAN_MAX_AGE_MS, RATE_LIMIT_PER_MIN, RECENTLY_CLOSED_MS, UPLOADS_PER_HOUR, WAKE_TEST_PER_MIN, welcomeText,
   pollResultText, decisionIsAgreed, decisionPositionText,
-  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
+  type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Flight, type FlightState, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
-import { DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
+import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
+import { isDemo } from './demo';
+import type { StreakBreak } from './streak';
+import { ROADMAP_MAX_ITEMS, sortRoadmap, type ClaimResult, type RoadmapColumn, type RoadmapItem } from './roadmap';
 import { SEARCH_LIMIT, likePattern, matchesAll } from './search';
+import type { ActivityRow } from './guard';
 
 export type Row = Record<string, unknown>;
 export interface Queryable {
@@ -55,6 +59,8 @@ export interface StoredAttachment extends Attachment {
   sender: Sender;
   /** null until a message links it. */
   message_id: number | null;
+  /** The roadmap card it is a picture of, or null (migrations/018). */
+  roadmap_item_id?: string | null;
 }
 /** Thrown by add() when an attachment can't be linked. Nothing is stored in that case. */
 /** Thrown by add() when `reply_to` names a message that does not exist. Nothing is stored in that case. */
@@ -86,7 +92,7 @@ export class AttachmentLinkError extends Error {
     super({
       unknown: `Attachment ${attachmentId} does not exist (uploads that are not linked within an hour are deleted).`,
       'not yours': `Attachment ${attachmentId} was uploaded by someone else. You can only attach your own uploads.`,
-      'already linked': `Attachment ${attachmentId} already belongs to a message.`,
+      'already linked': `Attachment ${attachmentId} already belongs to a message or a roadmap card.`,
     }[reason]);
     this.name = 'AttachmentLinkError';
   }
@@ -330,6 +336,36 @@ export interface Store {
   clearStatus(participant: Sender): Promise<boolean>;
   /** Active (non-expired) statuses for all participants; lazily drops expired rows. */
   listStatuses(): Promise<ParticipantStatus[]>;
+  /** Sets the caller's work in flight. `since` stays when state and text are the same as before. */
+  setFlight(input: { participant: Sender; state: FlightState; text: string }): Promise<Flight>;
+  /** Everyone's work in flight, with when each last wrote (within a day), by name. */
+  listFlights(): Promise<Flight[]>;
+  /** Ends the streak: who stepped in or asked for help, and why (lib/streak.ts). */
+  addStreakBreak(input: { participant: Sender; reason: string }): Promise<StreakBreak>;
+  /** Every break, oldest first. */
+  listStreakBreaks(): Promise<StreakBreak[]>;
+  /** The roadmap (lib/roadmap.ts), by column and position. */
+  listRoadmap(): Promise<RoadmapItem[]>;
+  /** A new card at the end of its column; null when the roadmap is full. */
+  /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
+  addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null }): Promise<RoadmapItem | null>;
+  /**
+   * Adds a card, or returns the existing one when `sameAs` already matches, inside the same
+   * transaction and advisory lock as a normal add — so two calls at the same moment cannot
+   * create two cards.
+   */
+  addRoadmapItemOnce(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null; sameAs: (item: RoadmapItem) => boolean }): Promise<{ item: RoadmapItem; created: boolean } | null>;
+  /** Changes a card; a new column puts it at the end there. Null when there is no such card. */
+  updateRoadmapItem(id: string, change: Partial<Pick<RoadmapItem, 'column' | 'title' | 'note' | 'owner' | 'description' | 'reviewer'>>, by: Sender): Promise<RoadmapItem | null>;
+  deleteRoadmapItem(id: string): Promise<boolean>;
+  /** A lock: the card becomes `by`'s if it has no owner (or is already theirs); otherwise «taken» and nothing changes. */
+  claimRoadmapItem(id: string, by: Sender, note: string | null): Promise<ClaimResult>;
+  /** Lets go of a card: only its owner can; the owner goes back to none. */
+  releaseRoadmapItem(id: string, by: Sender): Promise<ClaimResult>;
+  /** The owner says how far it is (0–100, null to clear) and how, in a short line. Someone else's card: «taken». */
+  setRoadmapProgress(id: string, by: Sender, progress: number | null, status: string | null, human?: boolean): Promise<ClaimResult>;
+  /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
+  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -385,7 +421,18 @@ export interface Store {
   setReadPosition(participant: Sender, upTo: number, room?: string | null): Promise<ReadPosition>;
   /** The read positions of one room, or of every room when none is named. For the opt-in list and the stream. */
   listReads(room?: string | null): Promise<ReadPosition[]>;
+  /**
+   * The messages of every room created at or after `since` (milliseconds), in id order, as much
+   * as the loop and cost guard needs of them (lib/guard.ts): id, sender, time, and the start of
+   * the text for the hub's own messages. At most ACTIVITY_LIMIT rows, the newest.
+   */
+  recentActivity(since: number): Promise<ActivityRow[]>;
 }
+
+/** The most rows recentActivity returns. Far more than any guard limit, so the counts that matter are always complete. */
+export const ACTIVITY_LIMIT = 10_000;
+/** How much of a hub message's text recentActivity includes: enough to recognise a guard notice. */
+export const ACTIVITY_HEAD_CHARS = 40;
 
 // Two instances that start at the same moment take turns at the one statement that may alter tables.
 const MIGRATION_LOCK_ID = 7230420;
@@ -411,8 +458,9 @@ const SCHEMA = [
      pinned_at  TIMESTAMPTZ
    )`,
   `CREATE INDEX IF NOT EXISTS messages_sender_created_at ON messages (sender, created_at)`,
-  // At most one welcome message, even if two instances start at once.
-  `CREATE UNIQUE INDEX IF NOT EXISTS messages_one_welcome ON messages (sender) WHERE sender = 'hub'`,
+  // There used to be a unique index here that allowed the hub one message, its welcome. The
+  // guard's notices are messages of the hub too, so migrations/013-guard.sql drops that index,
+  // and init() keeps the welcome to one with a lock instead.
   // v2 PR 2 (migrations/001-webhook-state.sql): one row holding the last message id Grok was woken for.
   `CREATE TABLE IF NOT EXISTS webhook_state (
      id               INT PRIMARY KEY CHECK (id = 1),
@@ -561,7 +609,10 @@ const SCHEMA = [
   `DO $$
    BEGIN
      PERFORM pg_advisory_xact_lock(7230421);
-     ALTER TABLE reactions DROP CONSTRAINT IF EXISTS reactions_participant_is_participant;
+     -- Only when it is there: the ALTER would lock the table on every cold start for nothing.
+     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_is_participant') THEN
+       ALTER TABLE reactions DROP CONSTRAINT reactions_participant_is_participant;
+     END IF;
      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_shape') THEN
        ALTER TABLE reactions ADD CONSTRAINT reactions_participant_shape CHECK (participant ~ ${NAME_SHAPE});
      END IF;
@@ -675,6 +726,52 @@ const SCHEMA = [
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$`,
+  // The loop and cost guard (migrations/013-guard.sql). The hub may now post more than its
+  // welcome message, and the guard counts the messages of the last 24 hours by their time.
+  `DROP INDEX IF EXISTS messages_one_welcome`,
+  `CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at)`,
+  // Work in flight (migrations/014-work-in-flight.sql): one row per participant, kept until changed.
+  `CREATE TABLE IF NOT EXISTS participant_flight (
+     participant TEXT PRIMARY KEY CONSTRAINT participant_flight_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'idle')),
+     text        TEXT NOT NULL CHECK (char_length(text) <= 80 AND (state = 'idle' OR char_length(text) >= 1)),
+     since       TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  // The streak (migrations/015-streak-breaks.sql): when the orchestrator had to step in, and why.
+  `CREATE TABLE IF NOT EXISTS streak_breaks (
+     id          BIGSERIAL PRIMARY KEY,
+     participant TEXT NOT NULL CONSTRAINT streak_breaks_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     reason      TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  // The roadmap (migrations/016-roadmap.sql): cards in four columns, in an order anyone can change.
+  `CREATE TABLE IF NOT EXISTS roadmap_items (
+     id          TEXT PRIMARY KEY CHECK (id ~ '^rm_[a-z0-9]{8,32}$'),
+     col         TEXT NOT NULL CHECK (col IN ('done', 'now', 'next', 'later')),
+     position    INT NOT NULL,
+     title       TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 80),
+     note        TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 120),
+     owner       TEXT CONSTRAINT roadmap_items_owner_shape CHECK (owner ~ ${NAME_SHAPE}),
+     updated_by  TEXT NOT NULL CONSTRAINT roadmap_items_updated_by_shape CHECK (updated_by ~ ${NAME_SHAPE}),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS roadmap_items_col_position ON roadmap_items (col, position)`,
+  // Progress on roadmap cards (migrations/017-roadmap-progress.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (progress IS NULL OR progress BETWEEN 0 AND 100)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ`,
+  // A description and pictures on roadmap cards (migrations/018-roadmap-details.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000)`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS reviewer TEXT CONSTRAINT roadmap_items_reviewer_shape CHECK (reviewer ~ ${NAME_SHAPE})`,
+  `CREATE TABLE IF NOT EXISTS roadmap_pictures (
+     attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
+     roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
+     position         SMALLINT NOT NULL DEFAULT 0
+   )`,
+  `CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position)`,
+  // Who raised each card (migrations/019-roadmap-raised-by.sql).
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS raised_by TEXT CONSTRAINT roadmap_items_raised_by_shape CHECK (raised_by ~ ${NAME_SHAPE})`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -722,10 +819,11 @@ const COLS = `${BASE_COLS},
      FROM attachments a WHERE a.message_id = messages.id) AS attachments,
   (SELECT ${POLL_JSON} FROM polls p WHERE p.message_id = messages.id) AS poll,
   (SELECT ${DECISION_JSON} FROM decision_cards c WHERE c.message_id = messages.id) AS decision,
-  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+  (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
      FROM (
        SELECT emoji,
               json_agg(participant ORDER BY created_at, participant) AS by,
+              json_agg(created_at ORDER BY created_at, participant) AS at,
               min(created_at) AS first_at
          FROM reactions
         WHERE message_id = messages.id
@@ -758,6 +856,7 @@ const ROOMS_FINGERPRINT_SQL = `(SELECT coalesce(string_agg(r.id || ':' || coales
 const ORPHAN_SECONDS = ORPHAN_MAX_AGE_MS / 1000;
 const newAttachmentId = (): string => `att_${randomBytes(12).toString('hex')}`;
 const newPollId = (): string => `poll_${randomBytes(12).toString('hex')}`;
+const newRoadmapId = (): string => `rm_${randomBytes(8).toString('hex')}`;
 const newDecisionId = (): string => `decision_${randomBytes(12).toString('hex')}`;
 // One entry per poll: messageId:voteCount:latest, so the stream can re-send only what changed.
 // `latest` is the newest of the last vote, the close time and the poll's created_at (so a vote
@@ -853,6 +952,43 @@ const toWakeDelivery = (r: Row): WakeDelivery => ({
   updated_at: iso(r.updated_at)!,
 });
 
+const toFlight = (r: Row): Flight => ({
+  participant: r.participant as Sender,
+  state: r.state as FlightState,
+  text: r.text as string,
+  since: iso(r.since) as string,
+  updated_at: iso(r.updated_at) as string,
+  last_message_at: iso(r.last_message_at) ?? null,
+});
+const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer, raised_by,
+  (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
+            'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY p.position, a.id), '[]'::json)
+     FROM roadmap_pictures p JOIN attachments a ON a.id = p.attachment_id WHERE p.roadmap_item_id = roadmap_items.id) AS attachments`;
+// The card an upload is a picture of, if any (roadmap_pictures).
+const CARD_OF = `(SELECT p.roadmap_item_id FROM roadmap_pictures p WHERE p.attachment_id = attachments.id) AS roadmap_item_id`;
+const toRoadmap = (r: Row): RoadmapItem => ({
+  id: String(r.id),
+  column: r.col as RoadmapColumn,
+  position: Number(r.position),
+  title: String(r.title),
+  note: String(r.note ?? ''),
+  owner: r.owner == null ? null : String(r.owner),
+  updated_by: String(r.updated_by),
+  updated_at: iso(r.updated_at) as string,
+  progress: r.progress == null ? null : Number(r.progress),
+  status: String(r.status ?? ''),
+  progress_at: iso(r.progress_at) ?? null,
+  description: String(r.description ?? ''),
+  reviewer: r.reviewer == null ? null : String(r.reviewer),
+  raised_by: r.raised_by == null ? null : String(r.raised_by),
+  attachments: (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments ?? [])).map(toAttachment),
+});
+const toBreak = (r: Row): StreakBreak => ({
+  id: Number(r.id),
+  participant: String(r.participant),
+  reason: String(r.reason),
+  created_at: iso(r.created_at) as string,
+});
 const toStatus = (r: Row): ParticipantStatus => ({
   participant: r.participant as Sender,
   text: r.text as string,
@@ -883,10 +1019,14 @@ const toPoll = (v: unknown): Poll | null => {
     created_at: iso(r.created_at) as string,
   };
 };
-const toReaction = (r: Row): Reaction => ({
-  emoji: r.emoji as string,
-  by: Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []),
-});
+const toReaction = (r: Row): Reaction => {
+  const by = Array.isArray(r.by) ? (r.by as Sender[]) : (typeof r.by === 'string' ? (JSON.parse(r.by) as Sender[]) : []);
+  const rawAt = typeof r.at === 'string' ? (() => { try { return JSON.parse(r.at as string) as unknown; } catch { return []; } })() : r.at;
+  const at = Array.isArray(rawAt)
+    ? rawAt.map((v) => iso(v)).filter((s): s is string => typeof s === 'string')
+    : [];
+  return at.length === by.length && at.length > 0 ? { emoji: r.emoji as string, by, at } : { emoji: r.emoji as string, by };
+};
 const toReactions = (v: unknown): Reaction[] => {
   const list = typeof v === 'string' ? (JSON.parse(v) as unknown) : v;
   return Array.isArray(list) ? (list as Row[]).map(toReaction) : [];
@@ -952,17 +1092,49 @@ export interface StoreOptions {
 }
 const defaultWelcome = (): string => welcomeText(parseParticipants(DEFAULT_PARTICIPANTS));
 
+type RoadmapTx = { query: (text: string, params: unknown[]) => Promise<Row[]> };
+type NewRoadmapItem = { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null };
+
+/** Inserts a card; the caller already holds the roadmap advisory lock. */
+async function insertRoadmapItem(tx: RoadmapTx, { column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }: NewRoadmapItem): Promise<RoadmapItem | null> {
+  const [{ n, next }] = await tx.query(`SELECT count(*)::int AS n, coalesce(max(position) FILTER (WHERE col = $1::text), -1) + 1 AS next FROM roadmap_items`, [column]);
+  if (Number(n) >= ROADMAP_MAX_ITEMS) return null;
+  // Pictures: the caller's own uploads, not yet on a message or a card. A failure throws and
+  // rolls everything back, so there is never a card with half its pictures.
+  if (attachments.length) {
+    const found = await tx.query(`SELECT id, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`, [attachments]);
+    for (const aid of attachments) {
+      const row = found.find((r) => r.id === aid);
+      if (!row) throw new AttachmentLinkError(aid, 'unknown');
+      if (row.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+      if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(aid, 'already linked');
+    }
+  }
+  // «top»: first in its column (an idea someone wants built next), else last.
+  if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
+  const id = newRoadmapId();
+  await tx.query(
+    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer, raised_by) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $7::text)`,
+    [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
+  );
+  for (const [position, aid] of attachments.entries()) {
+    await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
+  }
+  const [row] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+  return toRoadmap(row);
+}
+
 /** SQL store on top of a Db (pg in production, PGlite in tests). */
 export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcome = defaultWelcome() }: StoreOptions = {}): Store {
   let ready: Promise<void> | null = null;
   async function init() {
     for (const stmt of SCHEMA) await db.query(stmt, []);
-    await db.query(
-      `INSERT INTO messages (sender, text)
-       SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)
-       ON CONFLICT (sender) WHERE sender = 'hub' DO NOTHING`,
-      [welcome],
-    );
+    // Only an empty hub gets the welcome. The lock is the one every new message takes, so two
+    // instances that start at once can't both find the hub empty and both welcome it.
+    await db.transaction(async (tx) => {
+      await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
+      await tx.query(`INSERT INTO messages (sender, text) SELECT 'hub', $1::text WHERE NOT EXISTS (SELECT 1 FROM messages)`, [welcome]);
+    });
   }
   function ensure(): Promise<void> {
     if (!ready) {
@@ -1010,14 +1182,14 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const linked: Attachment[] = [];
         if (attachments.length) {
           const found = await tx.query(
-            `SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`,
+            `SELECT ${ATTACHMENT_COLS}, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`,
             [attachments],
           );
           for (const id of attachments) {
             const row = found.find((r) => r.id === id);
             if (!row) throw new AttachmentLinkError(id, 'unknown');
             if (row.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
-            if (row.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+            if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(id, 'already linked');
             linked.push(toAttachment(row));
           }
         }
@@ -1046,7 +1218,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         // Clean-up: uploads nobody linked within the hour. Linked attachments are never touched.
         const gone = await tx.query(
           `DELETE FROM attachments
-           WHERE message_id IS NULL AND created_at < now() - $1::int * interval '1 second' RETURNING id`,
+           WHERE message_id IS NULL AND NOT EXISTS (SELECT 1 FROM roadmap_pictures p WHERE p.attachment_id = attachments.id) AND created_at < now() - $1::int * interval '1 second' RETURNING id`,
           [ORPHAN_SECONDS],
         );
         removed = gone.map((r) => r.id as string);
@@ -1076,11 +1248,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
     },
     async getAttachment(id) {
       await ensure();
-      const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id FROM attachments WHERE id = $1::text`, [id]);
+      const [row] = await db.query(`SELECT ${ATTACHMENT_COLS}, sender, message_id, ${CARD_OF} FROM attachments WHERE id = $1::text`, [id]);
       if (!row) return null;
       const data = await blobs.get(db, id);
       if (!data) return null;
-      const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id) };
+      const attachment = { ...toAttachment(row), sender: row.sender as Sender, message_id: row.message_id === null ? null : Number(row.message_id), roadmap_item_id: row.roadmap_item_id == null ? null : String(row.roadmap_item_id) };
       return { attachment, data };
     },
     async list({ since = null, to = null, limit = 200, room = null } = {}) {
@@ -1391,6 +1563,157 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.length > 0;
     },
+    async setFlight({ participant, state, text }) {
+      await ensure();
+      // In DO UPDATE, participant_flight.* is the row as it was: the clock restarts only on a change.
+      const [row] = await db.query(
+        `INSERT INTO participant_flight (participant, state, text, since, updated_at)
+         VALUES ($1::text, $2::text, $3::text, now(), now())
+         ON CONFLICT (participant) DO UPDATE
+           SET since = CASE WHEN participant_flight.state = EXCLUDED.state AND participant_flight.text = EXCLUDED.text
+                            THEN participant_flight.since ELSE now() END,
+               state = EXCLUDED.state,
+               text = EXCLUDED.text,
+               updated_at = now()
+         RETURNING participant, state, text, since, updated_at,
+           (SELECT max(created_at) FROM messages m WHERE m.sender = $1::text AND m.created_at > now() - interval '1 day') AS last_message_at`,
+        [participant, state, text],
+      );
+      return toFlight(row);
+    },
+    async addStreakBreak({ participant, reason }) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO streak_breaks (participant, reason) VALUES ($1::text, $2::text) RETURNING id, participant, reason, created_at`,
+        [participant, reason],
+      );
+      return toBreak(row);
+    },
+    async listRoadmap() {
+      await ensure();
+      return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
+    },
+    async addRoadmapItem(input) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        return insertRoadmapItem(tx, input);
+      });
+    },
+    async addRoadmapItemOnce({ sameAs, ...input }) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const hit = (await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap).find(sameAs);
+        if (hit) return { item: hit, created: false };
+        const item = await insertRoadmapItem(tx, input);
+        return item ? { item, created: true } : null;
+      });
+    },
+    async updateRoadmapItem(id, change, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [cur] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return null;
+        const item = toRoadmap(cur);
+        const moved = change.column !== undefined && change.column !== item.column;
+        let position = item.position;
+        if (moved) {
+          const [{ next }] = await tx.query(`SELECT coalesce(max(position), -1) + 1 AS next FROM roadmap_items WHERE col = $1::text`, [change.column]);
+          position = Number(next);
+        }
+        const [row] = await tx.query(
+          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text, reviewer = $9::text
+           WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
+          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description, change.reviewer === undefined ? item.reviewer : change.reviewer],
+        );
+        return toRoadmap(row);
+      });
+    },
+    async claimRoadmapItem(id, by, note) {
+      await ensure();
+      // One statement decides: it only writes when the card is free or already the caller's, and not
+      // done. If it wrote nothing but the card is free when read (released in between), try once more.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const [row] = await db.query(
+          `UPDATE roadmap_items SET owner = $2::text, note = coalesce($3::text, note), updated_by = $2::text, updated_at = now()
+           WHERE id = $1::text AND col <> 'done' AND (owner IS NULL OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
+          [id, by, note],
+        );
+        if (row) return { status: 'ok', item: toRoadmap(row) };
+        const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return { status: 'not_found' };
+        const item = toRoadmap(cur);
+        if (item.column === 'done') return { status: 'done', item };
+        if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item };
+        if (attempt === 1) return { status: 'busy', item };
+      }
+      return { status: 'not_found' };
+    },
+    async setRoadmapProgress(id, by, progress, status, human = false) {
+      await ensure();
+      const [row] = await db.query(
+        `UPDATE roadmap_items SET progress = $3::smallint, status = COALESCE($4::text, status), progress_at = now(), updated_by = $2::text, updated_at = now()
+         WHERE id = $1::text AND ($5::boolean OR owner = $2::text) RETURNING ${ROADMAP_COLS}`,
+        [id, by, progress, status, human],
+      );
+      if (row) return { status: 'ok', item: toRoadmap(row) };
+      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+      if (!cur) return { status: 'not_found' };
+      const item = toRoadmap(cur);
+      return { status: 'taken', owner: item.owner ?? '', item };
+    },
+    async releaseRoadmapItem(id, by) {
+      await ensure();
+      const [row] = await db.query(
+        `UPDATE roadmap_items SET owner = NULL, updated_by = $2::text, updated_at = now() WHERE id = $1::text AND owner = $2::text RETURNING ${ROADMAP_COLS}`,
+        [id, by],
+      );
+      if (row) return { status: 'ok', item: toRoadmap(row) };
+      const [cur] = await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+      if (!cur) return { status: 'not_found' };
+      const item = toRoadmap(cur);
+      return item.owner === null ? { status: 'ok', item } : { status: 'taken', owner: item.owner, item };
+    },
+    async deleteRoadmapItem(id) {
+      await ensure();
+      // Its pictures go with it, at once (as in the memory store), not an hour later by the sweeper.
+      const { gone, pictures } = await db.transaction(async (tx) => {
+        const rows = await tx.query(`DELETE FROM attachments WHERE id IN (SELECT attachment_id FROM roadmap_pictures WHERE roadmap_item_id = $1::text) RETURNING id`, [id]);
+        const deleted = (await tx.query(`DELETE FROM roadmap_items WHERE id = $1::text RETURNING id`, [id])).length > 0;
+        return { gone: deleted, pictures: rows.map((r) => r.id as string) };
+      });
+      if (pictures.length) await blobs.delete(db, pictures);
+      return gone;
+    },
+    async reorderRoadmap(column, ids, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const have = (await tx.query(`SELECT id FROM roadmap_items WHERE col = $1::text`, [column])).map((r) => String(r.id));
+        if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
+        for (const [i, id] of ids.entries()) {
+          await tx.query(`UPDATE roadmap_items SET position = $2::int, updated_by = $3::text, updated_at = now() WHERE id = $1::text AND position <> $2::int`, [id, i, by]);
+        }
+        return sortRoadmap((await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE col = $1::text`, [column])).map(toRoadmap));
+      });
+    },
+    async listStreakBreaks() {
+      await ensure();
+      return (await db.query(`SELECT id, participant, reason, created_at FROM streak_breaks ORDER BY created_at, id`, [])).map(toBreak);
+    },
+    async listFlights() {
+      await ensure();
+      const rows = await db.query(
+        `SELECT f.participant, f.state, f.text, f.since, f.updated_at,
+           (SELECT max(created_at) FROM messages m WHERE m.sender = f.participant AND m.created_at > now() - interval '1 day') AS last_message_at
+         FROM participant_flight f
+         ORDER BY f.participant`,
+        [],
+      );
+      return rows.map(toFlight);
+    },
     async listStatuses() {
       await ensure();
       await db.query(`DELETE FROM participant_status WHERE expires_at <= now()`, []);
@@ -1580,10 +1903,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       const rows = await db.query(
         `SELECT message_id,
-                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by) ORDER BY g.first_at, g.emoji), '[]'::json)
+                (SELECT coalesce(json_agg(json_build_object('emoji', g.emoji, 'by', g.by, 'at', g.at) ORDER BY g.first_at, g.emoji), '[]'::json)
                    FROM (
                      SELECT emoji,
                             json_agg(participant ORDER BY created_at, participant) AS by,
+                            json_agg(created_at ORDER BY created_at, participant) AS at,
                             min(created_at) AS first_at
                        FROM reactions r2
                       WHERE r2.message_id = r.message_id
@@ -1756,6 +2080,22 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       );
       return rows.map(toRead);
     },
+    async recentActivity(since) {
+      await ensure();
+      // The newest rows first, so the cap cuts off the oldest; messages_created_at keeps it to the window.
+      const rows = await db.query(
+        `SELECT id, sender, created_at, CASE WHEN sender = 'hub' THEN left(text, ${ACTIVITY_HEAD_CHARS}) END AS head
+         FROM messages WHERE created_at >= $1::timestamptz
+         ORDER BY id DESC LIMIT ${ACTIVITY_LIMIT}`,
+        [new Date(since).toISOString()],
+      );
+      return rows.reverse().map((r) => ({
+        id: Number(r.id),
+        sender: String(r.sender),
+        created_at: iso(r.created_at) as string,
+        head: r.head == null ? null : String(r.head),
+      }));
+    },
   };
 }
 
@@ -1799,6 +2139,13 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const shaped = (name: string): string => {
     if (!NAME_PATTERN.test(name)) throw new Error('A stored name must have the shape of a participant name.');
     return name;
+  };
+  /** A participant's flight, with when they last wrote (within a day, as the SQL store). */
+  const flightOf = (participant: Sender): Flight => {
+    const cutoff = now() - 86_400_000;
+    let last: string | null = null;
+    for (const m of rows) if (m.sender === participant && Date.parse(m.created_at) > cutoff && (!last || m.created_at > last)) last = m.created_at;
+    return { ...flights.get(participant)!, last_message_at: last };
   };
   type PollRow = { id: string; message_id: number; creator: Sender; question: string; options: string[]; closed_at: string | null; created_at: string };
   type VoteRow = { poll_id: string; participant: Sender; option_index: number; created_at: string; updated_at: string };
@@ -1845,16 +2192,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   type ReactionRow = { message_id: number; participant: Sender; emoji: string; created_at: string };
   const reactionRows: ReactionRow[] = [];
   const reactionsOn = (messageId: number): Reaction[] => {
-    const grouped = new Map<string, { by: Sender[]; first: string; index: number }>();
+    const grouped = new Map<string, { by: Sender[]; at: string[]; first: string; index: number }>();
     for (const r of reactionRows) {
       if (r.message_id !== messageId) continue;
       const g = grouped.get(r.emoji);
-      if (g) g.by.push(r.participant);
-      else grouped.set(r.emoji, { by: [r.participant], first: r.created_at, index: grouped.size });
+      if (g) { g.by.push(r.participant); g.at.push(r.created_at); }
+      else grouped.set(r.emoji, { by: [r.participant], at: [r.created_at], first: r.created_at, index: grouped.size });
     }
     return [...grouped.entries()]
       .sort((a, b) => a[1].first.localeCompare(b[1].first) || a[1].index - b[1].index)
-      .map(([emoji, g]) => ({ emoji, by: g.by }));
+      .map(([emoji, g]) => ({ emoji, by: g.by, at: g.at }));
   };
   const reactionsFingerprint = (): string => {
     const byMessage = new Map<number, { n: number; latest: string }>();
@@ -1923,7 +2270,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     attachments: m.attachments.map((a) => ({ ...a })),
     poll: pollForMessage(m.id),
     decision: decisionForMessage(m.id),
-    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by] })),
+    reactions: reactionsOn(m.id).map((r) => ({ emoji: r.emoji, by: [...r.by], ...(r.at ? { at: [...r.at] } : {}) })),
   });
   let lastNotifiedId = 0; // like a fresh database; the welcome message never wakes Grok anyway
   const wakeTargets = new Map<string, { url: string; secret: string; updated_at: string }>();
@@ -1931,6 +2278,9 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   let wakeTestEvents: { participant: string; at: number }[] = [];
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
+  const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
+  const streakBreaks: StreakBreak[] = [];
+  const roadmap = new Map<string, RoadmapItem>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -1945,7 +2295,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         const upload = uploads.get(id);
         if (!upload) throw new AttachmentLinkError(id, 'unknown');
         if (upload.sender !== sender) throw new AttachmentLinkError(id, 'not yours');
-        if (upload.message_id !== null) throw new AttachmentLinkError(id, 'already linked');
+        if (upload.message_id !== null || upload.roadmap_item_id) throw new AttachmentLinkError(id, 'already linked');
         return upload;
       });
       const m = push({ sender: shaped(sender), recipient: recipient ? shaped(recipient) : null, text, pinned_at: pinned ? timestamp() : null, attachments: linked.map(meta), reply_to, room: target });
@@ -1955,14 +2305,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async addAttachment({ sender, content_type, width, height, data, scale = 1 }, limitPerHour = UPLOADS_PER_HOUR) {
       // The same check the database makes.
       if (!Number.isInteger(scale) || scale < 1 || scale > MAX_SCALE) throw new Error(`An image's scale must be a whole number from 1 to ${MAX_SCALE}.`);
-      const removed = [...uploads.values()].filter((u) => u.message_id === null && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
+      const removed = [...uploads.values()].filter((u) => u.message_id === null && !u.roadmap_item_id && u.created < now() - ORPHAN_MAX_AGE_MS).map((u) => u.id);
       for (const id of removed) uploads.delete(id);
       if (removed.length) await blobs.delete(noDb, removed);
       const recent = [...uploads.values()].filter((u) => u.sender === sender && u.created > now() - 60 * 60 * 1000).length;
       if (recent >= limitPerHour) return null;
       const attachment: Attachment = { id: newAttachmentId(), content_type, width, height, bytes: data.length, scale };
       await blobs.put(noDb, attachment.id, data);
-      uploads.set(attachment.id, { ...attachment, sender, message_id: null, created: now() });
+      uploads.set(attachment.id, { ...attachment, sender, message_id: null, roadmap_item_id: null, created: now() });
       return attachment;
     },
     async uploadsInLastHour(sender) {
@@ -1972,7 +2322,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const upload = uploads.get(id);
       const data = upload && (await blobs.get(noDb, id));
       if (!upload || !data) return null;
-      return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id }, data };
+      return { attachment: { ...meta(upload), sender: upload.sender, message_id: upload.message_id, roadmap_item_id: upload.roadmap_item_id ?? null }, data };
     },
     async list({ since = null, to = null, limit = 200, room = null } = {}) {
       const match = rows.filter((m) => (to === null || m.recipient === to) && (since === null || m.id > since) && (room === null || m.room === room));
@@ -2130,6 +2480,112 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async clearStatus(participant) {
       return statuses.delete(participant);
+    },
+    async setFlight({ participant, state, text }) {
+      const at = new Date(now()).toISOString();
+      const before = flights.get(participant);
+      const same = before && before.state === state && before.text === text;
+      flights.set(shaped(participant), { participant, state, text, since: same ? before.since : at, updated_at: at });
+      return flightOf(participant);
+    },
+    async addStreakBreak({ participant, reason }) {
+      const row: StreakBreak = { id: streakBreaks.length + 1, participant: shaped(participant), reason, created_at: new Date(now()).toISOString() };
+      streakBreaks.push(row);
+      return { ...row };
+    },
+    async listStreakBreaks() {
+      return streakBreaks.map((b) => ({ ...b }));
+    },
+    async listRoadmap() {
+      return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
+    },
+    async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
+      if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
+      const pictures = attachments.map((aid) => {
+        const upload = uploads.get(aid);
+        if (!upload) throw new AttachmentLinkError(aid, 'unknown');
+        if (upload.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+        if (upload.message_id !== null || upload.roadmap_item_id) throw new AttachmentLinkError(aid, 'already linked');
+        return upload;
+      });
+      const inCol = [...roadmap.values()].filter((i) => i.column === column);
+      if (top) for (const i of inCol) i.position += 1;
+      const item: RoadmapItem = {
+        id: newRoadmapId(), column, position: top ? 0 : inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
+        title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
+        progress: null, status: '', progress_at: null, description, reviewer: reviewer === null ? null : shaped(reviewer), raised_by: shaped(by),
+        attachments: pictures.map(({ id, content_type, width, height, bytes, scale }) => ({ id, content_type, width, height, bytes, scale })),
+      };
+      for (const upload of pictures) upload.roadmap_item_id = item.id;
+      roadmap.set(item.id, item);
+      return { ...item, attachments: [...item.attachments] };
+    },
+    async addRoadmapItemOnce({ sameAs, ...input }) {
+      const hit = [...roadmap.values()].find(sameAs);
+      if (hit) return { item: { ...hit, attachments: [...hit.attachments] }, created: false };
+      const item = await this.addRoadmapItem(input);
+      return item ? { item, created: true } : null;
+    },
+    async updateRoadmapItem(id, change, by) {
+      const item = roadmap.get(id);
+      if (!item) return null;
+      if (change.column !== undefined && change.column !== item.column) {
+        const inCol = [...roadmap.values()].filter((i) => i.column === change.column);
+        item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        item.column = change.column;
+      }
+      if (change.title !== undefined) item.title = change.title;
+      if (change.note !== undefined) item.note = change.note;
+      if (change.description !== undefined) item.description = change.description;
+      if (change.reviewer !== undefined) item.reviewer = change.reviewer === null ? null : shaped(change.reviewer);
+      if (change.owner !== undefined) item.owner = change.owner === null ? null : shaped(change.owner);
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { ...item };
+    },
+    async deleteRoadmapItem(id) {
+      const pictures = [...uploads.values()].filter((u) => u.roadmap_item_id === id).map((u) => u.id);
+      for (const aid of pictures) uploads.delete(aid);
+      if (pictures.length) await blobs.delete(noDb, pictures);
+      return roadmap.delete(id);
+    },
+    async claimRoadmapItem(id, by, note) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (item.column === 'done') return { status: 'done', item: { ...item } };
+      if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item: { ...item } };
+      item.owner = shaped(by);
+      if (note !== null) item.note = note;
+      item.updated_by = by;
+      item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok', item: { ...item } };
+    },
+    async setRoadmapProgress(id, by, progress, status, human = false) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (!human && item.owner !== by) return { status: 'taken', owner: item.owner ?? '', item: { ...item } };
+      const at = new Date(now()).toISOString();
+      Object.assign(item, { progress, status: status ?? item.status, progress_at: at, updated_by: shaped(by), updated_at: at });
+      return { status: 'ok', item: { ...item } };
+    },
+    async releaseRoadmapItem(id, by) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' };
+      if (item.owner !== null && item.owner !== by) return { status: 'taken', owner: item.owner, item: { ...item } };
+      item.owner = null;
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok', item: { ...item } };
+    },
+    async reorderRoadmap(column, ids, by) {
+      const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);
+      if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
+      const at = new Date(now()).toISOString();
+      ids.forEach((id, i) => { const item = roadmap.get(id)!; if (item.position !== i) { item.position = i; item.updated_by = shaped(by); item.updated_at = at; } });
+      return sortRoadmap([...roadmap.values()].filter((i) => i.column === column)).map((i) => ({ ...i }));
+    },
+    async listFlights() {
+      return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
     },
     async listStatuses() {
       const current = now();
@@ -2316,6 +2772,12 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         .sort((a, b) => a.participant.localeCompare(b.participant) || a.room.localeCompare(b.room))
         .map((r) => ({ ...r }));
     },
+    async recentActivity(since) {
+      return rows
+        .filter((m) => Date.parse(m.created_at) >= since)
+        .slice(-ACTIVITY_LIMIT)
+        .map((m) => ({ id: m.id, sender: m.sender, created_at: m.created_at, head: m.sender === 'hub' ? m.text.slice(0, ACTIVITY_HEAD_CHARS) : null }));
+    },
   };
 }
 
@@ -2352,6 +2814,9 @@ const globalStore = globalThis as typeof globalThis & { __collabHubStore?: Promi
 export function getStore(): Promise<Store> {
   if (!globalStore.__collabHubStore) {
     const url = process.env.DATABASE_URL;
+    const demo = isDemo();
+    // A demo hub's tokens are public (docs/demo.md), so it must never hold real messages.
+    if (demo && url) return Promise.reject(new ConfigError('TRIALOG_DEMO is set together with DATABASE_URL. A demo hub has public tokens, so it runs without a database; remove one of the two.'));
     // Only a new, empty hub uses this: an existing one keeps the welcome message it has.
     const welcome = welcomeText(loadRoster().participants);
     if (url) {
@@ -2359,7 +2824,7 @@ export function getStore(): Promise<Store> {
         globalStore.__collabHubStore = undefined; // retry on the next request
         throw e;
       });
-    } else if (process.env.NODE_ENV !== 'production') {
+    } else if (demo || process.env.NODE_ENV !== 'production') {
       console.warn('[trialog] DATABASE_URL is not set: using an in-memory store (messages are lost on restart).');
       globalStore.__collabHubStore = Promise.resolve(createMemoryStore({ welcome }));
     } else {

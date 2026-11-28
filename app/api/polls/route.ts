@@ -3,6 +3,7 @@ import { MAX_BODY_BYTES, RATE_LIMIT_PER_MIN, parsePollInput } from '../../../lib
 import { authenticate, error, json, readJson, roomError, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
 import { RoomError, getStore } from '../../../lib/store';
+import { postGuardNotice } from '../../../lib/guard-hub';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -36,6 +37,8 @@ export const POST = safe(async (request: Request) => {
   if (!created) {
     return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
   }
+  // The loop and cost guard: the hub's notice when this message trips it (lib/guard-hub.ts).
+  await postGuardNotice(store, created.message);
   const job = getWakeup(store)?.onMessage(created.message);
   if (job) waitUntil(job);
   return json({ message: created.message, poll: created.poll }, 201);

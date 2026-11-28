@@ -7,6 +7,7 @@ import {
   POLL_OPTION_MAX_LENGTH, POLL_QUESTION_MAX_LENGTH,
   DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
+  FLIGHT_STATES, FLIGHT_TEXT_MAX_LENGTH, type FlightState,
   MAIN_ROOM, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH,
   addressing, attachmentLabel, cleanRoomName, displayName, firstLine, roomIdFromName,
   type Attachment, type Author, type DecisionCard, type Participant, type Poll, type Room, type Sender,
@@ -21,6 +22,7 @@ export {
   DECISION_HINT, HUMAN_DECISION_HINT, DECISION_ID, DECISION_NOTE_MAX_LENGTH, DECISION_PROMPT_MAX_LENGTH, decisionIsAgreed, decisionPositionText,
   UNSEEN_AFTER_MS, UNSEEN_LABEL, addressedAgents, applyReads, unseenAgents, unseenByAgents, unseenFlagText,
   STATUS_DEFAULT_TTL_SECONDS, STATUS_MAX_LENGTH, STATUS_MAX_TTL_SECONDS, STATUS_MIN_TTL_SECONDS,
+  FLIGHT_QUIET_MINUTES, FLIGHT_STATES, FLIGHT_TEXT_MAX_LENGTH, type Flight, type FlightState,
   attachmentLabel, displayName, firstLine, pollResultText,
   ALL_ROOMS, MAIN_ROOM, MAX_ROOMS, RESERVED_ROOM_IDS, ROOM_ID_PATTERN, ROOM_NAME_MAX_LENGTH, cleanRoomName, formatSeen, parseSeen, roomIdFromName,
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Participant, type ParticipantKind, type ParticipantStatus, type Poll, type PollOption, type ReadPosition, type Room, type Sender,
@@ -53,6 +55,8 @@ export interface Message {
 export interface Reaction {
   emoji: string;
   by: Sender[];
+  /** When each person in `by` reacted, as ISO times, same length as `by`. Omitted on older payloads. */
+  at?: string[];
 }
 
 /** Shown in the welcome message and on the reaction picker. */
@@ -264,6 +268,33 @@ export function parseStatusInput(body: unknown): ParsedStatusInput {
     ttlSeconds = Math.min(STATUS_MAX_TTL_SECONDS, Math.max(STATUS_MIN_TTL_SECONDS, Math.round(rawTtl)));
   }
   return { ok: true, text, ttlSeconds };
+}
+
+export type ParsedFlightInput =
+  | { ok: true; state: FlightState; text: string }
+  | { ok: false; status: number; error: string };
+
+/** {"state": "working", "text": "Journal 01"}: working and waiting need a text (1–80), idle has none. */
+export function parseFlightInput(body: unknown): ParsedFlightInput {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, error: 'Body must be a JSON object {"state": "working", "text": "..."}.' };
+  }
+  const { state, text: rawText } = body as { state?: unknown; text?: unknown };
+  if (typeof state !== 'string' || !(FLIGHT_STATES as readonly string[]).includes(state)) {
+    return { ok: false, status: 400, error: '"state" must be "working", "waiting" or "idle".' };
+  }
+  if (state === 'idle') return { ok: true, state: 'idle', text: '' };
+  if (typeof rawText !== 'string') {
+    return { ok: false, status: 400, error: `"text" says what on (1–${FLIGHT_TEXT_MAX_LENGTH} characters).` };
+  }
+  const text = rawText.replace(/[\r\n\t]+/g, ' ').trim();
+  if (!text || /[\x00-\x1f\x7f]/.test(text)) {
+    return { ok: false, status: 400, error: `"text" must be a non-empty plain text string (1–${FLIGHT_TEXT_MAX_LENGTH} characters).` };
+  }
+  if ([...text].length > FLIGHT_TEXT_MAX_LENGTH) {
+    return { ok: false, status: 400, error: `"text" must be at most ${FLIGHT_TEXT_MAX_LENGTH} characters.` };
+  }
+  return { ok: true, state: state as FlightState, text };
 }
 
 export type ParsedPollInput =

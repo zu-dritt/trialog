@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="favicon.ico">
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
+<title>How a message travels through Trialog</title>
+<meta name="description" content="Send a pretend message and watch it travel through Trialog: token, database, live stream, and the wake rule that decides which AI agent is woken.">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115; --panel: #171a21; --line: #262a33; --text: #e6e8ee; --muted: #8b91a0;
+    --grok: #f28b3c; --claude: #c792ea; --human: #4fb3ff; --ok: #5fd08a; --no: #6b7180;
+    --speed: 1;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--human); }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 16px; }
+  header .home { margin: 0 0 8px; font-size: 13px; }
+  header .home a { color: var(--muted); text-decoration: none; }
+  header .home a:hover { color: var(--text); }
+  header h1 { font-size: 22px; margin: 4px 0 2px; }
+  header p { margin: 0; color: var(--muted); }
+  header p.roles { margin-top: 6px; font-size: 14px; }
+  .note { display: inline-block; margin-top: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .grid { display: grid; gap: 12px; margin-top: 12px; grid-template-columns: 1fr; }
+  @media (min-width: 860px) { .grid { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); } }
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; }
+
+  /* composer */
+  form { display: grid; gap: 10px; }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; padding: 0; margin-bottom: 6px; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .seg label { cursor: pointer; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); user-select: none; }
+  .seg input:checked + label { color: var(--bg); background: var(--c, var(--text)); border-color: var(--c, var(--text)); font-weight: 600; }
+  .seg input:focus-visible + label { outline: 2px solid var(--text); outline-offset: 2px; }
+  .row { display: flex; gap: 8px; }
+  .row input[type=text] { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; }
+  .row input[type=text]:focus { outline: 2px solid var(--human); outline-offset: 0; }
+  button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--human); color: var(--bg); border-color: var(--human); font-weight: 700; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .controls .spacer { flex: 1; }
+
+  /* diagram */
+  svg { width: 100%; height: auto; display: block; }
+  .node rect { fill: var(--bg); stroke: var(--line); stroke-width: 2; transition: stroke .3s, fill .3s; }
+  .node text { fill: var(--muted); font-size: 12px; text-anchor: middle; }
+  .node .name { fill: var(--text); font-size: 15px; font-weight: 700; }
+  .node.on rect { stroke: var(--c, var(--text)); fill: #1d212b; }
+  .node.on .name { fill: var(--c, var(--text)); }
+  .edge { stroke: var(--line); stroke-width: 2; transition: stroke .3s; }
+  .edge.on { stroke: var(--c, var(--text)); }
+  .chip rect { fill: var(--panel); stroke: var(--line); }
+  .chip text { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .chip.on rect { stroke: var(--text); fill: #222733; }
+  .chip.on text { fill: var(--text); }
+  .badge { font-size: 11px; font-weight: 700; text-anchor: middle; }
+  #packet text { font-size: 11px; font-weight: 700; fill: var(--text); text-anchor: end; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+
+  .caption { margin-top: 8px; min-height: 3.2em; }
+  .caption .n { color: var(--muted); font-size: 12px; }
+  .caption .t { font-size: 17px; font-weight: 600; }
+  pre.code { margin: 8px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #c9cedb; min-height: 2.6em; }
+
+  /* wake rule */
+  .rule { border-color: #3a4050; }
+  .rule h2 { font-size: 18px; margin: 0 0 2px; }
+  .rule .sub { color: var(--muted); margin: 0 0 10px; font-size: 14px; }
+  .rule.flash { box-shadow: 0 0 0 2px var(--text); transition: box-shadow .3s; }
+  .agents { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .agent { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); }
+  .agent .who { font-weight: 700; color: var(--c); }
+  .agent .verdict { font-size: 18px; font-weight: 800; margin: 2px 0; }
+  .agent.yes { border-color: var(--ok); }
+  .agent.yes .verdict { color: var(--ok); }
+  .agent.no .verdict { color: var(--no); }
+  .agent .why { color: var(--muted); font-size: 13px; min-height: 3.9em; }
+  .agent .listen { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .agent .listen button { padding: 3px 8px; font-size: 12px; border-radius: 999px; margin-top: 4px; }
+  table.matrix { width: 100%; border-collapse: separate; border-spacing: 4px; margin-top: 12px; font-size: 13px; }
+  .matrix th { color: var(--muted); font-weight: 600; font-size: 12px; text-align: center; }
+  .matrix th.rowh { text-align: right; padding-right: 4px; }
+  .matrix td { padding: 0; }
+  .matrix button { width: 100%; min-height: 34px; padding: 4px; border-radius: 8px; display: flex; gap: 4px; justify-content: center; align-items: center; }
+  .matrix button.cur { border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+  .none { color: var(--no); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+  /* chat */
+  .chat { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+  .chat li { border-left: 3px solid var(--c); padding: 4px 8px; background: var(--bg); border-radius: 0 8px 8px 0; }
+  .chat .meta { font-size: 12px; color: var(--muted); }
+  .chat .meta b { color: var(--c); }
+  .chat .txt { overflow-wrap: anywhere; }
+  .empty { color: var(--muted); font-size: 13px; }
+  footer { color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="home"><a href="./">Trialog</a></p>
+    <h1>How a message travels through Trialog</h1>
+    <p>One chat for the human orchestrator and two AI agents. Send a message and watch where it goes.</p>
+    <p class="roles"><b style="color:var(--human)">Orchestrator</b> sets the goal, makes it safe to try, decides, says “Ship it!”. <b style="color:var(--claude)">Claude</b> and <b style="color:var(--grok)">Grok</b> build and review.</p>
+    <span class="note" id="privacy">A simulation in your browser. Nothing you type is sent anywhere.</span>
+  </header>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="composer-h">
+      <h2 class="label" id="composer-h">Message box</h2>
+      <form id="composer" autocomplete="off">
+        <fieldset>
+          <legend>Who is speaking</legend>
+          <div class="seg" id="from"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Who is it for</legend>
+          <div class="seg" id="to"></div>
+        </fieldset>
+        <div class="row">
+          <label for="text" class="sr">Message</label>
+          <input type="text" id="text" maxlength="200" placeholder="Type a short message" value="Can you both look at this?">
+          <button type="submit" class="primary" id="send">Send</button>
+        </div>
+      </form>
+
+      <svg id="diagram" viewBox="0 0 360 400" role="img" aria-labelledby="diagram-title">
+        <title id="diagram-title">The orchestrator's browser, Claude and Grok above; Trialog in the middle; Postgres below.</title>
+        <line class="edge" id="e-orchestrator" x1="60" y1="70" x2="60" y2="170"></line>
+        <line class="edge" id="e-claude" x1="180" y1="70" x2="180" y2="170"></line>
+        <line class="edge" id="e-grok" x1="300" y1="70" x2="300" y2="170"></line>
+        <line class="edge" id="e-db" x1="180" y1="250" x2="180" y2="300"></line>
+
+        <g class="node" id="n-orchestrator" style="--c: var(--human)">
+          <rect x="10" y="12" width="100" height="58" rx="10"></rect>
+          <text class="name" x="60" y="36" style="font-size:13px">Orchestrator</text>
+          <text x="60" y="55">the page</text>
+        </g>
+        <g class="node" id="n-claude" style="--c: var(--claude)">
+          <rect x="130" y="12" width="100" height="58" rx="10"></rect>
+          <text class="name" x="180" y="36">Claude</text>
+          <text x="180" y="55" id="mode-claude">agent</text>
+        </g>
+        <g class="node" id="n-grok" style="--c: var(--grok)">
+          <rect x="250" y="12" width="100" height="58" rx="10"></rect>
+          <text class="name" x="300" y="36">Grok</text>
+          <text x="300" y="55" id="mode-grok">agent</text>
+        </g>
+        <text class="badge" id="b-claude" x="180" y="88"></text>
+        <text class="badge" id="b-grok" x="300" y="88"></text>
+
+        <g class="node" id="n-api">
+          <rect x="20" y="170" width="320" height="80" rx="12"></rect>
+          <text class="name" x="180" y="196">Trialog</text>
+          <text x="180" y="216" id="api-line">POST /api/messages · live stream · wake rule</text>
+          <text x="180" y="236" id="api-sub">the token decides who is speaking</text>
+        </g>
+
+        <g class="node" id="n-db">
+          <rect x="60" y="300" width="240" height="88" rx="12"></rect>
+          <text class="name" x="180" y="324">Postgres</text>
+          <text x="180" y="342">one transaction</text>
+          <g class="chip" id="c-lock"><rect x="78" y="352" width="60" height="24" rx="6"></rect><text x="108" y="368">lock</text></g>
+          <g class="chip" id="c-count"><rect x="150" y="352" width="60" height="24" rx="6"></rect><text x="180" y="368">count</text></g>
+          <g class="chip" id="c-insert"><rect x="222" y="352" width="60" height="24" rx="6"></rect><text x="252" y="368">INSERT</text></g>
+        </g>
+
+        <g id="packet" visibility="hidden">
+          <circle r="9" id="packet-dot"></circle>
+          <text x="-14" y="4" id="packet-label"></text>
+        </g>
+      </svg>
+
+      <div class="caption" aria-live="polite">
+        <div class="n" id="step-n">Press Send to start.</div>
+        <div class="t" id="step-t">Pick who speaks and who it is for. The box on the right shows who will be woken.</div>
+      </div>
+      <pre class="code" id="step-code" aria-label="What goes over the wire"></pre>
+
+      <div class="controls">
+        <button type="button" id="pause" disabled>Pause</button>
+        <button type="button" id="step" disabled>Step ›</button>
+        <button type="button" id="replay" disabled>Replay</button>
+        <span class="spacer"></span>
+        <span class="label" style="margin:0" id="speed-l">Speed</span>
+        <div class="seg" role="radiogroup" aria-labelledby="speed-l" id="speed">
+          <input type="radio" name="speed" id="sp-slow" value="0.5"><label for="sp-slow">slow</label>
+          <input type="radio" name="speed" id="sp-norm" value="1" checked><label for="sp-norm">normal</label>
+          <input type="radio" name="speed" id="sp-fast" value="2"><label for="sp-fast">fast</label>
+        </div>
+      </div>
+    </section>
+
+    <div style="display:grid; gap:12px; align-content:start">
+      <section class="panel rule" id="rule" aria-labelledby="rule-h">
+        <h2 id="rule-h">Who is woken?</h2>
+        <p class="sub" id="rule-sub"></p>
+        <div class="agents">
+          <div class="agent" id="a-claude" style="--c: var(--claude)">
+            <div class="who">Claude</div>
+            <div class="verdict" id="v-claude"></div>
+            <div class="why" id="w-claude"></div>
+            <div class="listen">Listens by <button type="button" id="l-claude" aria-label="Switch how Claude listens"></button></div>
+          </div>
+          <div class="agent" id="a-grok" style="--c: var(--grok)">
+            <div class="who">Grok</div>
+            <div class="verdict" id="v-grok"></div>
+            <div class="why" id="w-grok"></div>
+            <div class="listen">Listens by <button type="button" id="l-grok" aria-label="Switch how Grok listens"></button></div>
+          </div>
+        </div>
+        <table class="matrix" aria-label="Every combination. Tap one to try it.">
+          <thead><tr><th></th><th scope="col" colspan="4">for</th></tr>
+          <tr><th class="rowh">from</th><th scope="col">Everyone</th><th scope="col">Orchestrator</th><th scope="col">Claude</th><th scope="col">Grok</th></tr></thead>
+          <tbody id="matrix"></tbody>
+        </table>
+        <div class="legend"><span class="dot" style="background:var(--claude)"></span> Claude woken &nbsp; <span class="dot" style="background:var(--grok)"></span> Grok woken &nbsp; <span class="none">–</span> nobody</div>
+      </section>
+
+      <section class="panel" aria-labelledby="chat-h">
+        <h2 class="label" id="chat-h">The chat, as the page shows it</h2>
+        <ul class="chat" id="chat"></ul>
+        <div class="empty" id="chat-empty">No messages yet.</div>
+      </section>
+    </div>
+  </div>
+
+  <footer>
+    The rule and the steps follow the code. Source and docs: <a href="https://github.com/zu-dritt/trialog">github.com/zu-dritt/trialog</a> · the API: <a href="https://github.com/zu-dritt/trialog/blob/main/docs/api.md">docs/api.md</a>.
+    Keyboard: Tab to move, Space or Enter to choose.
+  </footer>
+</div>
+
+<!-- The wake rule, written to give the same answers as whoToWake() in lib/webhook.ts and
+     notToSelf() in lib/store.ts. tests/explainer-page.test.ts runs this block against both. -->
+<script id="wake-rule">
+var ROSTER = [
+  { name: 'orchestrator', kind: 'human' },
+  { name: 'claude', kind: 'agent' },
+  { name: 'grok', kind: 'agent' }
+];
+// A message addressed to its own sender is stored as a message to everyone (recipient null).
+function notToSelf(sender, recipient) {
+  return recipient == null || recipient === sender ? null : recipient;
+}
+// A message from a human (the orchestrator) wakes every agent, whoever it is for. A message from an agent wakes
+// only the agents it addresses (everyone means every other agent), never the sender.
+function whoToWake(message, roster) {
+  if (message.sender === 'hub') return [];
+  var agents = roster.filter(function (p) { return p.kind === 'agent'; }).map(function (p) { return p.name; });
+  var sender = roster.find(function (p) { return p.name === message.sender; });
+  if (!sender) return [];
+  if (sender.kind === 'human') return agents;
+  if (sender.kind !== 'agent') return [];
+  if (message.recipient === null) return agents.filter(function (name) { return name !== message.sender; });
+  if (message.recipient === message.sender) return [];
+  return agents.indexOf(message.recipient) >= 0 ? [message.recipient] : [];
+}
+// What the page shows: the recipient as stored, then the rule.
+function wokenFor(sender, to) {
+  return whoToWake({ sender: sender, recipient: notToSelf(sender, to) }, ROSTER);
+}
+</script>
+
+<script>
+(function () {
+  'use strict';
+  var NAMES = { orchestrator: 'Orchestrator', claude: 'Claude', grok: 'Grok' };
+  var COLOR = { orchestrator: 'var(--human)', claude: 'var(--claude)', grok: 'var(--grok)' };
+  // The packet runs along the drawn lines and stops short of the boxes, below the woken badges,
+  // so its label (left of the dot) never covers a node's title.
+  var LINE_X = { orchestrator: 60, claude: 180, grok: 300 };
+  function ends(a, b) {
+    if (a === 'db' || b === 'db') { var top = [180, 258], bottom = [180, 292]; return a === 'db' ? [bottom, top] : [top, bottom]; }
+    var p = a === 'api' ? b : a, x = LINE_X[p], near = [x, 102], far = [x, 162];
+    return a === 'api' ? [far, near] : [near, far];
+  }
+  var AGENTS = ['claude', 'grok'];
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var el = function (tag, attrs, text) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  var state = { from: 'orchestrator', to: null, listen: { claude: 'polling', grok: 'webhook' }, speed: 1, nextId: 45 };
+
+  // ---------- composer ----------
+  function buildSeg(box, name, options, current, onPick) {
+    box.textContent = '';
+    options.forEach(function (o) {
+      var id = name + '-' + (o.value || 'all');
+      var input = el('input', { type: 'radio', name: name, id: id, value: o.value || '' });
+      if ((o.value || null) === current) input.checked = true;
+      input.addEventListener('change', function () { onPick(o.value || null); });
+      var label = el('label', { for: id }, o.label);
+      if (o.value) label.style.setProperty('--c', COLOR[o.value]);
+      box.appendChild(input);
+      box.appendChild(label);
+    });
+  }
+  function renderComposer() {
+    buildSeg($('from'), 'from', [
+      { value: 'orchestrator', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+    ], state.from, function (v) { state.from = v; renderRule(); });
+    buildSeg($('to'), 'to', [
+      { value: null, label: 'Everyone' }, { value: 'orchestrator', label: 'Orchestrator' }, { value: 'claude', label: 'Claude' }, { value: 'grok', label: 'Grok' }
+    ], state.to, function (v) { state.to = v; renderRule(); });
+  }
+  function syncComposer() {
+    $('from-' + state.from).checked = true;
+    $('to-' + (state.to || 'all')).checked = true;
+  }
+
+  // ---------- the wake rule panel ----------
+  function forLabel(to) { return to ? NAMES[to] : 'everyone'; }
+  function reason(agent, from, to) {
+    var stored = notToSelf(from, to);
+    var woken = wokenFor(from, to).indexOf(agent) >= 0;
+    var self = to === from ? ' It was addressed to its own sender, so it is stored as a message to everyone.' : '';
+    if (from === 'orchestrator') return 'A message from the orchestrator (a human) wakes every agent, whoever it is for.' + self;
+    if (agent === from) return 'An agent is never woken by its own message.' + self;
+    if (woken) return (stored === null ? 'For everyone, so every other agent is addressed.' : 'It is addressed to ' + NAMES[agent] + '.') + self;
+    if (stored === 'orchestrator') return 'From an agent, only for the orchestrator: no agent is woken.';
+    return 'From an agent, and not addressed to ' + NAMES[agent] + '.';
+  }
+  function renderRule() {
+    var from = state.from, to = state.to;
+    var woken = wokenFor(from, to);
+    $('rule-sub').textContent = NAMES[from] + ' → ' + forLabel(to) + ': ' +
+      (woken.length ? woken.map(function (a) { return NAMES[a]; }).join(' and ') + (woken.length > 1 ? ' are' : ' is') + ' woken.' : 'nobody is woken.');
+    AGENTS.forEach(function (a) {
+      var yes = woken.indexOf(a) >= 0;
+      $('a-' + a).className = 'agent ' + (yes ? 'yes' : 'no');
+      $('v-' + a).textContent = yes ? '✓ woken' : '✗ not woken';
+      $('w-' + a).textContent = reason(a, from, to);
+      var l = state.listen[a];
+      $('l-' + a).textContent = l === 'webhook' ? 'wake-up webhook' : 'polling';
+      $('mode-' + a).textContent = l === 'webhook' ? 'agent · webhook' : 'agent · polls';
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#matrix button'), function (b) {
+      var cur = b.dataset.from === from && (b.dataset.to || null) === to;
+      b.classList.toggle('cur', cur);
+      b.setAttribute('aria-pressed', cur ? 'true' : 'false');
+    });
+  }
+  function buildMatrix() {
+    var body = $('matrix');
+    ['orchestrator', 'claude', 'grok'].forEach(function (from) {
+      var tr = el('tr');
+      var th = el('th', { scope: 'row', class: 'rowh' }, NAMES[from]);
+      th.style.color = COLOR[from];
+      tr.appendChild(th);
+      [null, 'orchestrator', 'claude', 'grok'].forEach(function (to) {
+        var td = el('td');
+        var woken = wokenFor(from, to);
+        var b = el('button', { type: 'button', 'data-from': from, 'data-to': to || '',
+          'aria-label': NAMES[from] + ' to ' + forLabel(to) + ': ' + (woken.length ? woken.map(function (a) { return NAMES[a]; }).join(' and ') + ' woken' : 'nobody woken') });
+        if (woken.length) woken.forEach(function (a) { var d = el('span', { class: 'dot' }); d.style.background = COLOR[a]; b.appendChild(d); });
+        else b.appendChild(el('span', { class: 'none' }, '–'));
+        b.addEventListener('click', function () { state.from = from; state.to = to; syncComposer(); renderRule(); });
+        td.appendChild(b);
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  }
+  AGENTS.forEach(function (a) {
+    $('l-' + a).addEventListener('click', function () {
+      state.listen[a] = state.listen[a] === 'webhook' ? 'polling' : 'webhook';
+      renderRule();
+    });
+  });
+
+  // ---------- the chat ----------
+  function addChat(msg) {
+    var li = el('li');
+    li.style.setProperty('--c', COLOR[msg.sender]);
+    var meta = el('div', { class: 'meta' });
+    meta.appendChild(el('span', null, '#' + msg.id + ' '));
+    meta.appendChild(el('b', null, NAMES[msg.sender]));
+    meta.appendChild(el('span', null, ' → ' + forLabel(msg.recipient)));
+    li.appendChild(meta);
+    li.appendChild(el('div', { class: 'txt' }, msg.text)); // textContent: never HTML
+    $('chat').appendChild(li);
+    $('chat-empty').hidden = true;
+    $('chat').scrollTop = $('chat').scrollHeight;
+  }
+
+  // ---------- building the steps for one message ----------
+  function preview(text) {
+    var flat = text.replace(/\s+/g, ' ').trim();
+    return flat.length <= 200 ? flat : flat.slice(0, 199) + '…';
+  }
+  var REPLY = { claude: 'Read it. On it.', grok: 'Got it, looking now.' };
+
+  function buildSteps(m) {
+    var steps = [];
+    var from = m.sender, toSent = m.to, stored = notToSelf(from, toSent);
+    var id = m.id, since = id - 1;
+    var body = { text: m.text };
+    if (toSent) body.to = toSent;
+    steps.push({
+      t: (from === 'orchestrator' ? 'The browser' : NAMES[from] + ' (with hub.js)') + ' sends it to Trialog with a Bearer token.',
+      code: 'POST /api/messages\nAuthorization: Bearer ••••••••••••\n' + JSON.stringify(body),
+      on: [from, 'api'], edges: [from], moves: [[from, 'api', 'POST', from]]
+    });
+    steps.push({
+      t: 'The token decides who is speaking: ' + NAMES[from] + '. A "from" field in the body would be ignored.',
+      code: 'token ' + '•'.repeat(8) + '  →  sender = "' + from + '"',
+      on: ['api'], badge: { api: 'sender: ' + from }
+    });
+    if (toSent === from) {
+      steps.push({
+        t: 'It is addressed to its own sender, so it is stored as a message to everyone.',
+        code: 'to "' + from + '"  →  recipient = null (everyone)', on: ['api']
+      });
+    }
+    steps.push({
+      t: 'One database transaction: lock, count (at most 30 a minute), INSERT.',
+      code: 'BEGIN\n  SELECT pg_advisory_xact_lock(…)\n  SELECT count(*) … last 60 seconds\n  INSERT INTO messages … RETURNING id\nCOMMIT',
+      on: ['api', 'db'], edges: ['db'], chips: true, moves: [['api', 'db', 'INSERT', from]]
+    });
+    steps.push({
+      t: 'The id comes back: message ' + id + '. ' + NAMES[from] + ' gets 201 and the stored message.',
+      code: '201  {"message": {"id": ' + id + ', "sender": "' + from + '", "recipient": ' + JSON.stringify(stored) + ', …}}',
+      on: ['db', 'api', from], edges: ['db', from], moves: [['db', 'api', 'id ' + id, from], ['api', from, '201', from]]
+    });
+    steps.push({
+      t: 'The live stream pushes message ' + id + ' to the page.',
+      code: 'GET /api/stream  →  event: messages\ndata: [{"id": ' + id + ', "sender": "' + from + '", …}]',
+      on: ['api', 'orchestrator'], edges: ['orchestrator'], moves: [['api', 'orchestrator', 'stream', from]],
+      enter: function () { addChat({ id: id, sender: from, recipient: stored, text: m.text }); }
+    });
+    var woken = whoToWake({ sender: from, recipient: stored }, ROSTER);
+    steps.push({
+      t: 'The wake rule: ' + (woken.length ? woken.map(function (a) { return NAMES[a]; }).join(' and ') + (woken.length > 1 ? ' are' : ' is') + ' woken.' : 'nobody is woken.') + ' See the box “Who is woken?”.',
+      code: 'whoToWake({sender: "' + from + '", recipient: ' + JSON.stringify(stored) + '})  →  ' + JSON.stringify(woken),
+      on: ['api'], rule: true,
+      badge: { claude: woken.indexOf('claude') >= 0 ? 'woken' : 'not woken', grok: woken.indexOf('grok') >= 0 ? 'woken' : 'not woken' }
+    });
+    if (!woken.length) {
+      steps.push({ t: 'No agent is woken. The message waits in the chat until someone reads it.', code: '', on: ['orchestrator'] });
+      return steps;
+    }
+    woken.forEach(function (a) {
+      if (m.listen[a] === 'webhook') {
+        var payload = { id: id, sender: from, recipients: stored === null ? ROSTER.map(function (p) { return p.name; }) : [stored],
+          preview: preview(m.text), room: 'main', first_id: id, last_id: id, count: 1, sent_at: 1795620000 };
+        steps.push({
+          t: 'After 2 seconds, a signed wake-up to ' + NAMES[a] + ': the id, the sender, the room and a short preview.',
+          code: 'POST <' + NAMES[a] + '’s registered https URL>\nX-Hub-Timestamp: 1795620000\nX-Hub-Signature: sha256=<HMAC-SHA256(secret, timestamp + "." + body)>\n\n' + JSON.stringify(payload),
+          on: ['api', a], edges: [a], moves: [['api', a, 'wake', a]]
+        });
+        steps.push({
+          t: NAMES[a] + ' answers 204, then fetches the message itself, with its own token.',
+          code: '204\nGET /api/messages?since=' + since + '\nAuthorization: Bearer <' + NAMES[a] + '’s own token>\n→ message ' + id,
+          on: [a, 'api'], edges: [a], moves: [[a, 'api', 'GET', a], ['api', a, '#' + id, from]]
+        });
+      } else {
+        steps.push({
+          t: NAMES[a] + ' has no webhook. It polls, and Trialog hands it only the messages that should wake it.',
+          code: 'GET /api/wake?since=' + since + '&wait=25\nAuthorization: Bearer <' + NAMES[a] + '’s own token>\n→ message ' + id,
+          on: [a, 'api'], edges: [a], moves: [[a, 'api', 'GET', a], ['api', a, '#' + id, from]]
+        });
+      }
+    });
+    var answer = stored === null ? woken : woken.filter(function (a) { return a === stored; });
+    woken.forEach(function (a) {
+      if (answer.indexOf(a) >= 0) return;
+      steps.push({ t: NAMES[a] + ' was woken but not asked. It reads the message and may stay quiet: that is its own choice.', code: '', on: [a] });
+    });
+    answer.forEach(function (a) {
+      var rid = state.nextId++;
+      var to = from === a ? null : from;
+      steps.push({
+        t: NAMES[a] + ' replies. The reply is a new message (' + rid + ') and takes the same path; the stream shows it on the page.',
+        code: 'POST /api/messages\nAuthorization: Bearer <' + NAMES[a] + '’s own token>\n' + JSON.stringify({ text: REPLY[a], to: to || undefined }),
+        on: [a, 'api', 'orchestrator'], edges: [a, 'orchestrator'], moves: [[a, 'api', 'reply', a], ['api', 'orchestrator', 'stream', a]],
+        enter: function () { addChat({ id: rid, sender: a, recipient: to, text: REPLY[a] }); }
+      });
+    });
+    return steps;
+  }
+
+  // ---------- playing the steps ----------
+  var run = null; // { steps, i, playing, timer, anim }
+  var pkt = $('packet'), dot = $('packet-dot'), lbl = $('packet-label');
+
+  function clearLights() {
+    Array.prototype.forEach.call(document.querySelectorAll('.node, .edge, .chip'), function (n) { n.classList.remove('on'); n.style.removeProperty('--c'); });
+    ['orchestrator', 'claude', 'grok'].forEach(function (p) { $('n-' + p).style.setProperty('--c', COLOR[p]); });
+    $('b-claude').textContent = ''; $('b-grok').textContent = '';
+    $('api-sub').textContent = 'the token decides who is speaking';
+    $('rule').classList.remove('flash');
+    pkt.setAttribute('visibility', 'hidden');
+  }
+  function light(step, color) {
+    clearLights();
+    (step.on || []).forEach(function (n) {
+      var g = $('n-' + n); g.classList.add('on');
+      if (n === 'api' || n === 'db') g.style.setProperty('--c', color);
+    });
+    (step.edges || []).forEach(function (e) { var l = $('e-' + e); l.classList.add('on'); l.style.setProperty('--c', color); });
+    if (step.badge) {
+      if (step.badge.api) $('api-sub').textContent = step.badge.api;
+      AGENTS.forEach(function (a) {
+        if (!step.badge[a]) return;
+        var b = $('b-' + a); b.textContent = step.badge[a];
+        b.style.fill = step.badge[a] === 'woken' ? 'var(--ok)' : 'var(--no)';
+      });
+    }
+    if (step.rule) $('rule').classList.add('flash');
+  }
+  function stepMs() { return 2300 / state.speed; }
+
+  function animate(moves, done) {
+    if (reduced || !moves || !moves.length) {
+      if (moves && moves.length) { var last = moves[moves.length - 1]; place(ends(last[0], last[1])[1], last[2], last[3]); }
+      done(); return;
+    }
+    var seg = 0, per = 850 / state.speed, t0 = null;
+    function frame(ts) {
+      if (!run || run.anim !== frame) return;
+      if (t0 === null) t0 = ts;
+      var mv = moves[seg], k = Math.min(1, (ts - t0) / per), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      var ab = ends(mv[0], mv[1]), a = ab[0], b = ab[1];
+      place([a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e], mv[2], mv[3]);
+      if (k >= 1) { seg++; t0 = null; if (seg >= moves.length) { run.anim = null; done(); return; } }
+      requestAnimationFrame(frame);
+    }
+    run.anim = frame;
+    requestAnimationFrame(frame);
+  }
+  function place(p, label, who) {
+    pkt.setAttribute('visibility', 'visible');
+    pkt.setAttribute('transform', 'translate(' + p[0] + ' ' + p[1] + ')');
+    dot.style.fill = COLOR[who];
+    lbl.textContent = label;
+  }
+  function chips(on) {
+    var ids = ['c-lock', 'c-count', 'c-insert'];
+    if (!on) return;
+    if (reduced) { ids.forEach(function (c) { $(c).classList.add('on'); }); return; }
+    ids.forEach(function (c, i) { setTimeout(function () { if (run) $(c).classList.add('on'); }, (300 + i * 450) / state.speed); });
+  }
+
+  function show(i) {
+    var s = run.steps[i];
+    run.i = i;
+    var color = COLOR[run.msg.sender];
+    light(s, color);
+    if (s.chips) chips(true);
+    $('step-n').textContent = 'Step ' + (i + 1) + ' of ' + run.steps.length;
+    $('step-t').textContent = s.t;
+    $('step-code').textContent = s.code;
+    if (s.enter && !s.entered) { s.entered = true; s.enter(); }
+    updateButtons();
+    animate(s.moves, function () {
+      if (run && run.playing && run.i === i) schedule();
+    });
+  }
+  function schedule() {
+    clearTimeout(run.timer);
+    run.timer = setTimeout(function () {
+      if (!run || !run.playing) return;
+      if (run.i + 1 < run.steps.length) show(run.i + 1);
+      else { run.playing = false; updateButtons(); }
+    }, stepMs() - (reduced ? 0 : 850 / state.speed));
+  }
+  function stop() { if (run) { clearTimeout(run.timer); run.anim = null; } }
+  function updateButtons() {
+    var has = !!run, end = has && run.i >= run.steps.length - 1;
+    $('pause').disabled = !has || (end && !run.playing);
+    $('pause').textContent = has && run.playing ? 'Pause' : 'Play';
+    $('step').disabled = !has || end;
+    $('replay').disabled = !has;
+  }
+  function start(msg, playing) {
+    stop();
+    run = { msg: msg, steps: buildSteps(msg), i: 0, playing: playing, timer: null, anim: null };
+    show(0);
+  }
+
+  $('composer').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var text = $('text').value.trim() || '(empty)';
+    var msg = { id: state.nextId++, sender: state.from, to: state.to, text: text, listen: { claude: state.listen.claude, grok: state.listen.grok } };
+    start(msg, true);
+  });
+  $('pause').addEventListener('click', function () {
+    if (!run) return;
+    if (run.playing) { run.playing = false; stop(); updateButtons(); return; }
+    run.playing = true;
+    if (run.i + 1 < run.steps.length) show(run.i + 1); else updateButtons();
+  });
+  $('step').addEventListener('click', function () {
+    if (!run) return;
+    run.playing = false; stop();
+    if (run.i + 1 < run.steps.length) show(run.i + 1);
+  });
+  $('replay').addEventListener('click', function () {
+    if (!run) return;
+    // Same message again; the chat keeps what it already shows.
+    stop();
+    run.steps.forEach(function (s) { s.entered = true; });
+    run.playing = true;
+    show(0);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#speed input'), function (r) {
+    r.addEventListener('change', function () { state.speed = Number(r.value); });
+  });
+
+  renderComposer();
+  buildMatrix();
+  renderRule();
+  updateButtons();
+})();
+</script>
+</body>
+</html>

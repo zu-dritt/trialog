@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { RoomTabs } from './rooms';
 import { SPLIT_MIN_WIDTH_PX, splitFits } from './split';
 
 const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
@@ -38,5 +39,17 @@ export function SplitToggle({ on, onToggle, disabled = false, className = '' }: 
     >
       Split
     </button>
+  );
+}
+
+/**
+ * The room bar at the top of each pane in split view. Both panes have the same bar at the same
+ * height, so the two rooms start on one line: the room tabs, with what is new in the others, and +.
+ */
+export function PaneRoomBar({ side, ...tabs }: { side: 'lead' | 'side' } & React.ComponentProps<typeof RoomTabs>) {
+  return (
+    <div className="flex h-11 shrink-0 items-center border-b border-line px-3" aria-label={side === 'lead' ? 'Rooms, left pane' : 'Rooms, right pane'} role="group">
+      <RoomTabs {...tabs} className="flex min-w-0 flex-1" />
+    </div>
   );
 }

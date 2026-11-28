@@ -56,7 +56,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -70,6 +70,7 @@ function parseArgs(argv) {
     else if (a === '--clear') opts.clear = true;
     else if (a === '--pinned') opts.pinned = true;
     else if (a === '--decisions') opts.decisions = true;
+    else if (a === '--top') opts.top = true;
     else if (a === '--attach') {
       const v = argv[++i];
       if (v === undefined) usage('--attach needs a file');
@@ -267,6 +268,10 @@ async function main() {
 
   if (cmd === 'wait') {
     const timeoutMs = Number(opts.timeout ?? 600) * 1000;
+    // When the newest message the hub has seen was written. Fast polling while people talk; after
+    // a quiet spell, slow, so the hub's database can scale to zero (decision #723).
+    let lastActivity = Date.now();
+    let sleepingShown = false;
     const deadline = Date.now() + timeoutMs;
     let since = opts.since;
     let me;
@@ -276,20 +281,38 @@ async function main() {
       const data = await (await call(`/api/messages${query({ limit: 1, room: opts.room })}`)).json();
       since = data.messages.at(-1)?.id ?? 0;
       me = data.me;
+      lastActivity = Date.parse(data.messages.at(-1)?.created_at ?? '') || lastActivity;
     }
+    // With --since, the start counts as activity: a listener restarts right after something
+    // happened. If nothing comes, it turns slow after 20 minutes anyway. No extra request.
     while (Date.now() < deadline) {
       const data = await (await call(`/api/messages${query({ since, room: opts.room, markRead })}`)).json();
       me = data.me;
       const target = opts.to ? opts.to.replace(/^@/, '').toLowerCase() : me;
       const hits = data.messages.filter((m) => m.sender !== me && (m.recipient === target || (!opts.to && m.recipient === null)));
-      if (data.messages.length) since = data.messages.at(-1).id;
+      if (data.messages.length) {
+        since = data.messages.at(-1).id;
+        lastActivity = Math.max(lastActivity, Date.parse(data.messages.at(-1).created_at) || 0);
+      }
       if (hits.length) {
         if (opts.json) console.log(JSON.stringify(hits));
         else { await loadLabels(); for (const m of hits) console.log(fmt(m)); }
         console.error(`next: --since ${since}`);
         return;
       }
-      await new Promise((r) => setTimeout(r, 3000));
+      const pause = Math.min(pollDelay(lastActivity, Date.now()), Math.max(0, deadline - Date.now()));
+      // Slow (quiet room): say when we look again, as our status next to the Guard, so a person
+      // knows how long an answer can take (#728). Only now, when the database is awake anyway.
+      // Back to busy: clear it. A failed status never stops the wait.
+      const slow = pause > 60_000;
+      if (slow || sleepingShown) {
+        sleepingShown = slow;
+        // Plain fetch, not call(): call() ends the process on an error, and this must never.
+        await fetch(base + '/api/status', slow
+          ? { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: sleepText(Date.now() + pause), ttlSeconds: Math.ceil(pause / 1000) + 60 }) }
+          : { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+      }
+      await new Promise((r) => setTimeout(r, pause));
     }
     console.error(`hub: no new message within ${timeoutMs / 1000}s. next: --since ${since}`);
     process.exit(2);
@@ -323,6 +346,136 @@ async function main() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).json();
     console.log(opts.json ? JSON.stringify(status) : `status set: ${status.text} (expires ${status.expires_at})`);
+    return;
+  }
+
+
+  if (cmd === 'roadmap') {
+    // roadmap                                         the cards, by column
+    // roadmap add <done|now|next|later> <title> [--note text] [--owner name] [--reviewer name] [--description text, \n for a new line] [--top]
+    // roadmap move <rm_id> <column>                   to the end of that column
+    // roadmap drop <rm_id>                            remove a card
+    const [sub, ...rest] = args;
+    const COLS = ['done', 'now', 'next', 'later'];
+    if (!sub) {
+      const { items } = await (await call('/api/roadmap')).json();
+      if (opts.json) { console.log(JSON.stringify(items)); return; }
+      await loadLabels();
+      for (const col of COLS) {
+        const list = items.filter((i) => i.column === col);
+        console.log(`${col} (${list.length})`);
+        for (const i of list) console.log(`  ${i.id}  ${i.title}${i.note ? ` · ${i.note}` : ''}${i.owner ? ` [${label(i.owner)}]` : ''}`);
+      }
+      return;
+    }
+    if (sub === 'add') {
+      const [col, ...words] = rest;
+      if (!COLS.includes(col) || !words.length) usage('roadmap add <done|now|next|later> <title> [--note text] [--owner name] [--reviewer name] [--description text] [--top]');
+      const body = { column: col, title: words.join(' ') };
+      if (opts.note !== undefined) body.note = opts.note;
+      if (opts.owner !== undefined) body.owner = opts.owner;
+      if (opts.reviewer !== undefined) body.reviewer = opts.reviewer;
+      if (opts.description !== undefined) body.description = opts.description.replace(/\\n/g, '\n');
+      if (opts.top) body.top = true;
+      const { item } = await (await call('/api/roadmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+      console.log(opts.json ? JSON.stringify(item) : `added ${item.id} to ${item.column}: ${item.title}`);
+      return;
+    }
+    if (sub === 'move') {
+      const [id, col] = rest;
+      if (!id || !COLS.includes(col)) usage('roadmap move <rm_id> <done|now|next|later>');
+      const { item } = await (await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ column: col }) })).json();
+      console.log(opts.json ? JSON.stringify(item) : `moved ${item.id} to ${item.column}`);
+      return;
+    }
+    if (sub === 'claim' || sub === 'release') {
+      // roadmap claim <rm_id> --note "exists, small fix"   look first, then claim: the first claim wins
+      const [id] = rest;
+      if (!id) usage(`roadmap ${sub} <rm_id>${sub === 'claim' ? ' [--note "exists, small fix" | "new"]' : ''}`);
+      const res = await fetch(`${base}/api/roadmap/${encodeURIComponent(id)}/claim`, {
+        method: sub === 'claim' ? 'POST' : 'DELETE', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: sub === 'claim' ? JSON.stringify(opts.note !== undefined ? { note: opts.note } : {}) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) { await loadLabels(); fail(`not yours: ${id} is ${label(data.owner)}'s. Nothing changed.`); }
+      if (!res.ok) fail(data.error || `HTTP ${res.status}`);
+      console.log(opts.json ? JSON.stringify(data.item) : sub === 'claim' ? `claimed ${id}: ${data.item.title}${data.item.note ? ` · ${data.item.note}` : ''}` : `released ${id}`);
+      return;
+    }
+    if (sub === 'progress') {
+      // roadmap progress <rm_id> <0-100|-> [status line]   your card only; «-» clears the bar
+      const [id, pct, ...words] = rest;
+      if (!id || pct === undefined || !(pct === '-' || /^\d{1,3}$/.test(pct))) usage('roadmap progress <rm_id> <0-100|-> [status line]');
+      const res = await fetch(`${base}/api/roadmap/${encodeURIComponent(id)}/progress`, {
+        method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ progress: pct === '-' ? null : Number(pct), ...(words.length ? { status: words.join(' ') } : {}) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) fail(data.error || `HTTP ${res.status}`);
+      console.log(opts.json ? JSON.stringify(data.item) : `${id}: ${data.item.progress ?? '–'}%${data.item.status ? ` · ${data.item.status}` : ''}`);
+      return;
+    }
+    if (sub === 'reviewer') {
+      // roadmap reviewer <rm_id> <name|->   who reviews the card: «Claude builds · Grok reviews»; «-» clears it
+      const [id, who] = rest;
+      if (!id || !who) usage('roadmap reviewer <rm_id> <name|->');
+      const data = await (await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewer: who === '-' ? null : who }) })).json();
+      console.log(opts.json ? JSON.stringify(data.item) : `${id}: reviewer ${data.item.reviewer ?? '–'}`);
+      return;
+    }
+    if (sub === 'drop') {
+      const [id] = rest;
+      if (!id) usage('roadmap drop <rm_id>');
+      await call(`/api/roadmap/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      console.log(`removed ${id}`);
+      return;
+    }
+    usage('roadmap | roadmap add <column> <title> | roadmap claim <id> [--note t] | roadmap release <id> | roadmap reviewer <id> <name|-> | roadmap move <id> <column> | roadmap drop <id>');
+  }
+
+
+  if (cmd === 'streak') {
+    // streak                    the streak now, the record, and the last breaks
+    // streak break <reason>     end it: you needed the orchestrator to unblock something (be honest)
+    if (args[0] === 'break') {
+      const reason = args.slice(1).join(' ').replace(/[\r\n\t]+/g, ' ').trim();
+      if (!reason) usage('streak break <reason>: why the orchestrator had to step in');
+      const data = await (await call('/api/streak/break', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })).json();
+      console.log(opts.json ? JSON.stringify(data.break) : `streak ended: ${data.break.reason}`);
+      return;
+    }
+    if (args.length) usage('streak | streak break <reason>');
+    const s = await (await call('/api/streak')).json();
+    if (opts.json) { console.log(JSON.stringify(s)); return; }
+    console.log(`streak: ${s.current} now · record ${s.record}${s.problem ? ` (${s.problem})` : ''}`);
+    await loadLabels();
+    for (const p of s.points.filter((x) => x.break).slice(-5)) console.log(`  ended at ${p.break.ended} by ${label(p.break.by)}: ${p.break.reason}`);
+    return;
+  }
+
+
+  if (cmd === 'flight') {
+    // flight                       everyone's work in flight
+    // flight working <text>        what you are on now (the clock starts when the text changes)
+    // flight waiting <text>        what you wait for: a review, CI, the orchestrator
+    // flight idle                  nothing in flight
+    const [state, ...rest] = args;
+    if (!state) {
+      const data = await (await call('/api/flight')).json();
+      if (opts.json) console.log(JSON.stringify(data.flights));
+      else if (!data.flights.length) console.log('no work in flight');
+      else { await loadLabels(); for (const f of data.flights) console.log(`${label(f.participant)}: ${f.state}${f.text ? ` · ${f.text}` : ''} (since ${f.since})`); }
+      return;
+    }
+    if (!['working', 'waiting', 'idle'].includes(state)) usage('flight working <text> | flight waiting <text> | flight idle');
+    const text = rest.join(' ').replace(/[\r\n\t]+/g, ' ').trim();
+    if (state === 'idle' && text) usage('flight idle takes no text');
+    if (state !== 'idle' && !text) usage(`flight ${state} needs a text: what on`);
+    if ([...text].length > 80) fail(`flight text must be at most 80 characters (got ${[...text].length})`);
+    const { flight } = await (await call('/api/flight', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state === 'idle' ? { state } : { state, text }),
+    })).json();
+    console.log(opts.json ? JSON.stringify(flight) : `flight: ${flight.state}${flight.text ? ` · ${flight.text}` : ''} (since ${flight.since})`);
     return;
   }
 
@@ -532,6 +685,20 @@ async function main() {
   }
 
   usage(cmd ? `unknown command "${cmd}"` : undefined);
+}
+
+/**
+ * How long `wait` pauses before asking again: every 3 s while the room is busy, every 6 min once
+ * nothing has been written for 20 min. Neon puts the hub's database to sleep after 5 quiet
+ * minutes; polling every 3 s around the clock kept it awake (decision #723, about $20 a month).
+ */
+function pollDelay(lastActivity, now, { busyMs = 3000, quietAfterMs = 20 * 60_000, quietMs = 6 * 60_000 } = {}) {
+  return now - lastActivity >= quietAfterMs ? quietMs : busyMs;
+}
+
+/** The status while a listener waits slowly: «💤 looks again at 15:31» (Zurich time). */
+function sleepText(at) {
+  return `💤 looks again at ${new Date(at).toLocaleTimeString('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit' })}`;
 }
 
 main().catch((e) => { console.error(`hub: ${e.message}`); process.exit(1); });

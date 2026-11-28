@@ -7,12 +7,19 @@
 // from an agent wakes only the agents it addresses (a message to everyone addresses every
 // agent), never the sender. Messages from the hub wake no one.
 //
+// The loop and cost guard (lib/guard.ts) can hold wake-ups back. While it is tripped, the
+// wake-ups that come due are not sent: they are recorded as failed, with the reason, and so are
+// never sent later, when the pause is over. A human message lifts the pause, and that message
+// wakes the agents as always.
+//
 // The signature contract (header names, HMAC, skew) is the one published in docs/api.md. The
 // combined header is still called X-Hub-Grok-Signature so existing receivers keep working.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { promises as dns } from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import type { Message, Sender } from './core';
+import type { GuardLimit } from './guard';
+import { currentGuard } from './guard-hub';
 import { loadRoster } from './participants';
 import { MAIN_ROOM, whoToWake, type Participant } from './shared';
 import type { PendingWake, Store, WakeDelivery } from './store';
@@ -144,13 +151,19 @@ export function parseWakeTarget(input: { url?: unknown; secret?: unknown }): Wak
   if (parsed.protocol !== 'https:') return { ok: false, error: 'The URL must be https.' };
   if (!parsed.hostname) return { ok: false, error: 'The URL must include a host.' };
   if (parsed.username || parsed.password) return { ok: false, error: 'The URL must not include a username or a password.' };
-  if (secret.length < MIN_SECRET_LENGTH || secret.length > MAX_SECRET_LENGTH) {
+  // Postgres counts characters (code points), JavaScript's length counts UTF-16 units: count as Postgres does.
+  const secretLength = [...secret].length;
+  if (secretLength < MIN_SECRET_LENGTH || secretLength > MAX_SECRET_LENGTH) {
     return { ok: false, error: `The secret must be between ${MIN_SECRET_LENGTH} and ${MAX_SECRET_LENGTH} characters.` };
   }
   if (isInternalHostname(parsed.hostname)) {
     return { ok: false, error: 'The URL must not point at an internal host.' };
   }
-  return { ok: true, target: { url: parsed.toString(), secret } };
+  // What is stored is the normalised URL, which can be much longer than what was typed (ä becomes %C3%A4).
+  // Check that one, so the database never refuses the row (its error would name the row, secret included).
+  const stored = parsed.toString();
+  if (stored.length > MAX_TARGET_URL_LENGTH) return { ok: false, error: 'The URL is too long.' };
+  return { ok: true, target: { url: stored, secret } };
 }
 
 /** The host of a stored target URL, for public answers. Never a path, query, secret or full URL. */
@@ -184,10 +197,14 @@ INTERNAL_V4.addSubnet('127.0.0.0', 8, 'ipv4');
 INTERNAL_V4.addSubnet('172.16.0.0', 12, 'ipv4');
 INTERNAL_V4.addSubnet('192.168.0.0', 16, 'ipv4');
 INTERNAL_V4.addSubnet('169.254.0.0', 16, 'ipv4');
+INTERNAL_V4.addSubnet('198.18.0.0', 15, 'ipv4'); // benchmarking networks
+INTERNAL_V4.addSubnet('224.0.0.0', 3, 'ipv4'); // multicast and reserved (224/4 and 240/4)
 
 const INTERNAL_V6 = new BlockList();
-INTERNAL_V6.addSubnet('::', 128, 'ipv6');
-INTERNAL_V6.addSubnet('::1', 128, 'ipv6');
+INTERNAL_V6.addSubnet('::', 96, 'ipv6'); // ::, ::1 and IPv4-compatible addresses such as ::127.0.0.1
+INTERNAL_V6.addSubnet('64:ff9b::', 96, 'ipv6'); // NAT64: reaches IPv4 addresses, internal ones included
+INTERNAL_V6.addSubnet('fec0::', 10, 'ipv6'); // site-local (deprecated, still routed in some networks)
+INTERNAL_V6.addSubnet('ff00::', 8, 'ipv6'); // multicast
 INTERNAL_V6.addSubnet('fc00::', 7, 'ipv6');
 INTERNAL_V6.addSubnet('fe80::', 10, 'ipv6');
 
@@ -289,6 +306,7 @@ export type DeliveryResult =
   | { status: 'idle' } // nobody to wake, or no target registered
   | { status: 'delivered'; deliveries: WakeDelivery[] }
   | { status: 'failed'; deliveries: WakeDelivery[] }
+  | { status: 'paused'; limit: GuardLimit; deliveries: WakeDelivery[] } // the guard held them back
   | { status: 'error'; error: string };
 
 export interface WakeupOptions {
@@ -306,7 +324,12 @@ export interface WakeupOptions {
   lookup?: DnsLookup;
   /** When false, skip the public-host check. Only the real-HTTP loopback test uses this. */
   enforcePublicTarget?: boolean;
+  /** The limit of the loop and cost guard that holds wake-ups back now, or null. Left out: worked out from the store (lib/guard-hub.ts). */
+  guard?: () => Promise<GuardLimit | null>;
 }
+
+/** The error a wake-up is recorded with when the guard held it back. */
+export const PAUSED_ERROR = 'Not sent: the guard has paused wake-ups. A message from a human lets them go on.';
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -346,6 +369,7 @@ export function createWakeup(options: WakeupOptions) {
   const enforcePublicTarget = options.enforcePublicTarget !== false;
 
   const rosterOf = () => options.roster ?? loadRoster().participants;
+  const guard = options.guard ?? (async () => (await currentGuard(store, { roster: rosterOf() })).tripped);
 
   async function credentials(participant: string): Promise<WebhookConfig | null> {
     const stored = await store.getWakeCredentials(participant);
@@ -415,6 +439,13 @@ export function createWakeup(options: WakeupOptions) {
     if (!pending.length) return { status: 'idle' };
 
     const deliveries: WakeDelivery[] = [];
+    // Asked after the claim, so it decides about exactly these rows. Each is closed as failed
+    // with the reason, not left pending: a pause must not end in a flood of old wake-ups.
+    const paused = await guard();
+    if (paused) {
+      for (const row of pending) deliveries.push(await store.saveWakeDelivery(row.message_id, row.participant, 'failed', 0, PAUSED_ERROR));
+      return { status: 'paused', limit: paused, deliveries };
+    }
     for (const row of pending) {
       const target = await credentials(row.participant);
       if (!target) {

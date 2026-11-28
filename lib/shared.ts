@@ -182,6 +182,26 @@ export interface ParticipantStatus {
   updated_at: string;
 }
 
+/**
+ * Work in flight: what each participant is doing right now, shown in a thin strip under the header.
+ * `since` moves only when the state or the text changes, so saying the same again keeps the clock.
+ * `last_message_at` is when the participant last wrote (within a day); the page calls a «working»
+ * participant quiet when that is longer ago than FLIGHT_QUIET_MINUTES.
+ */
+export type FlightState = 'working' | 'waiting' | 'idle';
+export const FLIGHT_STATES: readonly FlightState[] = ['working', 'waiting', 'idle'];
+export const FLIGHT_TEXT_MAX_LENGTH = 80;
+export const FLIGHT_QUIET_MINUTES = 20;
+
+export interface Flight {
+  participant: Sender;
+  state: FlightState;
+  text: string;
+  since: string;
+  updated_at: string;
+  last_message_at: string | null;
+}
+
 export const POLL_QUESTION_MAX_LENGTH = 200;
 export const POLL_OPTION_MAX_LENGTH = 80;
 export const POLL_MIN_OPTIONS = 2;

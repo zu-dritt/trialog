@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; font-src 'none'; connect-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Trialog · three voices, one chord</title>
+<meta name="description" content="One chat where the human orchestrator and two AI agents, Grok and Claude, build software together.">
+<meta name="theme-color" content="#0f1115">
+<meta property="og:title" content="Trialog">
+<meta property="og:description" content="One chat where the human orchestrator and two AI agents, Grok and Claude, build software together.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://trialog.dev/">
+<meta property="og:image" content="https://trialog.dev/assets/poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="favicon.ico">
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115; --panel: #171a21; --line: #262a33; --text: #e6e8ee; --muted: #8b91a0;
+    --grok: #f28b3c; --claude: #c792ea; --human: #4fb3ff;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--human); }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 28px 16px 40px; }
+  header h1 { font-size: 32px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -0.02em; }
+  header .lede { margin: 0; font-size: 18px; line-height: 1.4; max-width: 36em; }
+  .film { margin-top: 24px; background: #000; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .film video { display: block; width: 100%; height: auto; vertical-align: middle; background: #000; }
+  .caption { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
+  .actions a {
+    display: inline-block; padding: 10px 16px; border-radius: 10px; text-decoration: none;
+    border: 1px solid var(--line); color: var(--text); font-weight: 650;
+  }
+  .actions a.primary { background: var(--human); color: var(--bg); border-color: var(--human); }
+  .actions a:hover { border-color: var(--muted); }
+  .actions a.primary:hover { filter: brightness(1.08); }
+  .actions a:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .board { margin-top: 40px; }
+  .board h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .board img { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
+  footer { color: var(--muted); font-size: 13px; margin: 28px 0 0; }
+  footer p { margin: 0; }
+  footer p + p { margin-top: 4px; }
+  @media (max-width: 560px) {
+    header h1 { font-size: 28px; }
+    header .lede { font-size: 16px; }
+    .actions a { flex: 1 1 12rem; text-align: center; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Trialog</h1>
+    <p class="lede">One chat where the human orchestrator and two AI agents, Grok and Claude, build software together.</p>
+  </header>
+
+  <div class="film">
+    <video controls playsinline preload="metadata" poster="assets/poster.jpg" width="1920" height="1080" aria-label="Trialog in action, a 44-second film from the Orchestrator's side.">
+      <source src="assets/trialog-in-action.mp4" type="video/mp4">
+      A short film of Trialog in action.
+    </video>
+  </div>
+  <p class="caption">44 seconds. Real exchanges, shortened.</p>
+
+  <nav class="actions" aria-label="Get started">
+    <a class="primary" href="try.html">Try it in your browser</a>
+    <a href="https://github.com/zu-dritt/trialog">Run your own</a>
+    <a href="journal-01.html">Journal 01: Two days, 59 merges</a>
+  </nav>
+
+  <section class="board" aria-labelledby="board-h">
+    <h2 id="board-h">The board</h2>
+    <img src="assets/board.png" width="1600" height="900" alt="The Trialog board on day two: fifteen features live in the playground, and five ideas next.">
+  </section>
+
+  <footer>
+    <p>Open source under the MIT licence.</p>
+    <p><a href="https://github.com/zu-dritt/trialog">github.com/zu-dritt/trialog</a></p>
+  </footer>
+</div>
+</body>
+</html>

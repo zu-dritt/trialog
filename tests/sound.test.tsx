@@ -227,7 +227,7 @@ test('what arrives together is one sound: the agreed chord wins over the message
 test('a hidden tab hears only messages addressed to you and agreed decisions', () => {
   const table: [Cue, boolean][] = [
     [note(false), false], [note(true), true], [{ kind: 'agreed', freqs: [D4] }, true],
-    [{ kind: 'sent', freq: D4 }, false], [{ kind: 'reaction' }, false], [{ kind: 'version' }, false],
+    [{ kind: 'sent', freq: D4 }, false], [{ kind: 'reaction' }, false], [{ kind: 'version' }, true],
   ];
   for (const [cue, heard] of table) {
     assert.equal(audible(cue, true), heard, `${cue.kind} in a hidden tab`);
@@ -332,4 +332,25 @@ test('from a room that is not open, only a message someone else addressed to you
   assert.deepEqual(addressedCues([msg('claude', { recipient: 'david' })], null, ROSTER), [], 'no one signed in: nothing');
   // It is addressed, so it is heard even while the tab is hidden.
   assert.equal(audible(cues[0], true), true);
+});
+
+test('a new version chimes in a hidden tab too, and wins over a message that comes at the same time', () => {
+  const hiddenTab = player({ hidden: true });
+  hiddenTab.p.setOn(true); hiddenTab.p.wake();
+  hiddenTab.p.offer({ kind: 'version' });
+  vi.advanceTimersByTime(5000);
+  assert.equal(hiddenTab.count(), 2, 'the two-note rise plays while the tab is hidden');
+
+  const both = player();
+  both.p.setOn(true); both.p.wake();
+  both.p.offer(note());
+  both.p.offer({ kind: 'version' });
+  vi.advanceTimersByTime(5000);
+  assert.equal(both.count(), 2, 'the version chime (two notes), not the single message note');
+  vi.useRealTimers();
+});
+
+test('the reminder comes after 30 minutes', async () => {
+  const { VERSION_REMINDER_MS } = await import('../app/sound');
+  assert.equal(VERSION_REMINDER_MS, 30 * 60 * 1000);
 });
