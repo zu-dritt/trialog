@@ -407,6 +407,12 @@ export interface Store {
    * replaces the old one; null clears it. False when the card doesn't exist or isn't in Next.
    */
   setRoadmapPick(participant: Sender, itemId: string | null): Promise<boolean>;
+  /**
+   * The card's pictures, in this order (playground #1403): pictures already on the card stay, new
+   * ones must be the caller's own uploads that belong to nothing yet, and pictures left out are
+   * deleted with their bytes. Null when there is no such card; AttachmentLinkError for a bad new one.
+   */
+  setRoadmapPictures(id: string, attachments: readonly string[], by: Sender): Promise<RoadmapItem | null>;
   /** Every participant's pick, oldest first. A pick goes with its card when the card is deleted. */
   listRoadmapPicks(): Promise<{ participant: string; item_id: string; picked_at: string }[]>;
   startRoadmapItem(id: string, by: Sender): Promise<{ status: 'ok'; item: RoadmapItem; from: RoadmapColumn } | { status: 'started'; item: RoadmapItem } | { status: 'not_found' }>;
@@ -1793,6 +1799,36 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       if (pictures.length) await blobs.delete(db, pictures);
       return gone;
     },
+    async setRoadmapPictures(id, attachments, by) {
+      await ensure();
+      const result = await db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [cur] = await tx.query(`SELECT id FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return null;
+        const had = (await tx.query(`SELECT attachment_id FROM roadmap_pictures WHERE roadmap_item_id = $1::text`, [id])).map((r) => String(r.attachment_id));
+        const added = attachments.filter((a) => !had.includes(a));
+        if (added.length) {
+          const found = await tx.query(`SELECT id, sender, message_id, ${CARD_OF} FROM attachments WHERE id = ANY($1::text[]) FOR UPDATE`, [added]);
+          for (const aid of added) {
+            const row = found.find((r) => r.id === aid);
+            if (!row) throw new AttachmentLinkError(aid, 'unknown');
+            if (row.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+            if (row.message_id !== null || row.roadmap_item_id !== null) throw new AttachmentLinkError(aid, 'already linked');
+          }
+        }
+        const removed = had.filter((a) => !attachments.includes(a));
+        if (removed.length) await tx.query(`DELETE FROM attachments WHERE id = ANY($1::text[])`, [removed]);
+        await tx.query(`DELETE FROM roadmap_pictures WHERE roadmap_item_id = $1::text`, [id]);
+        for (const [position, aid] of attachments.entries()) {
+          await tx.query(`INSERT INTO roadmap_pictures (attachment_id, roadmap_item_id, position) VALUES ($1::text, $2::text, $3::int)`, [aid, id, position]);
+        }
+        const [row] = await tx.query(`UPDATE roadmap_items SET updated_by = $2::text, updated_at = now() WHERE id = $1::text RETURNING ${ROADMAP_COLS}`, [id, by]);
+        return { item: toRoadmap(row), removed };
+      });
+      if (!result) return null;
+      if (result.removed.length) await blobs.delete(db, result.removed);
+      return result.item;
+    },
     async setRoadmapPick(participant, itemId) {
       await ensure();
       if (itemId === null) {
@@ -2786,6 +2822,26 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       item.updated_by = shaped(by);
       item.updated_at = new Date(now()).toISOString();
       return { status: 'ok', item: { ...item } };
+    },
+    async setRoadmapPictures(id, attachments, by) {
+      const item = roadmap.get(id);
+      if (!item) return null;
+      const had = item.attachments.map((a) => a.id);
+      const added = attachments.filter((a) => !had.includes(a)).map((aid) => {
+        const upload = uploads.get(aid);
+        if (!upload) throw new AttachmentLinkError(aid, 'unknown');
+        if (upload.sender !== by) throw new AttachmentLinkError(aid, 'not yours');
+        if (upload.message_id !== null || upload.roadmap_item_id) throw new AttachmentLinkError(aid, 'already linked');
+        return upload;
+      });
+      const removed = had.filter((a) => !attachments.includes(a));
+      for (const aid of removed) uploads.delete(aid);
+      if (removed.length) await blobs.delete(noDb, removed);
+      for (const upload of added) upload.roadmap_item_id = id;
+      item.attachments = attachments.map((aid) => meta(uploads.get(aid)!));
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { ...item, attachments: [...item.attachments] };
     },
     async setRoadmapPick(participant, itemId) {
       const who = shaped(participant);

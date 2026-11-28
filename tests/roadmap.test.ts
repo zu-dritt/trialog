@@ -497,3 +497,45 @@ test('API: picks are for agents, only on a card in Next, and hub.js can set them
   const { readFileSync } = await import('node:fs');
   assert.match(readFileSync(new URL('../scripts/hub.js', import.meta.url), 'utf8'), /roadmap pick <rm_id\|->/);
 });
+
+async function pictureEditRules(store: Store) {
+  const png = (n: string) => ({ content_type: 'image/png' as const, width: 4, height: 3, data: Buffer.from(`edit ${n}`) });
+  const a = (await store.addAttachment({ sender: 'david', ...png('a') }))!;
+  const b = (await store.addAttachment({ sender: 'david', ...png('b') }))!;
+  const c = (await store.addAttachment({ sender: 'david', ...png('c') }))!;
+  const theirs = (await store.addAttachment({ sender: 'grok', ...png('g') }))!;
+  const card = (await store.addRoadmapItem({ column: 'later', title: 'Pictures', note: '', owner: null, by: 'david', attachments: [a.id, b.id] }))!;
+  // Keep b, drop a, add c, in a new order.
+  const edited = (await store.setRoadmapPictures(card.id, [c.id, b.id], 'david'))!;
+  assert.deepEqual(edited.attachments.map((x) => x.id), [c.id, b.id]);
+  assert.equal(edited.updated_by, 'david');
+  assert.equal(await store.getAttachment(a.id), null, 'a picture left out is deleted with its bytes');
+  assert.ok(await store.getAttachment(b.id));
+  // Someone else's upload, an unknown one, or one already on a card: refused, nothing changes.
+  await assert.rejects(store.setRoadmapPictures(card.id, [c.id, b.id, theirs.id], 'david'), /someone else/);
+  await assert.rejects(store.setRoadmapPictures(card.id, ['att_00000000'], 'david'), /does not exist/);
+  const other = (await store.addRoadmapItem({ column: 'later', title: 'Other', note: '', owner: null, by: 'david' }))!;
+  await assert.rejects(store.setRoadmapPictures(other.id, [b.id], 'david'), /already belongs/);
+  assert.deepEqual((await store.listRoadmap()).find((i) => i.id === card.id)!.attachments.map((x) => x.id), [c.id, b.id]);
+  assert.equal(await store.setRoadmapPictures('rm_00000000', [], 'david'), null);
+  // All gone.
+  assert.deepEqual((await store.setRoadmapPictures(card.id, [], 'david'))!.attachments, []);
+}
+
+test('a card\'s pictures can be changed: kept, dropped (deleted), added, reordered (memory and PGlite, #1403)', async () => {
+  await pictureEditRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await pictureEditRules(store);
+});
+
+test('API: PUT …/pictures checks its input', async () => {
+  const route = (await import('../app/api/roadmap/[id]/pictures/route')) as unknown as { PUT: Handler };
+  const card = ((await (await list.POST(req('david', 'POST', { column: 'later', title: 'Pics' }))).json()) as { item: RoadmapItem }).item;
+  const put = (body: unknown, id = card.id) => route.PUT(req('david', 'PUT', body, `/api/roadmap/${id}/pictures`), { params: Promise.resolve({ id }) });
+  assert.equal((await put({ attachments: 'x' })).status, 400);
+  assert.equal((await put({ attachments: ['att_a', 'att_a'] })).status, 400, 'twice the same');
+  assert.equal((await put({ attachments: ['att_zzzzzzzz'] })).status, 404, 'unknown upload');
+  assert.equal((await put({ attachments: [] })).status, 200);
+  assert.equal((await put({ attachments: [] }, 'rm_00000000')).status, 404);
+});

@@ -215,7 +215,7 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
       {editCard && actions?.edit && actions.remove && (
-        <EditCard key={editCard.id} card={editCard} busy={busy} onClose={() => setEditing(null)}
+        <EditCard key={editCard.id} card={editCard} busy={busy} onClose={() => setEditing(null)} upload={actions.upload} load={loadImage}
           onSave={(change) => actions.edit!(editCard.id, change)} onDelete={() => actions.remove!(editCard.id)} />
       )}
       {ROADMAP_COLUMNS.map((column) => {

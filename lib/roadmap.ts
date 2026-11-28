@@ -66,6 +66,15 @@ const ownerOf = (v: unknown, names: readonly string[]): string | null | Fail => 
   return v;
 };
 
+/** PUT …/pictures: {attachments: ["att_…"]}, the card's pictures in order: up to ROADMAP_PICTURES_MAX different ids. */
+export function parsePictures(body: unknown): { ok: true; attachments: string[] } | Fail {
+  const list = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).attachments : undefined;
+  if (!Array.isArray(list) || list.length > ROADMAP_PICTURES_MAX || !list.every((a) => typeof a === 'string' && ATTACHMENT_ID.test(a)) || new Set(list).size !== list.length) {
+    return { ok: false, status: 400, error: `Body must be {"attachments": [...]}: up to ${ROADMAP_PICTURES_MAX} different upload ids, in order.` };
+  }
+  return { ok: true, attachments: list as string[] };
+}
+
 /** POST: {column, title, note?, owner?, reviewer?, description?, attachments?: ["att_…"], top?: true}. */
 export function parseNewItem(body: unknown, names: readonly string[]): { ok: true; column: RoadmapColumn; title: string; note: string; owner: string | null; description: string; attachments: string[]; top: boolean; reviewer: string | null } | Fail {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, status: 400, error: 'Body must be {"column": "next", "title": "...", "note"?, "owner"?, "reviewer"?, "description"?, "attachments"?, "top"?}.' };

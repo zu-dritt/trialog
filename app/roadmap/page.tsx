@@ -234,10 +234,13 @@ export default function RoadmapPage() {
   }, [api, load]);
 
   // Editing a card in Next or Later (playground #1098): its title and text, or delete it.
-  const edit = useCallback(async (id: string, change: { title: string; description: string }): Promise<boolean> => {
+  const edit = useCallback(async (id: string, change: { title: string; description: string; attachments?: string[] }): Promise<boolean> => {
     setBusy(true);
     try {
-      await api(`/api/roadmap/${id}`, { method: 'PATCH', body: JSON.stringify(change) });
+      const { attachments, ...text } = change;
+      await api(`/api/roadmap/${id}`, { method: 'PATCH', body: JSON.stringify(text) });
+      // The pictures, when the window could change them (playground #1403): the new list, in order.
+      if (attachments) await api(`/api/roadmap/${id}/pictures`, { method: 'PUT', body: JSON.stringify({ attachments }) });
       setError('');
       return true;
     } catch (e) {

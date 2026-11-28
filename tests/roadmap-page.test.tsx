@@ -281,3 +281,14 @@ test('a card in Next says why it is there: your drag, how long it has waited, or
   assert.match(html, /data-why=""[^>]*>📌 David moved it here · 12 min ago</);
   assert.match(html, /data-picks=""[^>]*>⭐ Claude&#x27;s pick · Grok&#x27;s pick</);
 });
+
+test('Save in the card window counts a change of pictures, and waits for uploads (#1403)', async () => {
+  const { editState } = await import('../app/compose-idea');
+  const was = { title: 'Sounds', description: 'Two.', attachments: [{ id: 'att_a' }, { id: 'att_b' }] };
+  const ready = (id: string) => ({ state: 'ready' as const, attachment: { id } as never });
+  assert.equal(editState(was, 'Sounds', 'Two.', false, [ready('att_a'), ready('att_b')]).ready, false, 'same pictures: nothing to save');
+  assert.equal(editState(was, 'Sounds', 'Two.', false, [ready('att_b'), ready('att_a')]).ready, true, 'a new order');
+  assert.equal(editState(was, 'Sounds', 'Two.', false, [ready('att_a')]).ready, true, 'one removed');
+  assert.deepEqual(editState(was, 'Sounds', 'Two.', false, [ready('att_a'), ready('att_b'), { state: 'uploading' }]), { ready: false, label: 'Uploading…' });
+  assert.equal(editState(was, 'Sounds', 'Two.', false, [ready('att_a'), { state: 'failed' }]).ready, false, 'a failed upload blocks Save');
+});
