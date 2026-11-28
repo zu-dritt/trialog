@@ -238,3 +238,18 @@ test('«🚀 Build it!» on cards in Next and Later, only for the orchestrator (
   assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: null }), '🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now). First claim wins.');
   assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: 'claude' }), '@claude 🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now)');
 });
+
+test('a card in Next or Later opens for editing from its title; Save needs a title and a change (#1098)', async () => {
+  const { editState } = await import('../app/compose-idea');
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }] as never;
+  const items = [card('rm_now00000', 'now', 0), card('rm_next0000', 'next', 0), card('rm_later000', 'later', 0), card('rm_done0000', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me="david" now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {}, edit: async () => true, remove: async () => true }} />);
+  assert.deepEqual([...html.matchAll(/data-edit="([^"]+)"/g)].map((m) => m[1]), ['rm_next0000', 'rm_later000']);
+  const plain = renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me="david" now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {} }} />);
+  assert.ok(!plain.includes('data-edit='), 'without the actions, titles are plain text');
+  const was = { title: 'Sounds', description: 'Two.' };
+  assert.deepEqual(editState(was, 'Sounds', 'Two.', false), { ready: false, label: 'Save' }, 'nothing changed');
+  assert.deepEqual(editState(was, 'Two new sounds', 'Two.', false), { ready: true, label: 'Save' });
+  assert.deepEqual(editState(was, '  ', 'Two.', false), { ready: false, label: 'Save' }, 'a title is needed');
+  assert.deepEqual(editState(was, 'Sounds', 'Two, a chime.', true), { ready: false, label: 'Saving…' });
+});

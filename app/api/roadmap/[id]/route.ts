@@ -15,7 +15,8 @@ export const PATCH = safe(async (request: Request, ctx: Ctx) => {
   if (denied) return denied;
   const { id } = await ctx.params;
   if (!ROADMAP_ID.test(id)) return error(404, 'No such card.');
-  const [body, bad] = await readJson(request, 4 * 1024);
+  // Room for a full description (4000 characters, up to 4 bytes each) with its title and note.
+  const [body, bad] = await readJson(request, 20 * 1024);
   if (bad) return bad;
   const roster = loadRoster().participants;
   const input = parseItemChange(body, roster.map((p) => p.name));

@@ -52,7 +52,7 @@ test('the page posts the go to the reviewer and puts the 🚀 on it', () => {
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /api\('\/api\/messages', \{ method: 'POST', body: JSON\.stringify\(\{ text: shipText\(card, prs\), \.\.\.\(card\.reviewer \? \{ to: card\.reviewer \} : \{\}\) \}\) \}\)/);
   assert.match(page, /api\(`\/api\/messages\/\$\{message\.id\}\/reactions\/\$\{encodeURIComponent\('🚀'\)\}`, \{ method: 'PUT' \}\)/);
-  assert.match(page, /addIdea, upload, ship, build \}\}/);
+  assert.match(page, /addIdea, upload, ship, build, edit, remove \}\}/);
 });
 
 test('a second click while the go is on its way posts nothing (Grok\'s nit on PR 106)', () => {

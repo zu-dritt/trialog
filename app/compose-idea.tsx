@@ -108,3 +108,67 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
     </>
   );
 }
+
+export interface CardEdit { title: string; description: string }
+
+/** What the edit window's Save says, and whether it can be pressed: a title, and something changed. */
+export function editState(card: CardEdit, title: string, description: string, busy: boolean): { ready: boolean; label: string } {
+  if (busy) return { ready: false, label: 'Saving…' };
+  const changed = title.trim() !== card.title || description.trim() !== card.description.trim();
+  return { ready: title.trim().length > 0 && changed, label: 'Save' };
+}
+
+/**
+ * The same window as Compose, for a card in Next or Later (playground #1098): change its title and
+ * text, or delete it. Its pictures stay as they are. Delete asks once more, since it can't be undone.
+ */
+export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
+  card: CardEdit & { id: string; attachments?: readonly unknown[] };
+  onSave: (change: CardEdit) => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
+  onClose: () => void;
+  busy?: boolean;
+}) {
+  const [title, setTitle] = useState(card.title);
+  const [description, setDescription] = useState(card.description);
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { titleRef.current?.focus(); }, []);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [onClose]);
+  const state = editState(card, title, description, busy);
+  const pictures = card.attachments?.length ?? 0;
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!state.ready) return;
+    if (await onSave({ title: title.trim(), description: description.trim() })) onClose();
+  };
+  const remove = async () => {
+    if (!window.confirm(`Delete «${card.title}»? This can't be undone.`)) return;
+    if (await onDelete()) onClose();
+  };
+  return (
+    <div role="dialog" aria-modal="false" aria-label={`Edit «${card.title}»`} data-edit-window={card.id}
+      className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90vh] flex-col rounded-t-xl border border-line bg-panel shadow-2xl sm:inset-x-auto sm:right-6 sm:w-[34rem] sm:rounded-xl sm:bottom-6">
+      <div className="flex items-center justify-between rounded-t-xl bg-[#2a2f3a] px-4 py-2">
+        <span className="text-sm font-semibold">Edit card · wakes no one</span>
+        <button type="button" onClick={onClose} aria-label="Close without saving" title="Close without saving" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
+      </div>
+      <form onSubmit={(e) => { void submit(e); }} className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={ROADMAP_TITLE_MAX}
+          aria-label="Title of the card" className="rounded-md border border-line bg-bg px-2 py-1.5 text-sm font-semibold" />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={ROADMAP_DESCRIPTION_MAX}
+          placeholder="Say it in full." aria-label="Description of the card"
+          className="min-h-[10rem] flex-1 resize-y rounded-md border border-line bg-bg px-2 py-1.5 text-sm leading-relaxed" />
+        <div className="flex items-center gap-2">
+          <button type="submit" disabled={!state.ready} className="cursor-pointer rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#0f1115] disabled:cursor-default disabled:opacity-40">{state.label}</button>
+          <button type="button" data-delete-card={card.id} onClick={() => { void remove(); }} disabled={busy}
+            className="cursor-pointer rounded-md border border-[#f85149] bg-transparent px-2 py-1 text-sm text-[#ff7b72] hover:bg-[#f85149]/15 disabled:opacity-40">Delete</button>
+          <span className="ml-auto text-xs text-muted">{pictures > 0 && `🖼 ${pictures} stay · `}{[...description].length}/{ROADMAP_DESCRIPTION_MAX}</span>
+        </div>
+      </form>
+    </div>
+  );
+}

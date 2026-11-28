@@ -8,7 +8,7 @@ import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, u
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
-import { ComposeIdea, type NewIdea } from './compose-idea';
+import { ComposeIdea, EditCard, type CardEdit, type NewIdea } from './compose-idea';
 import { REPO, pullRequestNumbers } from './links';
 import { allMerged, settledByMerge } from './merged';
 import type { Attachment } from '../lib/shared';
@@ -63,7 +63,14 @@ export interface BoardActions {
   ship?: (card: RoadmapItem, prs: readonly number[]) => Promise<boolean>;
   /** «🚀 Build it!» on a card in Next or Later (playground #1184/#1185): posts the go and moves the card to the top of Now; true when sent. */
   build?: (card: RoadmapItem) => Promise<boolean>;
+  /** Changes a card's title and text (a card in Next or Later, playground #1098); true when saved. */
+  edit?: (id: string, change: CardEdit) => Promise<boolean>;
+  /** Deletes a card; true when it is gone. */
+  remove?: (id: string) => Promise<boolean>;
 }
+
+/** Cards that can be edited: not yet started (Next or Later). Now and Done are history in the making. */
+export const editable = (card: Pick<RoadmapItem, 'column'>): boolean => card.column === 'next' || card.column === 'later';
 
 /**
  * The pull requests a card can be shipped as, from the board (playground #617): a card in review,
@@ -166,6 +173,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   // A go on its way: a second click before the first answer must not post a second go (Grok's nit).
   const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
   const human = participants.some((p) => p.name === me && p.kind === 'human');
+  // The card open in the edit window, if any.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editCard = editing ? items.find((i) => i.id === editing) ?? null : null;
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/plain');
@@ -174,6 +184,10 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   };
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
+      {editCard && actions?.edit && actions.remove && (
+        <EditCard key={editCard.id} card={editCard} busy={busy} onClose={() => setEditing(null)}
+          onSave={(change) => actions.edit!(editCard.id, change)} onDelete={() => actions.remove!(editCard.id)} />
+      )}
       {ROADMAP_COLUMNS.map((column) => {
         const cards = columnOf(items, column);
         return (
@@ -199,7 +213,10 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                   <div className="flex items-start gap-2">
                     <span className="w-5 flex-none pt-0.5 text-right text-xs tabular-nums text-muted">{index + 1}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold leading-snug">{card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
+                      <div className="text-sm font-semibold leading-snug">{actions?.edit && editable(card)
+                        ? <button type="button" data-edit={card.id} draggable={false} onClick={() => setEditing(card.id)} title="Edit or delete this card"
+                            className="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline hover:decoration-dotted">{card.title} <span aria-hidden="true" className="text-xs font-normal text-muted">✎</span></button>
+                        : card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
                       {(card.note || card.owner || card.reviewer || card.raised_by) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {cardRoles(card, participants).map((r, i) => (
