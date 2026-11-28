@@ -96,3 +96,20 @@ enum AccountStore {
         SecItemDelete(base(key) as CFDictionary)
     }
 }
+
+/// First-launch bookkeeping. UserDefaults is wiped when the app is deleted; the Keychain usually
+/// is not. If the flag is missing we clear any leftover account so Setup shows (a reinstall, or
+/// the first open of a build that introduces the flag — that once-only sign-out is expected).
+enum AccountLaunch {
+    static let didLaunchBeforeKey = "didLaunchBefore"
+
+    /// Call once at start, before `AccountStore.load()`. A later launch leaves the account alone.
+    static func prepareAccount(
+        defaults: UserDefaults = .standard,
+        clear: () -> Void = { AccountStore.clear() }
+    ) {
+        if defaults.bool(forKey: didLaunchBeforeKey) { return }
+        clear()
+        defaults.set(true, forKey: didLaunchBeforeKey)
+    }
+}

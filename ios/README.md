@@ -5,7 +5,19 @@ comes along; the app adds what a page can't do:
 
 - **Sign-in once:** on first start you enter your hub's address and paste your token (a whole
   settings line like `DAVID_TOKEN=…` works too). Both go into the iPhone's Keychain, on this device
-  only, and nowhere else.
+  only, and nowhere else. The setup fields start empty (no leftover token).
+- **Switch hub:** the ••• button at the top right of the hub screen (a native overlay, not part of
+  the page) has «Switch hub…». After you confirm, the app asks the old hub to stop sending pushes to
+  this phone (`DELETE /api/push/devices`, best effort), forgets the address and token, and shows the
+  setup screen again, empty. The hub page's own «Change token» only swaps the token for the same hub.
+  After you sign in to the new hub, push registers with it the same way as on first start
+  (`POST /api/push/devices`).
+- **A reinstall starts clean.** Deleting the app usually leaves the Keychain items behind, so
+  without this the setup screen would not show again. A `didLaunchBefore` flag in UserDefaults
+  (wiped with the app) tells a reinstall from a later launch: if the flag is missing, the app
+  clears any leftover Keychain account and Setup shows. The first open of the build that
+  introduced the flag also sees a missing flag, so it signs you in again once; later upgrades
+  keep the hub.
 - **Face ID** (or the phone's passcode) before the hub shows: on a cold start, and after five minutes
   in the background.
 - **Push:** the app asks once, gets the phone's push address from Apple, and gives it to the hub
