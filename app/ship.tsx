@@ -104,3 +104,16 @@ export function shipNotice(
   if (kind(me) !== 'human' || kind(message.sender) !== 'agent') return null;
   return { text: `🚀 Ship it! Go on #${message.id}.`, to: message.sender, reply_to: message.id, room: message.room };
 }
+
+/**
+ * Whether this go was already said in words: the same human's same go message, replying to the same
+ * message, is on the page. Then a go given again (after taking it back) sends nothing new (Grok's
+ * should-fix on PR 123).
+ */
+export function alreadySaid(
+  messages: readonly Pick<Message, 'sender' | 'reply_to' | 'text'>[],
+  notice: { text: string; reply_to: number },
+  me: Sender,
+): boolean {
+  return messages.some((x) => x.sender === me && x.reply_to === notice.reply_to && x.text === notice.text);
+}

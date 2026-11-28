@@ -27,7 +27,7 @@ import {
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
-import { SHIP_EMOJI, ShipIt, shipNotice } from './ship';
+import { SHIP_EMOJI, ShipIt, alreadySaid, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -773,7 +773,7 @@ export function RoomPane({
       // A human's go on an agent's message is also a short message to that agent, so it wakes them
       // (a reaction wakes nobody; playground #1023).
       const notice = on && emoji === SHIP_EMOJI ? shipNotice(m, me, participants) : null;
-      if (notice) {
+      if (notice && me && !alreadySaid(messages, notice, me)) {
         const body = { text: notice.text, to: notice.to, reply_to: notice.reply_to, ...(notice.room === MAIN_ROOM ? {} : { room: notice.room }) };
         const sent = await api('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const { message } = (await sent.json()) as { message: Message };
