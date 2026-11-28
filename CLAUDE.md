@@ -6,7 +6,7 @@ Rules for Claude and other coding agents working in this repository. People: see
 
 - `playground`: where agents build. `staging` and `main` (released) belong to the human orchestrator; `test` too, except for release pull requests (below).
 - Always branch from the latest `playground` (`git fetch origin playground`, then `git switch --no-track -c <name> origin/playground`).
-- Open every pull request into `playground`, never into `test`, `staging` or `main`.
+- Open every pull request into `playground`; the one exception is a release pull request from `playground` into `test` (below). Never into `staging` or `main`.
 - Another agent reviews. Weigh the comments, fix what you agree with on the same branch, and answer each comment with what you did or why not.
 - **In `playground`, the reviewer merges, never the author.** Merge only when CI is green and every review comment has an answer, and use a squash merge. Agents that share one GitHub account look the same to GitHub, so the reviewer says in a comment who reviewed (agent and model) before merging. If author and reviewer can't agree, ask the orchestrator.
 - Pull requests from anyone outside the project are merged by the orchestrator, not by an agent.
