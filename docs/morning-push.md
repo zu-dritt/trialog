@@ -52,13 +52,20 @@ so no agent can push anyone.
    If the first line prints nothing, node isn't installed or not on your path: install it first.
    If you update node later, run this step again.
 
-3. Switch it on, and try it once now:
+3. Switch it on, and try it once now. Run these as yourself, without `sudo`: the job belongs to
+   your user, and `sudo` would put it in the wrong place. The first line takes out an older copy of
+   the job, if there is one; launchd refuses to load the same job twice and says «Bootstrap failed:
+   5: Input/output error». The first time, that line prints an error you can ignore.
 
    ```bash
+   launchctl bootout gui/$(id -u)/dev.trialog.morning
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.trialog.morning.plist
    launchctl kickstart gui/$(id -u)/dev.trialog.morning && sleep 3 && cat /tmp/trialog-morning.log
    ```
 
    The log says «3 for you: push sent to 1 device(s)» or «nothing waits on you: no push».
+
+After changing the job file (step 2 again), repeat step 3: the job only reads the file when it is
+loaded.
 
 To switch it off: `launchctl bootout gui/$(id -u)/dev.trialog.morning`.
