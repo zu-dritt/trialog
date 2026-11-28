@@ -2,8 +2,8 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { forYou } from '../lib/for-you';
-import { ForYouList, forYouLabel, newWaits, waitKey } from '../app/for-you';
+import { forYou, forYouPushText } from '../lib/for-you';
+import { ForYouList, forYouLabel, newWaits } from '../app/for-you';
 import type { RoadmapItem } from '../lib/roadmap';
 
 const people = [
@@ -59,10 +59,22 @@ test('the list in the header', () => {
   assert.match(html, /href="\/roadmap#rm_wait0000" target="trialog-roadmap"/);
 });
 
+test('each item keeps its key between polls: the decision, the card or the agent', () => {
+  assert.deepEqual(forYou({ ...base, me: 'david' }).map((i) => i.key), ['decision-d10', 'flight-grok', 'card-rm_wait0000']);
+});
+
+test('the morning push: the count and the oldest item, cut for a lock screen', () => {
+  const items = forYou({ ...base, me: 'david' });
+  assert.equal(forYouPushText(items), '⛔ 3 for you. Oldest: Agree or Object: Ship v0.4?');
+  assert.equal(forYouPushText(items.slice(1, 2)), '⛔ 1 for you: Grok waits: merge PR 160');
+  const long = forYouPushText([{ ...items[0], text: 'x'.repeat(300) }]);
+  assert.ok([...long].length < 140 && long.endsWith('…'));
+});
+
 test('the sound rings only for a wait that is new since the last poll, never for what was there on load', () => {
   const items = forYou({ ...base, me: 'david' });
   assert.equal(newWaits(null, items), 0, 'the first poll is what was already there');
-  const seen = new Set(items.slice(0, 2).map(waitKey));
+  const seen = new Set(items.slice(0, 2).map((i) => i.key));
   assert.equal(newWaits(seen, items), 1, 'the card that joined');
-  assert.equal(newWaits(new Set(items.map(waitKey)), items.slice(1)), 0, 'one went away: quiet');
+  assert.equal(newWaits(new Set(items.map((i) => i.key)), items.slice(1)), 0, 'one went away: quiet');
 });

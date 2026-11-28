@@ -145,6 +145,16 @@ test('the picker shows only with two or more providers', async () => {
   assert.match(two, /<option value="xai" selected="">Grok<\/option>/);
 });
 
+test('the team\'s names go to the model, so «crack and Claude» becomes «Grok and Claude» (#1455)', async () => {
+  const { teamNames, tidySystem } = await import('../lib/tidy');
+  assert.deepEqual(teamNames(['Grok', 'grok', 'Claude', '', 'Orchestrator', 'david', '<script>', 'x'.repeat(41)]), ['Grok', 'Claude', 'Orchestrator', 'david']);
+  assert.match(tidySystem('message-1', ['Grok', 'Claude']), /People in this team: Grok, Claude\. Dictation often mishears their names/);
+  assert.doesNotMatch(tidySystem('message-1'), /People in this team/, 'no names, no line');
+  const f = fake({ text: 'Grok and Claude, you rock.' });
+  await tidy('crack and Claude you rock', f.client, ['Grok', 'Claude']);
+  assert.match(String((f.calls[0] as { system: string }).system), /People in this team: Grok, Claude/);
+});
+
 const xaiOk = (content: string, extra: Record<string, unknown> = {}) => ({
   choices: [{ finish_reason: extra.finish_reason ?? 'stop', message: { role: 'assistant', content, refusal: extra.refusal ?? null } }],
   usage: { prompt_tokens: 80, completion_tokens: 20 },
@@ -202,4 +212,10 @@ test('xAI: HTTP errors log only a status and leave the text alone', async () => 
   assert.equal(limited.ok === false && limited.status, 429);
   const down = await tidyWithXai('hi', async () => new Response('{}', { status: 500 }), env);
   assert.equal(down.ok === false && down.status, 502);
+});
+
+test('the xAI request gets the team\'s names too (#1455)', async () => {
+  const { xaiRequest } = await import('../lib/tidy');
+  const r = xaiRequest('crack and Claude', 'message-1', ['Grok', 'Claude']);
+  assert.match(r.messages[0].content, /People in this team: Grok, Claude/);
 });

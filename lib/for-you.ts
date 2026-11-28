@@ -11,6 +11,8 @@ import type { Flight, Participant } from './shared';
 
 export interface ForYouItem {
   kind: 'decision' | 'card' | 'flight';
+  /** Stable across polls: the decision, the card or the agent it is about. */
+  key: string;
   /** What to do, in a line: «Agree or Object: …», «Card: …», «Grok waits: …». */
   text: string;
   /** Where to do it: the message in the hub, the card on the roadmap, or the address in the card's note. */
@@ -37,19 +39,29 @@ export function forYou(input: {
   const human = person?.kind === 'human';
   const items: ForYouItem[] = [];
   for (const d of openDecisionsFor(decisions, me)) {
-    items.push({ kind: 'decision', text: `Agree or Object: ${promptPreview(d.decision.prompt.replace(/^@\w+\s+/, ''), 90)}`, href: null, since: d.decision.created_at, message: { id: d.decision.message_id, room: d.room } });
+    items.push({ kind: 'decision', key: `decision-${d.decision.id}`, text: `Agree or Object: ${promptPreview(d.decision.prompt.replace(/^@\w+\s+/, ''), 90)}`, href: null, since: d.decision.created_at, message: { id: d.decision.message_id, room: d.room } });
   }
   if (human) {
     const humans = participants.filter((p) => p.kind === 'human').flatMap((p) => [p.name, p.label ?? '']).filter(Boolean);
     for (const card of roadmap) {
       const status = cardStatus(card, now, humans);
       if (status?.tone !== 'blocked' || settledByMerge(card.note, merged, repo)) continue;
-      items.push({ kind: 'card', text: `Card: ${card.title}${card.note ? ` (${card.note})` : ''}`, href: unblockHref(card, status) ?? `/roadmap#${card.id}`, since: card.updated_at });
+      // `since` is the card's last edit: the hub doesn't record when a card turned red (that would be a new column).
+      items.push({ kind: 'card', key: `card-${card.id}`, text: `Card: ${card.title}${card.note ? ` (${card.note})` : ''}`, href: unblockHref(card, status) ?? `/roadmap#${card.id}`, since: card.updated_at });
     }
     for (const w of waitingOn(flights, person, merged, repo)) {
       const label = participants.find((p) => p.name === w.by)?.label ?? w.by;
-      items.push({ kind: 'flight', text: `${label} waits: ${w.text}`, href: null, since: w.since });
+      items.push({ kind: 'flight', key: `flight-${w.by}`, text: `${label} waits: ${w.text}`, href: null, since: w.since });
     }
   }
   return items.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+}
+
+/** The morning push (slice 2): the count and the oldest item, short enough for a lock screen. */
+export function forYouPushText(items: readonly ForYouItem[]): string {
+  const first = items[0]?.text ?? '';
+  const head = `⛔ ${items.length} for you`;
+  if (!first) return head;
+  const line = [...first].length > 110 ? `${[...first].slice(0, 109).join('')}…` : first;
+  return items.length === 1 ? `${head}: ${line}` : `${head}. Oldest: ${line}`;
 }
