@@ -14,7 +14,7 @@ import type { PushDevice, PushEnv, PushPlatform, Store } from './store';
 export const DEFAULT_BUNDLE_ID = 'dev.trialog.app';
 export const BUNDLE_ID_MAX = 255;
 export const BUNDLE_ID_PATTERN = /^[A-Za-z]([A-Za-z0-9-]{0,62}\.)+[A-Za-z0-9-]{1,63}$/;
-export const DEVICE_TOKEN_PATTERN = /^[0-9a-fA-F]{64,256}$/;
+export const DEVICE_TOKEN_PATTERN = /^[0-9a-fA-F]{64,200}$/;
 export const ALERT_SNIPPET = 80;
 
 export function defaultBundleId(env: Record<string, string | undefined> = process.env): string {
@@ -30,7 +30,7 @@ export function parsePushDevice(body: unknown, fallbackBundleId: string = defaul
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'Send a JSON object.' };
   const rec = body as Record<string, unknown>;
   if (typeof rec.token !== 'string' || !DEVICE_TOKEN_PATTERN.test(rec.token.trim())) {
-    return { ok: false, error: 'token must be a 64-to-256 character hex device token.' };
+    return { ok: false, error: 'token must be a 64-to-200 character hex device token.' };
   }
   if (rec.platform !== 'ios') return { ok: false, error: "platform must be \"ios\"." };
   if (rec.env !== 'sandbox' && rec.env !== 'production') {
@@ -50,7 +50,7 @@ export function parsePushToken(body: unknown): { ok: true; token: string } | { o
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'Send a JSON object.' };
   const rec = body as Record<string, unknown>;
   if (typeof rec.token !== 'string' || !DEVICE_TOKEN_PATTERN.test(rec.token.trim())) {
-    return { ok: false, error: 'token must be a 64-to-256 character hex device token.' };
+    return { ok: false, error: 'token must be a 64-to-200 character hex device token.' };
   }
   return { ok: true, token: rec.token.trim() };
 }
