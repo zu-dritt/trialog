@@ -9,6 +9,7 @@ import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } fro
 import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { eitherSignal, watchNap } from './nap';
+import { ACTIVITY_EVENTS, HUB_REST_AFTER_MS, REST_POLL_MS, paceFor } from './roadmap-pace';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision } from './decision';
@@ -245,6 +246,17 @@ export function RoomPane({
     // The open stream's own switch: a nap (the tab hidden for 15 minutes) ends it, so the database can sleep.
     let conn = new AbortController();
     const nap = watchNap(document, () => conn.abort());
+    // A visible hub nobody is at rests (playground #1004): after HUB_REST_AFTER_MS without a movement
+    // on the page or a new message, the stream ends and one look every REST_POLL_MS follows, so the
+    // database can sleep at night. Any movement wakes it at once, and it catches up.
+    let lastActive = Date.now();
+    let wakeUp: (() => void) | null = null;
+    const stirred = () => { lastActive = Date.now(); wakeUp?.(); };
+    const onVisible = () => { if (!document.hidden) stirred(); };
+    for (const type of ACTIVITY_EVENTS) window.addEventListener(type, stirred, { passive: true });
+    document.addEventListener('visibilitychange', onVisible);
+    const resting = () => paceFor(document.hidden, Date.now(), lastActive, HUB_REST_AFTER_MS) === 'rest';
+    const restCheck = setInterval(() => { if (resting()) conn.abort(); }, 30_000);
     lastId.current = 0;
     setMessages([]);
     setPinned([]);
@@ -276,6 +288,8 @@ export function RoomPane({
 
     const addMessages = (incoming: Message[]) => {
       if (!incoming.length) return;
+      // A new message (not a re-sent one with a reaction or a vote) means someone is talking: stay live.
+      if (lastId.current && incoming[incoming.length - 1].id > lastId.current) lastActive = Date.now();
       lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
       // What arrives while this room is open counts as seen there. The list is per room, so the
       // other pane's room is not moved.
@@ -408,6 +422,19 @@ export function RoomPane({
           await nap.awake(abort.signal);
           if (stopped) return;
         }
+        if (resting()) {
+          if (lead) setStatus?.('live · resting while nobody is here');
+          try {
+            await pollOnce();
+          } catch (e) {
+            if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
+          }
+          if (!stopped && resting()) {
+            await new Promise<void>((resolve) => { wakeUp = resolve; void pause(REST_POLL_MS).then(resolve); });
+            wakeUp = null;
+          }
+          continue;
+        }
         let clean = false;
         try {
           await loadParticipants();
@@ -417,9 +444,9 @@ export function RoomPane({
           if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
         }
         if (stopped) return;
-        if (clean || nap.napping) continue;
+        if (clean || nap.napping || resting()) continue;
         const until = Date.now() + FALLBACK_MS;
-        while (!stopped && !nap.napping && Date.now() < until) {
+        while (!stopped && !nap.napping && !resting() && Date.now() < until) {
           try {
             await pollOnce();
             if (!stopped && lead) setStatus?.('live · polling');
@@ -432,7 +459,15 @@ export function RoomPane({
       }
     };
     void run();
-    return () => { stopped = true; abort.abort(); nap.stop(); if (lead) window.removeEventListener('storage', onStorage); };
+    return () => {
+      stopped = true;
+      abort.abort();
+      nap.stop();
+      clearInterval(restCheck);
+      for (const type of ACTIVITY_EVENTS) window.removeEventListener(type, stirred);
+      document.removeEventListener('visibilitychange', onVisible);
+      if (lead) window.removeEventListener('storage', onStorage);
+    };
   }, [token, api, room, lead, onMissingRoom, setMe, setParticipants, setRooms, setSeenChanged, setServerBuild, setSetupError, setStatus]);
 
   useEffect(() => { onHeard?.(messages, primed); }, [messages, primed, onHeard]);

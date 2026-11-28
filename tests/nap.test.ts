@@ -84,7 +84,7 @@ test('the pane ends its stream on a nap and skips the poll fallback while nappin
   assert.match(pane, /const nap = watchNap\(document, \(\) => conn\.abort\(\)\);/);
   assert.match(pane, /signal: eitherSignal\(abort\.signal, conn\.signal\)/);
   assert.match(pane, /if \(nap\.napping\) \{\s+if \(lead\) setStatus\?\.\('live · napping while hidden'\);\s+await nap\.awake\(abort\.signal\);/);
-  assert.match(pane, /while \(!stopped && !nap\.napping && Date\.now\(\) < until\)/);
+  assert.match(pane, /while \(!stopped && !nap\.napping && !resting\(\) && Date\.now\(\) < until\)/, 'and while resting (playground #1004)');
   assert.match(pane, /nap\.stop\(\);/);
   const guard = readFileSync(new URL('../app/guard.tsx', import.meta.url), 'utf8');
   assert.match(guard, /if \(!document\.hidden\) void load\(\); \}, open \? GUARD_PANEL_MS : GUARD_RING_MS/);
