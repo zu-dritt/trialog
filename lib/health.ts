@@ -41,7 +41,7 @@ export function wordOf(flight: Pick<Flight, 'state' | 'text'> | null | undefined
 }
 
 /** The emoji each agent chose for its chip. Another agent gets a neutral one until it picks its own. */
-export const HEALTH_EMOJI: Readonly<Record<string, string>> = { grok: '🔥', claude: '🛠️' };
+export const HEALTH_EMOJI: Readonly<Record<string, string>> = { grok: '🔥', claude: '🛠️', google: '✨' };
 export const DEFAULT_HEALTH_EMOJI = '🙂';
 
 export interface HealthBlocked { on: string; text: string; since: string }

@@ -2,7 +2,7 @@
 // the one word, and when an agent is blocked on a human.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { HEARTBEAT_AMBER_MINUTES, HEARTBEAT_GREY_MINUTES, blockedOf, healthReport, heartbeatOf, lastHeard, lastMergeOf, wordOf } from '../lib/health';
+import { DEFAULT_HEALTH_EMOJI, HEALTH_EMOJI, HEARTBEAT_AMBER_MINUTES, HEARTBEAT_GREY_MINUTES, blockedOf, healthReport, heartbeatOf, lastHeard, lastMergeOf, wordOf } from '../lib/health';
 import type { Flight, Participant, ParticipantStatus } from '../lib/shared';
 
 const NOW = Date.parse('2026-11-28T09:00:00.000Z');
@@ -125,4 +125,10 @@ test('in the report: blocked, last merge by branch, and the word, together', () 
 test('last merge: none when the agent has none, and a branch of another name does not count', () => {
   assert.equal(lastMergeOf('grok', []), null);
   assert.equal(lastMergeOf('grok', [{ number: 1, title: 'x', merged_at: ago(1), branch: 'grokker/x' }]), null, '«grokker/» is not «grok/»');
+});
+
+test('each agent\'s own chip emoji: Grok 🔥, Claude 🛠️, Google ✨ (its own pick, #1625); others get the neutral one', () => {
+  assert.equal(HEALTH_EMOJI.google, '✨');
+  assert.deepEqual(Object.keys(HEALTH_EMOJI), ['grok', 'claude', 'google']);
+  assert.equal(HEALTH_EMOJI.scout ?? DEFAULT_HEALTH_EMOJI, '🙂');
 });
