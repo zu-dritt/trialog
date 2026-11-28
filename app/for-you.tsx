@@ -17,12 +17,12 @@ export function forYouLabel(n: number): string {
 export function ForYouList({ items, onMessage }: { items: readonly ForYouItem[]; onMessage: (room: string, id: number) => void }) {
   return (
     <ol data-for-you-list="" className="m-0 flex list-none flex-col gap-1 p-0">
-      {items.map((item, i) => {
+      {items.map((item) => {
         const icon = item.kind === 'decision' ? '🗳' : item.kind === 'card' ? '🗂' : '⏳';
         const line = <><span aria-hidden="true" className="mr-1.5">{icon}</span>{item.text}</>;
         const cls = 'block w-full rounded-md px-2 py-1.5 text-left text-sm text-fg hover:bg-[#2a2f3a]';
         return (
-          <li key={`${item.kind}-${i}`} data-kind={item.kind}>
+          <li key={item.key} data-kind={item.kind}>
             {item.message
               ? <button type="button" className={`${cls} cursor-pointer border-0 bg-transparent`} onClick={() => onMessage(item.message!.room, item.message!.id)}>{line}</button>
               : item.href
