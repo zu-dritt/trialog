@@ -201,3 +201,22 @@ test('the row under the message box: recipient, then emoji, image, decision, pol
   assert.deepEqual(open.slice(0, 2), ['Recipient', 'Emoji']);
   assert.deepEqual(open.slice(-5), ['Image', 'Decision', 'Poll', 'Enlarge the message box', 'Send']);
 });
+
+test('inside the iPhone app, «Speak» stands right after Image; in a browser it is not there', () => {
+  const tools = (dictate?: { listening: boolean }) => renderToStaticMarkup(
+    <ComposerTools
+      to="" onTo={() => {}} recipients={[]}
+      emoji={{ open: false, onOpenChange: () => {}, onInsert: () => {}, boxRef: { current: null } }}
+      image={{ disabled: false, onPick: () => {} }}
+      dictate={dictate && { listening: dictate.listening, onToggle: () => {} }}
+      decision={{ open: false, onToggle: () => {} }}
+      poll={{ open: false, onToggle: () => {} }}
+      expand={{ expanded: false, onToggle: () => {} }}
+      send={{ disabled: true, label: 'Send' }}
+      fieldClassName="f" toolClassName="t"
+    />,
+  );
+  assert.deepEqual(controls(tools()), ['Recipient', 'Emoji', 'Image', 'Decision', 'Poll', 'Enlarge the message box', 'Send']);
+  assert.deepEqual(controls(tools({ listening: false })), ['Recipient', 'Emoji', 'Image', '🎤 Speak', 'Decision', 'Poll', 'Enlarge the message box', 'Send']);
+  assert.match(tools({ listening: true }), /aria-pressed="true"[^>]*>■ Stop</);
+});

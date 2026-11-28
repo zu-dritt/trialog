@@ -67,8 +67,10 @@ struct HubView: UIViewRepresentable {
         """
     }
 
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let account: HubAccount
+        private lazy var dictation = Dictation()
         init(account: HubAccount) { self.account = account }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -78,6 +80,13 @@ struct HubView: UIViewRepresentable {
             if type == "token", let token = body["token"] as? String {
                 let cleaned = HubAccount.cleanToken(token)
                 if !cleaned.isEmpty { AccountStore.save(HubAccount(hubURL: account.hubURL, token: cleaned)) }
+            }
+            if type == "dictate", let action = body["action"] as? String {
+                if action == "stop" { return dictation.stop() }
+                guard action == "start" else { return }
+                dictation.start { [weak view = message.webView] text, final, error in
+                    view?.evaluateJavaScript(Self.dictationCall(text: text, final: final, error: error))
+                }
             }
         }
 
@@ -92,6 +101,14 @@ struct HubView: UIViewRepresentable {
                 return decisionHandler(.cancel)
             }
             decisionHandler(url.scheme == "about" ? .allow : .cancel)
+        }
+
+        /// The page's callback (app/dictation.ts, window.trialogDictation) with the words so far.
+        nonisolated static func dictationCall(text: String, final: Bool, error: String?) -> String {
+            let args: [Any] = [text, final, error ?? NSNull()]
+            let data = (try? JSONSerialization.data(withJSONObject: args, options: [.withoutEscapingSlashes])) ?? Data("[\"\",true,null]".utf8)
+            let list = String(data: data, encoding: .utf8) ?? "[\"\",true,null]"
+            return "window.trialogDictation && window.trialogDictation.apply(null, \(list));"
         }
 
         private func sameOrigin(_ origin: WKSecurityOrigin) -> Bool {

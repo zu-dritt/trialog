@@ -13,6 +13,13 @@ comes along; the app adds what a page can't do:
   and the app's `bundle_id`). The hub sends a push when a message is for you or something waits on you.
 - **Links** to other sites open in Safari; the hub and the roadmap stay in the app.
 
+Phase 2 (playground #1178):
+
+- **Speak:** a 🎤 Speak button next to Image, only in the app. Apple's speech recognition (on the
+  phone when it supports that) turns your words into text as you speak; they go into the message box
+  after what you typed, and you read them before Send. Tap Stop, or it stops after a minute.
+- **Take Photo:** the Image button offers the camera too (the app now says why it asks).
+
 The hub's address is typed in the app, not built in, so the app works with anyone's hub.
 
 ## Build and run
