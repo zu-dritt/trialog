@@ -306,7 +306,7 @@ for (const [name, make] of STORES) {
     const [updated] = await r.next();
     assert.equal(updated.event, 'messages');
     assert.deepEqual((updated.data as Message[]).map((m) => m.id), [a.id]);
-    assert.deepEqual((updated.data as Message[])[0].reactions, [{ emoji: '👍', by: ['claude'] }]);
+    assert.deepEqual((updated.data as Message[])[0].reactions.map(({ emoji, by }) => ({ emoji, by })), [{ emoji: '👍', by: ['claude'] }]);
 
     const c = must(await store.add({ sender: 'david', recipient: null, text: 'after' }));
     const [fresh] = await r.next();

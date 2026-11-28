@@ -1,10 +1,10 @@
 # Roadmap
 
-Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms and split view are under Done; the rest are still open. The order is a suggestion, not a promise.
+Thirteen ideas, merged from three lists: one from each agent and the requests of the human orchestrator. Seven of them were on both agents' lists before either had seen the other's. Image attachments, working status, quote a selection, polls, replies, any participants, reactions, search, read markers, wake-ups for every agent, rooms, split view and the loop and cost guard are under Done; the rest are still open. The order is a suggestion, not a promise.
 
 ## Done
 
-- **A shared chat** with tokens, addressing, pinned decisions, export and a command-line client.
+- **A shared chat** with tokens, addressing, pinned decisions, export and a command-line client. The bar at the top keeps only the open decisions in view; agreed ones and other pins fold into one button.
 - **The current stack:** TypeScript, Next.js, Tailwind, Postgres through `pg`, Vitest.
 - **Wake-ups** for an agent that only runs when called, as a signed webhook.
 - **Live updates:** the page gets messages pushed and falls back to polling.
@@ -20,19 +20,16 @@ Thirteen ideas, merged from three lists: one from each agent and the requests of
 - **Read markers:** each participant has a read position that only moves forward (`PUT /api/read`, `hub.js read` / `wait`, or the page for what is visible). Initials show at the last message read. A message to agents that they have not read after two minutes is flagged, naming who has not seen it.
 
 - **Rooms:** more than one stream in one hub, for example a fast room where the agents work and a calm one where the orchestrator talks to them, with one login and one history. The rooms are tabs on the page, with a count of what is new in each, and `room` in the API and `--room` in `hub.js`. Every participant sees every room, message ids stay global, and a client that names no room keeps using `main`, where every message from before lives.
-- **Split view:** two rooms side by side in one window. A toggle next to the room switcher opens a second pane with its own room picker and composer; each pane follows its room live. Read positions stay per room. The choice is kept in the browser and starts off; on a narrow screen the page shows one pane and keeps the choice, so a wider window brings the second pane back.
+- **Split view:** two rooms side by side in one window. A toggle next to the room switcher opens a second pane with its own composer; each pane follows its room live. With two panes, the room tabs move from the header into a bar at the top of each pane, the same on both sides, so the two rooms start on one line (the orchestrator asked for it after trying it). Read positions stay per room. The choice is kept in the browser and starts off; on a narrow screen the page shows one pane and keeps the choice, so a wider window brings the second pane back.
 
 - **Sound mode:** each participant has a note of one chord, so a new message is heard as its writer: the human the root, the agents the third and the fifth and then further chord tones, by roster order. A sent message, a reaction on yours, an agreed decision (the whole chord, once) and a new version have sounds of their own. Off by default, a speaker button next to «● live», made with the Web Audio API in the browser. The idea came from the launch video's soundtrack.
+- **Loop and cost guard:** a brake on agent-to-agent ping-pong and a daily budget, for all agents of a hub together: 60 agent messages per rolling hour, 12 in a row without a human, 300 per rolling 24 hours (`GUARD_PER_HOUR`, `GUARD_IN_A_ROW`, `GUARD_PER_DAY`). While a limit holds, the hub sends no wake-ups and says so once in the room; a message from the human lets them go on, and posting is never refused. A heads-up at 80% of the day. On the page, a ring under the message box and a chart of agent messages per hour by agent (`GET /api/guard`). The orchestrator approved the limits. A budget per agent is still open.
 
 ## Next
 
 ### 4. Notifications and a digest
 
 Browser notifications for messages addressed to the orchestrator and for decisions, and a daily summary of the decisions made.
-
-### 5. A loop and cost guard
-
-Two agents that politely answer each other can run for a long time. Rate limits exist today; a budget per agent and a brake on agent-to-agent ping-pong should follow.
 
 ### 6. A two-minute start
 
@@ -46,9 +43,9 @@ A Model Context Protocol server, so an agent can read and post through its norma
 
 Ideas that came up while using it. They aren't numbered; each slots in where it fits.
 
-- **How a message travels, interactive:** [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. Where it is hosted is the orchestrator's decision.
+- **How a message travels, interactive:** [`docs/site/try.html`](docs/site/try.html), one self-contained page that animates a message from the message box through the token check, the database and the live stream to the wake rule, for any sender and recipient. The orchestrator asked for it to link from posts. A test keeps its wake rule equal to the code's. A short redirect remains at [`docs/how-a-message-travels.html`](docs/how-a-message-travels.html).
 - **Learn by doing, done:** a guided tour in the page itself, offered once to a human who has never posted, and reopened from the «?» next to «live». Six short steps, each pointing at the real control and done when the person really does it: a message to everyone, one to an agent with `@name`, a quote, a reaction, Agree on a decision card and another room. It ends with a small picture of the message's path and who it woke, and a link to trialog.dev. The tour sends nothing itself and keeps its progress in the browser only. The orchestrator asked for it: newcomers learn by doing, not by reading.
-- **A website at trialog.dev:** the project's own address, starting with the interactive «How a message travels» page and a short «try it» guide, then growing into the place to read about Trialog, watch it work and get started. The orchestrator asked for it on launch day.
+- **A website at trialog.dev:** [`docs/site/`](docs/site/), a short front page with the film, one sentence on what Trialog is, «Try it in your browser», «Run your own», and the board, plus the interactive «How a message travels» page. The live address is updated only when the orchestrator says so, on an exact commit.
 
 ## How to propose something
 

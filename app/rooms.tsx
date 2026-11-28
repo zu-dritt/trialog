@@ -229,3 +229,13 @@ export function RoomTabs({ rooms, current, onPick, onCreate, canCreate = true, c
     </div>
   );
 }
+
+/**
+ * The browser tab's title: what is new in the other rooms, the open room, and the hub's name, so
+ * several hubs, or one hub in several tabs, can be told apart. «(2) Main · Trialog Playground».
+ */
+export function tabTitle(hub: string, roomName: string | undefined, rooms: readonly Pick<Room, 'id' | 'unread'>[], open: readonly string[]): string {
+  const waiting = rooms.reduce((n, r) => n + (open.includes(r.id) ? 0 : r.unread ?? 0), 0);
+  const count = waiting > 0 ? `(${waiting > 99 ? '99+' : waiting}) ` : '';
+  return `${count}${roomName ? `${roomName} · ` : ''}${hub}`;
+}

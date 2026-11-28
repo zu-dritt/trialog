@@ -1,13 +1,15 @@
-// Keeps docs/how-a-message-travels.html honest: it loads nothing from anywhere, it never handles
+// Keeps docs/site/try.html honest: it loads nothing from anywhere, it never handles
 // the visitor's text as HTML, and its wake rule gives the same answers as the hub's code.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Participant } from '../lib/shared';
 import { notToSelf } from '../lib/store';
 import { whoToWake } from '../lib/webhook';
 
-const html = readFileSync(new URL('../docs/how-a-message-travels.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../docs/site/try.html', import.meta.url), 'utf8');
 
 test('explainer page: small and self-contained', () => {
   assert.ok(Buffer.byteLength(html) < 150_000, 'the page stays under 150 KB');
@@ -17,8 +19,18 @@ test('explainer page: small and self-contained', () => {
     assert.ok(hrefs.has(url), `${url} appears outside a plain link`);
     assert.match(url, /^https:\/\/github\.com\/zu-dritt\/trialog(\/|$)/);
   }
-  assert.doesNotMatch(html, /<(script|img|iframe|link|object|embed|audio|video|source)\b[^>]*\s(src|href)=/i);
+  assert.doesNotMatch(html, /<(script|img|iframe|object|embed|audio|video|source)\b[^>]*\s(src|href)=/i);
   assert.doesNotMatch(html, /@import|url\(/i);
+  // Favicons are local files only. Other <link href> would be a request we don't want.
+  const pageDir = dirname(fileURLToPath(new URL('../docs/site/try.html', import.meta.url)));
+  for (const [tag] of html.matchAll(/<link\b[^>]*>/gi)) {
+    const rel = tag.match(/\brel="([^"]+)"/i)?.[1] ?? '';
+    const href = tag.match(/\bhref="([^"]+)"/i)?.[1];
+    assert.ok(/\b(icon|apple-touch-icon)\b/i.test(rel), `unexpected link: ${tag}`);
+    assert.ok(href && !/^(?:[a-z]+:)?\/\//i.test(href), `icon href must be a local file: ${href}`);
+    assert.ok(existsSync(join(pageDir, href)), `missing icon file: ${href}`);
+  }
+  assert.match(html, /img-src 'self'/);
   assert.doesNotMatch(html, /\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|localStorage|sessionStorage|indexedDB)\b|document\.cookie/);
   // The visitor's text is set with textContent, never parsed as HTML.
   assert.doesNotMatch(html, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);

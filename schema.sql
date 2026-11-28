@@ -9,8 +9,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS messages_sender_created_at ON messages (sender, created_at);
 
-CREATE UNIQUE INDEX IF NOT EXISTS messages_one_welcome ON messages (sender) WHERE sender = 'hub';
-
 CREATE TABLE IF NOT EXISTS webhook_state (
      id               INT PRIMARY KEY CHECK (id = 1),
      last_notified_id BIGINT NOT NULL DEFAULT 0
@@ -152,7 +150,10 @@ CREATE TABLE IF NOT EXISTS reactions (
 DO $$
    BEGIN
      PERFORM pg_advisory_xact_lock(7230421);
-     ALTER TABLE reactions DROP CONSTRAINT IF EXISTS reactions_participant_is_participant;
+     -- Only when it is there: the ALTER would lock the table on every cold start for nothing.
+     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_is_participant') THEN
+       ALTER TABLE reactions DROP CONSTRAINT reactions_participant_is_participant;
+     END IF;
      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'reactions'::regclass AND conname = 'reactions_participant_shape') THEN
        ALTER TABLE reactions ADD CONSTRAINT reactions_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$');
      END IF;
@@ -274,3 +275,55 @@ DO $$
    EXCEPTION WHEN duplicate_column THEN
      NULL;
    END $$;
+
+DROP INDEX IF EXISTS messages_one_welcome;
+
+CREATE INDEX IF NOT EXISTS messages_created_at ON messages (created_at);
+
+CREATE TABLE IF NOT EXISTS participant_flight (
+     participant TEXT PRIMARY KEY CONSTRAINT participant_flight_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'idle')),
+     text        TEXT NOT NULL CHECK (char_length(text) <= 80 AND (state = 'idle' OR char_length(text) >= 1)),
+     since       TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+
+CREATE TABLE IF NOT EXISTS streak_breaks (
+     id          BIGSERIAL PRIMARY KEY,
+     participant TEXT NOT NULL CONSTRAINT streak_breaks_participant_shape CHECK (participant ~ '^[a-z][a-z0-9-]{0,23}$'),
+     reason      TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+
+CREATE TABLE IF NOT EXISTS roadmap_items (
+     id          TEXT PRIMARY KEY CHECK (id ~ '^rm_[a-z0-9]{8,32}$'),
+     col         TEXT NOT NULL CHECK (col IN ('done', 'now', 'next', 'later')),
+     position    INT NOT NULL,
+     title       TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 80),
+     note        TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 120),
+     owner       TEXT CONSTRAINT roadmap_items_owner_shape CHECK (owner ~ '^[a-z][a-z0-9-]{0,23}$'),
+     updated_by  TEXT NOT NULL CONSTRAINT roadmap_items_updated_by_shape CHECK (updated_by ~ '^[a-z][a-z0-9-]{0,23}$'),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   );
+
+CREATE INDEX IF NOT EXISTS roadmap_items_col_position ON roadmap_items (col, position);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress SMALLINT CHECK (progress IS NULL OR progress BETWEEN 0 AND 100);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '' CHECK (char_length(status) <= 80);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ;
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 4000);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS reviewer TEXT CONSTRAINT roadmap_items_reviewer_shape CHECK (reviewer ~ '^[a-z][a-z0-9-]{0,23}$');
+
+CREATE TABLE IF NOT EXISTS roadmap_pictures (
+     attachment_id    TEXT PRIMARY KEY REFERENCES attachments (id) ON DELETE CASCADE,
+     roadmap_item_id  TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
+     position         SMALLINT NOT NULL DEFAULT 0
+   );
+
+CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position);
+
+ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS raised_by TEXT CONSTRAINT roadmap_items_raised_by_shape CHECK (raised_by ~ '^[a-z][a-z0-9-]{0,23}$');

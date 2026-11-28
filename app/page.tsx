@@ -1,47 +1,35 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
-import { RoomPane, RoomPicker } from './pane';
-import { RoomTabs, addressForRoom, roomFromSearch, readSeen, withSeenApplied } from './rooms';
+import { RoomPane } from './pane';
+import { RoomTabs, addressForRoom, roomFromSearch, readSeen, tabTitle, withSeenApplied } from './rooms';
 import { SearchBox } from './search';
+import { DemoBanner, DemoSignIn } from './demo';
+import { DEMO_BUILD, demoLink } from '../lib/demo';
+import { TokenForm } from './token';
 import { SoundToggle, useRoomsElsewhere, useSoundMode } from './sound';
 import { StatusBar } from './status';
-import { WakeTargetsLine, type ParticipantWithWake } from './wakes';
+import { FlightBar, readFlightPosition, writeFlightPosition, type FlightPosition } from './flight';
+import { wakeTargetsText, type ParticipantWithWake } from './wakes';
 import { NewVersionPill, useWaitingLong } from './version';
-import { BUILD_ID, isOtherBuild } from '../lib/build';
+import { BUILD_ID, BUILD_NUMBER, VERSION, buildLabel, isOtherBuild } from '../lib/build';
 import { defaultSecondRoom, readSplit, writeSplit } from './split';
-import { SplitToggle, useSplitFits } from './split-ui';
+import { PaneRoomBar, SplitToggle, useSplitFits } from './split-ui';
 import { TourButton, TourPanel, useTour } from './tour';
+import { MoreMenu } from './more-menu';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
 
-const BUTTON = 'cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] hover:bg-[#343a47] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[#2a2f3a]';
+// The demo hub, for a link in the header (TRIALOG_DEMO_URL); none on the demo hub itself.
+const DEMO_LINK = demoLink();
 
 /** Until the server has said which rooms there are, the page shows the one that always exists. */
 const ONLY_MAIN: Room[] = [{ id: MAIN_ROOM, name: 'Main', created_at: '', created_by: 'hub', last_id: 0 }];
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-function TokenForm({ onSave }: { onSave: (token: string) => void }) {
-  const [value, setValue] = useState('');
-  return (
-    <main className="mx-auto mt-[18vh] max-w-[420px] px-4">
-      <h1 className="my-[0.67em] text-[2em] font-bold">Trialog</h1>
-      <p className="my-4 text-muted">Paste your token once. It stays in this browser (localStorage) and is only sent to this site.</p>
-      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSave(value.trim()); }}>
-        <input
-          type="password" autoFocus autoComplete="off" placeholder="Token" value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="flex-1 rounded-md border border-line bg-panel px-2.5 py-[7px]"
-        />
-        <button type="submit" className={BUTTON}>Open hub</button>
-      </form>
-    </main>
-  );
-}
 
 export default function Page() {
   const [token, setToken] = useState<string | null>(null); // null: not read yet; '': none saved
@@ -59,6 +47,10 @@ export default function Page() {
   const newVersion = isOtherBuild(BUILD_ID, serverBuild);
   const newVersionWaitsLong = useWaitingLong(newVersion);
   const [participants, setParticipants] = useState<ParticipantWithWake[]>([]);
+  // Where the work-in-flight strip sits; read from this browser once the page is in it.
+  const [flightPosition, setFlightPosition] = useState<FlightPosition>('top');
+  // Before the first paint, so a stored «bottom» doesn't flash at the top first.
+  useLayoutEffect(() => { setFlightPosition(readFlightPosition(localStorage)); }, []);
   const [setupError, setSetupError] = useState(''); // the server's settings can't be used; it says which
   const [pageNotice, setPageNotice] = useState('');
   const [splitOn, setSplitOn] = useState(false);
@@ -136,8 +128,13 @@ export default function Page() {
     noteTour({ kind: 'room' });
   }, [noteTour]);
 
-  const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setToken(t); };
+  // A token the hub turned down: the form says so, instead of silently asking again.
+  const [refused, setRefused] = useState(false);
+  const saveToken = (t: string) => { localStorage.setItem(TOKEN_KEY, t); setRefused(false); setToken(t); };
+  /** «Switch token»: back to the form, nothing wrong. */
   const forgetToken = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setMe(null); }, []);
+  /** The hub answered 401: back to the form, with a message. */
+  const refuseToken = useCallback(() => { forgetToken(); setRefused(true); }, [forgetToken]);
 
   const api = useCallback(async (path: string, options: RequestInit = {}) => {
     const res = await fetch(path, {
@@ -145,18 +142,19 @@ export default function Page() {
       cache: 'no-store',
       headers: { ...(options.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
     });
-    if (res.status === 401) { forgetToken(); throw new Error('unauthorized'); }
+    if (res.status === 401) { refuseToken(); throw new Error('unauthorized'); }
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
     return res;
-  }, [token, forgetToken]);
+  }, [token, refuseToken]);
 
   /** Creates a room and opens it in the leading pane. Resolves to '' when that worked, or to what went wrong. */
-  const createRoom = async (name: string): Promise<string> => {
+  /** Makes a room and opens it: in the leading pane, or with `open` where the + was pressed. */
+  const createRoom = async (name: string, open: (id: string) => void = openRoom): Promise<string> => {
     try {
       const res = await api('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
       const created = ((await res.json()) as { room: Room }).room;
       setRooms((list) => (list.some((r) => r.id === created.id) ? list : [...list, created]));
-      openRoom(created.id);
+      open(created.id);
       return '';
     } catch (e) {
       return errorMessage(e) === 'unauthorized' ? 'Not signed in.' : errorMessage(e);
@@ -206,11 +204,19 @@ export default function Page() {
     () => (splitVisible ? [room, secondRoom] : [room]),
     [splitVisible, room, secondRoom],
   );
+
+  // The tab's title: what is new elsewhere, the open room, the hub's name (from the server's title).
+  const hubTitle = useRef<string | null>(null);
+  useEffect(() => {
+    hubTitle.current ??= document.title || 'Trialog';
+    const shownList = me ? withSeenApplied(rooms, readSeen(localStorage, me)) : rooms;
+    document.title = tabTitle(hubTitle.current, me ? rooms.find((r) => r.id === room)?.name : undefined, shownList, openRooms);
+  }, [rooms, room, openRooms, me]);
   // A message addressed to you rings from any room, even one that is not open.
   useRoomsElsewhere({ on: sound.on, rooms, open: openRooms, me, api, heard: sound.elsewhere });
 
   if (token === null) return null;
-  if (!token) return <TokenForm onSave={saveToken} />;
+  if (!token) return <>{DEMO_BUILD && <DemoSignIn onPick={saveToken} />}<TokenForm onSave={saveToken} refused={refused} /></>;
 
   const shown = (name: string) => labelOf(name, participants);
   const reload = () => window.location.reload();
@@ -218,8 +224,22 @@ export default function Page() {
   const tabs = (className: string) => (
     <RoomTabs rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} className={className} />
   );
+  // The work-in-flight strip sits under the header or right above the message box (its «⇅»).
+  // In split view there is no single message box, so it stays at the top there.
+  const flightAtBottom = flightPosition === 'bottom' && !splitVisible;
+  const flipFlight = () => {
+    const next: FlightPosition = flightPosition === 'top' ? 'bottom' : 'top';
+    writeFlightPosition(localStorage, next);
+    setFlightPosition(next);
+  };
+  const flightBar = (
+    <FlightBar token={token} onUnauthorized={refuseToken} participants={participants} position={flightAtBottom ? 'bottom' : 'top'} onFlip={splitVisible ? undefined : flipFlight} />
+  );
   const statusBar = (
-    <StatusBar participants={participants} token={token} onUnauthorized={forgetToken} />
+    <>
+      {flightAtBottom && flightBar}
+      <StatusBar participants={participants} token={token} onUnauthorized={refuseToken} />
+    </>
   );
   const paneShared = {
     token,
@@ -231,20 +251,24 @@ export default function Page() {
     setRooms,
     setSeenChanged,
     openRooms,
-    onUnauthorized: forgetToken,
+    onUnauthorized: refuseToken,
     soundSent: sound.sent,
     onTour: noteTour,
   };
 
+  const wakeText = wakeTargetsText(me, participants);
+
   return (
-    <div className={`mx-auto flex h-screen flex-col ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
+    // dvh is the height that is really visible: on a phone 100vh is taller, and the page would scroll
+    // the header up under the clock. The safe-area padding keeps everything clear of the notch
+    // (layout.tsx lets the page reach the screen's edges); on a computer it is 0.
+    <div className={`mx-auto flex h-dvh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] ${splitVisible ? 'max-w-[1600px]' : 'max-w-[1000px]'}`}>
+      {DEMO_BUILD && <DemoBanner />}
       {/* On a narrow screen the row has no room for the pill, so the header grows by a line for it. */}
-      <header className={`relative flex items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
-        <h1 className="m-0 text-[17px] font-bold">Trialog</h1>
-        <span className={`text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
+      <header className={`relative flex min-w-0 items-center gap-3 border-b border-line px-4 py-2.5 ${newVersion ? 'max-md:pb-9' : ''}`}>
+        <h1 className="m-0 flex-none text-[17px] font-bold">Trialog</h1>
+        <span className={`min-w-0 truncate text-[13px] ${status.startsWith('live') ? 'text-ok' : 'text-bad'}`}>● {status}</span>
         <SoundToggle on={sound.on} onToggle={sound.toggle} />
-        {/* The «?» of the tour. On a phone the header is full: there it stands at the end of the rooms' row. */}
-        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="max-sm:hidden" />}
         {/* The "New version available" pill comes directly after the status, so the state of the
             page reads in one spot. On a narrow screen it sits on a line of its own, under the
             status. An empty holder takes no room in the row. */}
@@ -252,7 +276,8 @@ export default function Page() {
           {newVersion && <NewVersionPill onReload={reload} accent={newVersionWaitsLong} className="max-md:absolute max-md:bottom-2 max-md:left-4" />}
         </span>
         {/* The rooms come after the state of the page: the open one marked, the others with what is new there. */}
-        {tabs('hidden lg:flex lg:max-w-[42%]')}
+        {/* With two panes, each pane has its own room bar instead, so both rooms start on one line. */}
+        {!splitVisible && tabs('hidden lg:flex lg:max-w-[42%]')}
         <SplitToggle on={splitOn} onToggle={toggleSplit} disabled={!fits} />
         {/* The search field takes the free space of the header (a magnifier button on a narrow screen). */}
         <SearchBox
@@ -261,17 +286,28 @@ export default function Page() {
           participants={participants}
           rooms={rooms}
         />
-        {me && <span className="text-[13px] font-semibold">You: {shown(me)}</span>}
-        <button className={BUTTON} onClick={() => { void exportTranscript(); }}>Export .md</button>
-        <button className={`${BUTTON} bg-transparent`} onClick={forgetToken}>Switch token</button>
+        {/* By how often they are used (playground #539): the roadmap, the tour's «?», then «⋯» with the
+            rest. On a phone the roadmap goes into «⋯» too, and «?» to the end of the rooms' row. */}
+        <a className="flex-none cursor-pointer rounded-md border border-accent bg-accent px-3 py-[5px] font-semibold text-[#0f1115] no-underline hover:opacity-90 max-sm:hidden" href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
+        {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="mx-1 max-sm:hidden" />}
+        <MoreMenu
+          heading={me ? <>Signed in as <span className="font-semibold text-accent">{shown(me)}</span></> : undefined}
+          items={[
+            { label: 'Roadmap', href: '/roadmap', target: 'trialog-roadmap', className: 'sm:hidden' },
+            ...(DEMO_LINK ? [{ label: 'Demo hub', href: DEMO_LINK }] : []),
+            ...(wakeText ? [{ label: wakeText, info: true as const }] : []),
+            { label: 'Export .md', onPick: () => { void exportTranscript(); } },
+            { label: 'Switch token', onPick: forgetToken, divider: true },
+          ]}
+        />
       </header>
       {/* On a narrower screen the rooms have a row of their own, which scrolls sideways. */}
-      <div className="flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden">
+      <div className={`flex items-center gap-2 border-b border-line px-4 py-1.5 lg:hidden ${splitVisible ? 'hidden' : ''}`}>
         {tabs('flex min-w-0 flex-1')}
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="sm:hidden" />}
       </div>
+      {!flightAtBottom && flightBar}
       <TourPanel tour={tour} me={me} participants={participants} />
-      <WakeTargetsLine me={me} participants={participants} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
       {splitVisible && statusBar}
 
@@ -290,6 +326,7 @@ export default function Page() {
             seek={seek}
             onJumped={() => setSeek(null)}
             onHeard={onLeadHeard}
+            picker={<PaneRoomBar side="lead" rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} />}
           />
           <div className="w-px shrink-0 bg-line" aria-hidden="true" />
           <RoomPane
@@ -299,10 +336,10 @@ export default function Page() {
             onMissingRoom={onMissingSecond}
             onHeard={onSideHeard}
             picker={
-              <RoomPicker
-                rooms={shownRooms}
-                current={secondRoom}
+              <PaneRoomBar
+                side="side" rooms={shownRooms} current={secondRoom} canCreate={rooms.length < MAX_ROOMS}
                 onPick={(id) => { setSecondRoom(id); noteTour({ kind: 'room' }); }}
+                onCreate={(name) => createRoom(name, setSecondRoom)}
               />
             }
           />
@@ -323,6 +360,10 @@ export default function Page() {
           onHeard={onLeadHeard}
           statusBar={statusBar}
         />
+      )}
+      {/* Which version this is, in words people remember: «Trialog v0.3 · build 51». */}
+      {buildLabel(VERSION, BUILD_NUMBER) && (
+        <div className="shrink-0 px-4 pb-1 text-right text-[11px] text-muted">{buildLabel(VERSION, BUILD_NUMBER)}</div>
       )}
     </div>
   );

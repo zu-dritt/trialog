@@ -151,6 +151,29 @@ export function viewedInfo(size: Viewed['size'], bytes?: number): string {
 }
 
 /**
+ * The size of the pop-out window for an image: its own size (in CSS pixels, at its scale), but no
+ * larger than the screen, and not smaller than 320 × 240, so the browser's own controls fit.
+ */
+export function popoutSize(size: Viewed['size'], screen: { width: number; height: number }): { width: number; height: number } {
+  const scale = size ? validScale(size.scale) : 1;
+  const want = size ? { width: Math.round(size.width / scale), height: Math.round(size.height / scale) } : { width: 900, height: 700 };
+  return {
+    width: Math.max(320, Math.min(want.width + 24, Math.round(screen.width * 0.9))),
+    height: Math.max(240, Math.min(want.height + 24, Math.round(screen.height * 0.9))),
+  };
+}
+
+/**
+ * Opens the image in a window of its own, so it can stay on screen next to the hub while one writes
+ * about it. The image is already in this page (a blob: address of the same origin), so nothing is
+ * fetched again and no token goes along. Returns whether the browser opened it.
+ */
+export function popOut(viewed: Pick<Viewed, 'url' | 'size'>, open: typeof window.open = window.open.bind(window)): boolean {
+  const { width, height } = popoutSize(viewed.size, { width: window.screen?.availWidth || 1280, height: window.screen?.availHeight || 800 });
+  return open(viewed.url, 'trialog-image', `popup=yes,width=${width},height=${height}`) !== null;
+}
+
+/**
  * The full-size view. The image first fits the window, and is not enlarged beyond its own size; a
  * click on it switches to its real size, every pixel of it, and back. A click outside the image,
  * the Close button or Escape closes the view. It is the same view for an image in the stream and
@@ -159,6 +182,8 @@ export function viewedInfo(size: Viewed['size'], bytes?: number): string {
 function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [realSize, setRealSize] = useState(false);
+  // The browser refused the pop-out window: say so, and keep the view open.
+  const [blocked, setBlocked] = useState(false);
   // A local file says how large it is only once it has loaded.
   const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -171,11 +196,17 @@ function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) 
   const info = viewedInfo(size, viewed.bytes);
   return (
     <div role="dialog" aria-modal="true" aria-label="Image, full size" onClick={onClose}
-      className="fixed inset-0 z-50 flex flex-col bg-black/90">
+      className="fixed inset-0 z-50 flex flex-col bg-black/90 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center gap-3 px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
         <span>{info}</span>
+        {blocked && <span role="status" className="text-bad">Pop-up blocked: allow pop-ups for this site, then try again.</span>}
         <span className="flex-1" />
         {viewed.saveAs && <a href={viewed.url} download={viewed.saveAs}>Save</a>}
+        <button
+          type="button" title="Open the image in its own window, next to the hub"
+          onClick={() => { if (popOut({ url: viewed.url, size })) onClose(); else setBlocked(true); }}
+          className="cursor-pointer rounded-md border border-line bg-transparent px-3 py-[5px] text-fg hover:bg-[#343a47] max-sm:hidden"
+        >Pop out ↗</button>
         <button ref={closeRef} type="button" onClick={onClose} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] text-fg hover:bg-[#343a47]">Close</button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-3">

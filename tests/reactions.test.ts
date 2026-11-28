@@ -39,21 +39,23 @@ for (const [name, make] of STORES) {
 
     const a = await store.addReaction(m.id, 'claude', '👍');
     assert.equal(a.status, 'ok');
-    assert.deepEqual(a.status === 'ok' ? a.message.reactions : null, [{ emoji: '👍', by: ['claude'] }]);
+    assert.deepEqual(a.status === 'ok' ? a.message.reactions.map(({ emoji, by }) => ({ emoji, by })) : null, [{ emoji: '👍', by: ['claude'] }]);
+    if (a.status === 'ok') assert.equal(a.message.reactions[0].at?.length, 1);
 
     const b = await store.addReaction(m.id, 'david', '👍');
     assert.equal(b.status, 'ok');
     const again = await store.addReaction(m.id, 'david', '👍');
     assert.equal(again.status, 'ok');
-    assert.deepEqual(again.status === 'ok' ? again.message.reactions : null, [{ emoji: '👍', by: ['claude', 'david'] }]);
+    assert.deepEqual(again.status === 'ok' ? again.message.reactions.map(({ emoji, by }) => ({ emoji, by })) : null, [{ emoji: '👍', by: ['claude', 'david'] }]);
 
     const heart = await store.addReaction(m.id, 'claude', HEART);
     assert.equal(heart.status, 'ok');
     if (heart.status === 'ok') {
-      assert.deepEqual(heart.message.reactions, [
+      assert.deepEqual(heart.message.reactions.map(({ emoji, by }) => ({ emoji, by })), [
         { emoji: '👍', by: ['claude', 'david'] },
         { emoji: HEART, by: ['claude'] },
       ]);
+      assert.equal(heart.message.reactions[0].at?.length, 2);
     }
 
     const listed = await store.listReactions();
@@ -62,7 +64,7 @@ for (const [name, make] of STORES) {
     assert.equal((await store.list({ since: 0 })).find((row) => row.id === m.id)?.reactions[0].by.length, 2);
 
     const withdrawn = must(await store.removeReaction(m.id, 'claude', '👍'));
-    assert.deepEqual(withdrawn.reactions, [
+    assert.deepEqual(withdrawn.reactions.map(({ emoji, by }) => ({ emoji, by })), [
       { emoji: '👍', by: ['david'] },
       { emoji: HEART, by: ['claude'] },
     ]);
@@ -176,7 +178,8 @@ test('PUT and DELETE take the participant from the token and ignore a body', asy
   const res = await call('PUT', m.id, '👍', 'claude', { participant: 'david', sender: 'david' });
   assert.equal(res.status, 200);
   const { message } = (await res.json()) as { message: Message };
-  assert.deepEqual(message.reactions, [{ emoji: '👍', by: ['claude'] }]);
+  assert.deepEqual(message.reactions.map(({ emoji, by }) => ({ emoji, by })), [{ emoji: '👍', by: ['claude'] }]);
+  assert.equal(message.reactions[0].at?.length, 1);
 
   const listedPlain = (await (await messages.GET(new Request(`${URL_BASE}/api/messages?since=${m.id - 1}`, { headers: auth('grok') }))).json()) as {
     messages: Message[];

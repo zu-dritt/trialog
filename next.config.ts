@@ -1,5 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type { NextConfig } from 'next';
+import pkg from './package.json';
+import { pullRequestOf, versionLabel } from './lib/build';
 
 // An opaque id for this build, new on every build (and on every start of the dev server). The
 // server reports it and the page knows the one it was built with; when they differ, the page tells
@@ -7,10 +10,34 @@ import type { NextConfig } from 'next';
 // build pipeline that has an id of its own. It is not a secret and says nothing about the host.
 const buildId = process.env.TRIALOG_BUILD_ID || randomBytes(6).toString('hex');
 
+// The version people say («v0.3», from package.json) and the build: the pull request the deployed
+// commit came from. Vercel hands over the commit message; elsewhere git is asked, and without git
+// there is simply no build number.
+function lastCommitMessage(): string {
+  if (process.env.VERCEL_GIT_COMMIT_MESSAGE) return process.env.VERCEL_GIT_COMMIT_MESSAGE;
+  try {
+    return execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return '';
+  }
+}
+const version = versionLabel(pkg.version);
+const buildNumber = process.env.TRIALOG_BUILD_NUMBER ?? pullRequestOf(lastCommitMessage());
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // When Vercel sets VERCEL_DEPLOYMENT_ID at build time, Next stamps client
+  // scripts with ?dpl=… so Skew Protection can keep serving an open tab its
+  // own build after a release. Left unset locally, so tests and a laptop build
+  // stay unchanged.
+  deploymentId: process.env.VERCEL_DEPLOYMENT_ID || undefined,
+  // Next 16 with Turbopack on Vercel otherwise treats /_next/static/immutable
+  // as not needing ?dpl=. Those filenames change every build, so an open tab
+  // would still miss its scripts. Turn that off so the deployment id is on
+  // the script URLs.
+  supportsImmutableAssets: false,
   // Written into the server code and the page code at build time, so both carry the same value.
-  env: { TRIALOG_BUILD_ID: buildId },
+  env: { TRIALOG_BUILD_ID: buildId, TRIALOG_VERSION: version, TRIALOG_BUILD_NUMBER: buildNumber, TRIALOG_DEMO: process.env.TRIALOG_DEMO === '1' ? '1' : '', TRIALOG_DEMO_URL: process.env.TRIALOG_DEMO_URL ?? '', TRIALOG_REPO: process.env.TRIALOG_REPO ?? '', TRIALOG_REPO_PREFIXES: process.env.TRIALOG_REPO_PREFIXES ?? '' },
   async headers() {
     return [
       {

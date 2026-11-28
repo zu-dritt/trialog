@@ -6,7 +6,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { draftKey, draftScope, readDraft, writeDraft } from '../app/composer';
-import { RoomTabs, addressForRoom, heldBack, markSeen, settled, readSeen, roomFromSearch, roomNameProblem, seenElsewhere, seenKey, tabLabel, unreadLabel, withSeen, withSeenApplied, writeSeen } from '../app/rooms';
+import { RoomTabs, addressForRoom, heldBack, markSeen, settled, readSeen, roomFromSearch, roomNameProblem, seenElsewhere, seenKey, tabLabel, tabTitle, unreadLabel, withSeen, withSeenApplied, writeSeen } from '../app/rooms';
 import { SearchResults } from '../app/search';
 import type { Message } from '../lib/core';
 import { formatSeen, type Room } from '../lib/shared';
@@ -191,4 +191,12 @@ test('a search result says which room it is in, once the hub has more than one',
   assert.match(many, /<span>#3<\/span><span>in gone<\/span>/, 'a room the page does not know yet is named by its id');
   assert.ok(!render([room('main', 'Main')]).includes('>in '), 'with one room the list reads as before');
   assert.ok(!render().includes('>in '));
+});
+
+test('the tab title names the open room and the hub, with what is new in the rooms not open', () => {
+  const list = [{ id: 'main', unread: 4 }, { id: 'calm', unread: 2 }, { id: 'side', unread: 0 }, { id: 'old' }];
+  assert.equal(tabTitle('Trialog Playground', 'Main', list, ['main']), '(2) Main · Trialog Playground');
+  assert.equal(tabTitle('Trialog', 'Calm', list, ['main', 'calm']), 'Calm · Trialog', 'both open rooms count as seen');
+  assert.equal(tabTitle('Trialog', undefined, [], []), 'Trialog', 'before signing in: the name alone');
+  assert.equal(tabTitle('Trialog', 'Main', [{ id: 'x', unread: 250 }], ['main']), '(99+) Main · Trialog');
 });

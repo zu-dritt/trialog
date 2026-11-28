@@ -45,8 +45,11 @@
   }
   .md code { font-family: var(--font-mono); font-size: 13px; }
   .md :not(pre) > code { background: var(--color-line); padding: 1px 5px; border-radius: 4px; }
-  .md table { border-collapse: collapse; margin: 6px 0; }
-  .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; }
+  /* A long word or address wraps; a wide table scrolls inside its own box, not the whole list (#857). */
+  .md { overflow-wrap: anywhere; }
+  .md table { border-collapse: collapse; margin: 6px 0; display: block; max-width: 100%; overflow-x: auto; }
+  /* Cells wrap at spaces only: «anywhere» from .md would shred a wide table into one-letter columns on a phone; the table scrolls instead (Grok's review of PR 109). */
+  .md th, .md td { border: 1px solid var(--color-line); padding: 3px 8px; overflow-wrap: normal; }
   .md th { font-weight: 700; }
   .md blockquote { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--color-line); color: var(--color-muted); }
 }
@@ -89,4 +92,36 @@
 @media (prefers-reduced-motion: no-preference) {
   [data-tour-target] { animation: tour-ring 1.6s ease-in-out infinite; }
   .tour-path { stroke-dasharray: 10 6; animation: tour-flow 0.9s linear infinite; }
+}
+
+/* The hovercard on a link that leaves the hub (app/markdown.tsx): where the link goes, drawn from
+   data-card, on hover and on keyboard focus. CSS only, so the text is not part of the message. */
+.hovercard { position: relative; }
+.hovercard::after {
+  content: attr(data-card);
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 30;
+  width: max-content; max-width: min(26rem, 80vw); white-space: normal;
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--color-line);
+  background: var(--color-panel); color: var(--color-muted); font-size: 12px; line-height: 1.35;
+  text-decoration: none; box-shadow: 0 6px 18px rgb(0 0 0 / 0.45);
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms ease 250ms;
+}
+.hovercard:hover::after, .hovercard:focus-visible::after { opacity: 1; visibility: visible; }
+.hovercard[data-below="1"]::after { bottom: auto; top: calc(100% + 6px); }
+@media (hover: none) { .hovercard::after { display: none; } }
+
+/* The human's dot in the work-in-flight strip while an agent waits on them (app/flight.tsx). */
+@keyframes blink-red { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(248 81 73 / 0.7); } 50% { opacity: 0.35; box-shadow: 0 0 0 5px rgb(248 81 73 / 0); } }
+.blink-red { animation: blink-red 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .blink-red { animation: none; } }
+
+/* The PR hovercard (app/pr-card.tsx): the pull request's summary under the link. */
+.pr-card {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; display: block;
+  width: min(24rem, 80vw); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--color-line);
+  background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 0.5); white-space: normal; text-align: left;
+}
+/* On a phone the card is a sheet at the bottom of the screen, so it never runs off the edge. */
+@media (max-width: 640px), (hover: none) {
+  .pr-card { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; max-height: 60vh; overflow-y: auto; }
 }

@@ -313,8 +313,9 @@ export function QuoteChips({ quotes, onRemove, onEdit }: { quotes: QuoteChip[]; 
 
 // --- a comment on a quote ---------------------------------------------------------------------
 
-const BOX_WIDTH = 352;
-const BOX_HEIGHT = 132;
+// Wide enough for a few sentences: a comment is often more than a word or two.
+const BOX_WIDTH = 560;
+const BOX_HEIGHT = 260;
 
 /**
  * Where the comment box goes when it opens at a selection or at a Quote button: at that spot,
@@ -348,14 +349,17 @@ export function QuoteCommentBox({ quote, at, editing = false, onSubmit, onCancel
   at?: { top: number; left: number } | null;
   editing?: boolean;
   onSubmit: (comment: string) => void;
-  /** `how` says what cancelled it: the Escape key, or a press somewhere outside the box. */
-  onCancel: (how: 'escape' | 'outside') => void;
+  /** `how` says what cancelled it (the Escape key, or a press outside the box); `comment` is what was typed, so it need not be lost. */
+  onCancel: (how: 'escape' | 'outside', comment: string) => void;
 }) {
   const [comment, setComment] = useState(quote.comment ?? '');
   const root = useRef<HTMLDivElement>(null);
   const line = useRef<HTMLTextAreaElement>(null);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
+  // The words typed so far, for a cancel that comes from outside the box (a press elsewhere).
+  const commentRef = useRef(comment);
+  commentRef.current = comment;
   const [place, setPlace] = useState<{ top: number; left: number; width: number } | null>(null);
   const floating = Boolean(at);
 
@@ -371,7 +375,7 @@ export function QuoteCommentBox({ quote, at, editing = false, onSubmit, onCancel
     const el = line.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight + 2, 132)}px`;
+    el.style.height = `${Math.min(el.scrollHeight + 2, 200)}px`;
   }, [comment]);
   useEffect(() => {
     if (!at) { setPlace(null); return undefined; }
@@ -383,7 +387,7 @@ export function QuoteCommentBox({ quote, at, editing = false, onSubmit, onCancel
   // A floating box is cancelled by a press anywhere outside it.
   useEffect(() => {
     if (!floating) return undefined;
-    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node | null)) cancelRef.current('outside'); };
+    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node | null)) cancelRef.current('outside', commentRef.current); };
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
   }, [floating]);
@@ -410,7 +414,7 @@ export function QuoteCommentBox({ quote, at, editing = false, onSubmit, onCancel
             if (!does) return;
             e.preventDefault();
             e.stopPropagation(); // Escape here closes this box and nothing else
-            if (does === 'submit') onSubmit(comment); else onCancel('escape');
+            if (does === 'submit') onSubmit(comment); else onCancel('escape', comment);
           }}
           className="min-w-0 flex-1 resize-none rounded-md border border-line bg-bg px-2 py-1.5 text-sm"
         />

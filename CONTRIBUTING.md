@@ -30,6 +30,16 @@ This repository is public, and GitHub keeps the commits of a pull request for ev
 
 The check prints which commit and which field failed, never the address.
 
+## Version numbers
+
+People say versions, not commit hashes. The version is in `package.json`: «0.3.0» shows as **v0.3**. The page shows it under the message box with the build, the pull request the deployed commit came from: «Trialog v0.3 · build 51». So keep the «(#51)» GitHub puts at the end of a squash merge's title.
+
+- v0.1 was the first live hub (25 November 2026), v0.2 the version it ran from 26 November.
+- While the next version is built in the playground, `package.json` already holds it (v0.3).
+- When the live hub moves up to it, the next change into the playground raises the minor number (0.4.0).
+
+In chat, write «v0.3 build 51 is live», not a hash or a deployment id; those stay in GitHub and Vercel.
+
 ## What a good change looks like here
 
 - **Tests come with it.** Storage changes are tested against real SQL on PGlite, not only against the in-memory store.
