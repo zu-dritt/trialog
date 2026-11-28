@@ -1,17 +1,27 @@
 // Today's merged pull requests, for the «PRs today: n/100» chip (playground #1357, #1359).
 // The count is the number of pull requests merged into the repository since midnight
 // Europe/Zurich, any base branch: that is the number Claude and Grok used for the day's goal.
-// Merges are read with the same GitHub helper as the streak (lib/streak.ts, TRIALOG_REPO, optional
-// TRIALOG_GITHUB_TOKEN), cached for one minute so the chip stays live without hammering GitHub.
-// Nothing is stored. Without a repository, or when GitHub is out of reach and there is no last
-// list, there is no count and the chip stays hidden.
+// Merges are read with the same GitHub headers as the streak (lib/streak.ts, TRIALOG_REPO, optional
+// TRIALOG_GITHUB_TOKEN). One page, sorted by updated descending, is enough: a PR merged today was
+// updated today. The list is cached for one minute when a token is set, and five minutes without
+// one, so the chip never uses up GitHub's unauthenticated hourly limit (shared with the streak
+// and health). Nothing is stored. Without a repository, or when GitHub is out of reach and there
+// is no last list, there is no count and the chip stays hidden.
 
 import { repoOf } from '../app/links';
-import { cachedMerges, type Merge } from './streak';
+import { githubHeaders, type Merge } from './streak';
 
 export const PRS_TODAY_GOAL = 100;
+/** Cache when TRIALOG_GITHUB_TOKEN is set (the budget is then 5,000 requests an hour). */
 export const PRS_TODAY_CACHE_MS = 60_000;
+/** Cache when there is no token, so the unauthenticated limit of 60 requests an hour is not used up. */
+export const PRS_TODAY_CACHE_MS_NO_TOKEN = 5 * 60_000;
 export const PRS_TODAY_TZ = 'Europe/Zurich';
+
+/** One page, newest updates first: every PR merged today is among them. */
+export function recentMergesUrl(repo: string): string {
+  return `https://api.github.com/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=1`;
+}
 
 export interface PrsTodayReport {
   count: number | null;
@@ -21,6 +31,11 @@ export interface PrsTodayReport {
   repo: string | null;
   /** Why the count could not be read, or null. A last good list still yields a count. */
   problem: string | null;
+}
+
+/** One minute with a token, five minutes without. */
+export function prsTodayCacheMs(env: Record<string, string | undefined> = process.env): number {
+  return env.TRIALOG_GITHUB_TOKEN?.trim() ? PRS_TODAY_CACHE_MS : PRS_TODAY_CACHE_MS_NO_TOKEN;
 }
 
 /** The calendar day of `at` in `timeZone`, as «YYYY-MM-DD». */
@@ -45,9 +60,35 @@ export function prsTodayLabel(count: number, goal: number = PRS_TODAY_GOAL): str
   return `PRs today: ${count}/${goal}`;
 }
 
+/** The 100 most recently updated closed pull requests, merged ones only. */
+export async function fetchRecentMerges(
+  repo: string,
+  fetchImpl: typeof fetch = fetch,
+  headers: Record<string, string> = githubHeaders(),
+): Promise<Merge[]> {
+  const res = await fetchImpl(recentMergesUrl(repo), { headers, cache: 'no-store' });
+  if (res.status === 403 || res.status === 429) throw new Error(`GitHub's hourly limit is reached (${res.status}); set TRIALOG_GITHUB_TOKEN to raise it`);
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  const rows = (await res.json()) as unknown;
+  if (!Array.isArray(rows)) throw new Error('GitHub answered something that is not a list');
+  const merges: Merge[] = [];
+  for (const r of rows as { number?: unknown; title?: unknown; merged_at?: unknown; head?: { ref?: unknown } | null }[]) {
+    if (typeof r.number === 'number' && typeof r.merged_at === 'string') {
+      const branch = typeof r.head?.ref === 'string' ? r.head.ref : undefined;
+      merges.push({ number: r.number, title: String(r.title ?? ''), merged_at: r.merged_at, ...(branch ? { branch } : {}) });
+    }
+  }
+  return merges;
+}
+
+const cache = new Map<string, { at: number; merges: Merge[] }>();
+
+/** For tests: forget the cached lists. */
+export function clearPrsTodayCache(): void { cache.clear(); }
+
 /**
- * Today's merge count for TRIALOG_REPO, using the shared GitHub cache (one minute here).
- * `base` is left open so merges into any branch count.
+ * Today's merge count for TRIALOG_REPO. One GitHub page, cached one minute with a token
+ * and five minutes without.
  */
 export async function loadPrsToday(
   now: number = Date.now(),
@@ -60,7 +101,23 @@ export async function loadPrsToday(
   if (!repo) {
     return { count: null, goal, day, repo: null, problem: 'No repository is set (TRIALOG_REPO), so today\'s merges cannot be counted.' };
   }
-  const { merges, problem } = await cachedMerges(repo, null, now, fetchImpl, PRS_TODAY_CACHE_MS);
+  const maxAge = prsTodayCacheMs(env);
+  const hit = cache.get(repo);
+  let merges: Merge[] = hit?.merges ?? [];
+  let problem: string | null = null;
+  if (hit && now - hit.at < maxAge) {
+    merges = hit.merges;
+  } else {
+    try {
+      merges = await fetchRecentMerges(repo, fetchImpl, githubHeaders(env));
+      cache.set(repo, { at: now, merges });
+    } catch (e) {
+      const why = e instanceof Error ? e.message : 'unknown error';
+      problem = `Could not read merges from GitHub (${why}).${hit ? ' Showing the last list.' : ''}`;
+      if (!hit) return { count: null, goal, day, repo, problem };
+      merges = hit.merges;
+    }
+  }
   if (problem && merges.length === 0) return { count: null, goal, day, repo, problem };
   return { count: countMergesOnDay(merges, now), goal, day, repo, problem };
 }

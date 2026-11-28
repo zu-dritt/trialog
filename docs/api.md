@@ -227,7 +227,7 @@ curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/health"
 
 ### `GET /api/prs-today`
 
-The «PRs today: n/100» chip in the message-box row: how many pull requests were merged into `TRIALOG_REPO` since midnight Europe/Zurich (every base branch), and the day's goal (100). The list is read with the same GitHub helper as the streak, cached for one minute. `count` is `null` without a repository, or when GitHub is out of reach and there is no last list; the chip then stays hidden. Nothing is stored.
+The «PRs today: n/100» chip in the message-box row: how many pull requests were merged into `TRIALOG_REPO` since midnight Europe/Zurich (every base branch), and the day's goal (100). The list is one page of recently updated closed pull requests (`sort=updated&direction=desc`), using the same GitHub headers as the streak, cached for one minute when `TRIALOG_GITHUB_TOKEN` is set and five minutes without it. `count` is `null` without a repository, or when GitHub is out of reach and there is no last list; the chip then stays hidden. Nothing is stored.
 
 ```bash
 curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/prs-today"

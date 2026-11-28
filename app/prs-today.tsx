@@ -6,8 +6,8 @@
 import { useEffect, useState } from 'react';
 import { PRS_TODAY_GOAL, prsTodayLabel, type PrsTodayReport } from '../lib/prs-today';
 
-/** How often the chip asks GET /api/prs-today. The server already caches the list for one minute. */
-export const PRS_TODAY_POLL_MS = 30_000;
+/** How often the chip asks GET /api/prs-today. Matches the one-minute cache used when a token is set. */
+export const PRS_TODAY_POLL_MS = 60_000;
 
 type ApiFn = (path: string, options?: RequestInit) => Promise<Response>;
 

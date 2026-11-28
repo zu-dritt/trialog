@@ -1,12 +1,13 @@
-// Today's merged-PR count: midnight Europe/Zurich, every base branch, a one-minute cache, and the API.
+// Today's merged-PR count: midnight Europe/Zurich, every base branch, one GitHub page, a token-aware cache, and the API.
 import { afterAll, beforeAll, beforeEach, test } from 'vitest';
 import { vi } from 'vitest';
 import assert from 'node:assert/strict';
 import {
-  countMergesOnDay, dayInZone, loadPrsToday, prsTodayLabel, PRS_TODAY_CACHE_MS, PRS_TODAY_GOAL,
+  clearPrsTodayCache, countMergesOnDay, dayInZone, loadPrsToday, prsTodayCacheMs,
+  prsTodayLabel, recentMergesUrl, PRS_TODAY_CACHE_MS, PRS_TODAY_CACHE_MS_NO_TOKEN, PRS_TODAY_GOAL,
   type PrsTodayReport,
 } from '../lib/prs-today';
-import { clearStreakCache, type Merge } from '../lib/streak';
+import { type Merge } from '../lib/streak';
 
 const merge = (number: number, merged_at: string, title = `PR ${number}`): Merge => ({ number, title, merged_at });
 
@@ -52,40 +53,65 @@ test('an invalid merged_at is skipped, and zero merges is a count of zero', () =
   assert.equal(countMergesOnDay([], now), 0);
 });
 
-beforeEach(() => clearStreakCache());
+beforeEach(() => clearPrsTodayCache());
 
-test('loadPrsToday counts every base, caches for a minute, and has no count when GitHub cannot be read', async () => {
+test('loadPrsToday asks one page sorted by updated, counts every base, and has no count when GitHub cannot be read', async () => {
   const rows = [
     { number: 117, title: 'v0.3 to test', merged_at: '2026-11-28T03:46:13Z', head: { ref: 'release/v0.3' } },
     { number: 118, title: 'v0.3 to main', merged_at: '2026-11-28T03:46:31Z', head: { ref: 'release/v0.3' } },
     { number: 145, title: 'Next line', merged_at: '2026-11-28T10:37:05Z', head: { ref: 'claude/next-why' } },
     { number: 90, title: 'closed, not merged', merged_at: null, head: { ref: 'x' } },
   ];
-  const github = pretendGitHub(rows);
+  // A full first page would previously have caused a second request. This path stops after page 1.
+  const full = Array.from({ length: 100 }, (_, i) => rows[i] ?? { number: 1000 + i, title: 'older', merged_at: '2026-11-27T10:00:00Z', head: { ref: 'old' } });
+  const github = pretendGitHub(full);
   const now = Date.parse('2026-11-28T11:00:00Z');
   const env = { TRIALOG_REPO: 'zu-dritt/trialog' };
   const first = await loadPrsToday(now, github.impl, env);
   assert.deepEqual({ count: first.count, goal: first.goal, day: first.day, repo: first.repo, problem: first.problem }, {
     count: 3, goal: 100, day: '2026-11-28', repo: 'zu-dritt/trialog', problem: null,
   });
-  assert.equal(github.asked.length, 1);
-  assert.equal(github.asked[0], 'https://api.github.com/repos/zu-dritt/trialog/pulls?state=closed&per_page=100&page=1');
+  assert.equal(github.asked.length, 1, 'one page only, even when that page is full');
+  assert.equal(github.asked[0], recentMergesUrl('zu-dritt/trialog'));
+  assert.match(github.asked[0], /sort=updated&direction=desc/);
   assert.doesNotMatch(github.asked[0], /base=/);
-
-  await loadPrsToday(now + 59_000, github.impl, env);
-  assert.equal(github.asked.length, 1, 'still cached just before one minute');
-  await loadPrsToday(now + PRS_TODAY_CACHE_MS, github.impl, env);
-  assert.equal(github.asked.length, 2, 'refetched at one minute');
+  assert.doesNotMatch(github.asked[0], /page=2/);
 
   const down = pretendGitHub([], 503);
-  const stale = await loadPrsToday(now + 2 * PRS_TODAY_CACHE_MS, down.impl, env);
+  const stale = await loadPrsToday(now + PRS_TODAY_CACHE_MS_NO_TOKEN, down.impl, env);
   assert.equal(stale.count, 3, 'the last good list is still counted');
   assert.match(stale.problem ?? '', /GitHub answered 503/);
 
-  clearStreakCache();
+  clearPrsTodayCache();
   const empty = await loadPrsToday(now, down.impl, env);
   assert.equal(empty.count, null, 'no last list: there is no count, so the chip hides');
   assert.match(empty.problem ?? '', /GitHub answered 503/);
+});
+
+test('the cache is five minutes without a GitHub token, and one minute with one', async () => {
+  const rows = [{ number: 1, title: 'today', merged_at: '2026-11-28T10:00:00Z', head: { ref: 'x' } }];
+  const now = Date.parse('2026-11-28T11:00:00Z');
+  assert.equal(prsTodayCacheMs({}), PRS_TODAY_CACHE_MS_NO_TOKEN);
+  assert.equal(prsTodayCacheMs({ TRIALOG_GITHUB_TOKEN: '  abc  ' }), PRS_TODAY_CACHE_MS);
+
+  const noToken = pretendGitHub(rows);
+  const env = { TRIALOG_REPO: 'owner/repo' };
+  await loadPrsToday(now, noToken.impl, env);
+  await loadPrsToday(now + PRS_TODAY_CACHE_MS, noToken.impl, env);
+  assert.equal(noToken.asked.length, 1, 'still cached at one minute without a token');
+  await loadPrsToday(now + PRS_TODAY_CACHE_MS_NO_TOKEN - 1, noToken.impl, env);
+  assert.equal(noToken.asked.length, 1, 'still cached just before five minutes');
+  await loadPrsToday(now + PRS_TODAY_CACHE_MS_NO_TOKEN, noToken.impl, env);
+  assert.equal(noToken.asked.length, 2, 'refetched at five minutes without a token');
+
+  clearPrsTodayCache();
+  const withToken = pretendGitHub(rows);
+  const authed = { ...env, TRIALOG_GITHUB_TOKEN: 'github-read-token-0123' };
+  await loadPrsToday(now, withToken.impl, authed);
+  await loadPrsToday(now + PRS_TODAY_CACHE_MS - 1, withToken.impl, authed);
+  assert.equal(withToken.asked.length, 1, 'still cached just before one minute with a token');
+  await loadPrsToday(now + PRS_TODAY_CACHE_MS, withToken.impl, authed);
+  assert.equal(withToken.asked.length, 2, 'refetched at one minute with a token');
 });
 
 test('without TRIALOG_REPO there is no count and GitHub is not asked', async () => {
@@ -108,7 +134,7 @@ beforeAll(async () => {
   process.env.SCOUT_TOKEN = 'scout-prs-today-token-0123456';
   process.env.TRIALOG_REPO = 'owner/repo';
   (globalThis as { __collabHubStore?: unknown }).__collabHubStore = undefined;
-  clearStreakCache();
+  clearPrsTodayCache();
   const realFetch = globalThis.fetch;
   vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = String(input);
@@ -125,7 +151,7 @@ beforeAll(async () => {
 afterAll(() => {
   vi.unstubAllGlobals();
   for (const name of ['PARTICIPANTS', 'ANA_TOKEN', 'SCOUT_TOKEN', 'TRIALOG_REPO']) delete process.env[name];
-  clearStreakCache();
+  clearPrsTodayCache();
 });
 
 test('GET /api/prs-today needs a token, and answers today\'s count', async () => {
@@ -136,7 +162,7 @@ test('GET /api/prs-today needs a token, and answers today\'s count', async () =>
     assert.equal(res.status, 200);
     const body = (await res.json()) as PrsTodayReport;
     assert.deepEqual(body, { count: 2, goal: 100, day: '2026-11-28', repo: 'owner/repo', problem: null });
-    assert.ok(githubCalls.some((u) => u.includes('/repos/owner/repo/pulls?state=closed&per_page=100&page=1') && !u.includes('base=')));
+    assert.ok(githubCalls.some((u) => u === recentMergesUrl('owner/repo')));
   } finally {
     vi.useRealTimers();
   }
