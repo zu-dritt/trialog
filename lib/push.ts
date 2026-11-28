@@ -152,6 +152,8 @@ async function deliverTo(store: Store, humans: readonly Sender[], alert: string,
   if (!humans.length) return;
   for (const name of humans) {
     const devices = await store.listPushDevices(name);
+    // Why a push did or didn't go out, in the function log (playground #1147): never the device token, the key or the team id.
+    if (!devices.length) console.warn(`[trialog] push: no device registered for ${name}`);
     for (const device of devices) {
       const result = await sendApnsAlert({
         token: device.token,
@@ -161,6 +163,7 @@ async function deliverTo(store: Store, humans: readonly Sender[], alert: string,
         payload,
         interruptionLevel,
       });
+      if (!result.ok) console.warn(`[trialog] push to ${name} not delivered: ${pushOutcome(result)} (${device.env}, ${device.bundle_id})`);
       if ('disable' in result && result.disable) {
         await store.disablePushDevice(device.token);
       }
@@ -201,4 +204,11 @@ export async function notifyPushForRoadmap(store: Store, item: RoadmapItem, befo
   const added = [...after].filter((n) => !previous.has(n));
   if (!added.length) return;
   await deliverTo(store, added, pushAlertForCard(item), { roadmap_item_id: item.id }, 'time-sensitive');
+}
+
+/** A failed send, in a few words for the log: why it didn't go out. No token, key or team id in it. */
+export function pushOutcome(result: Exclude<Awaited<ReturnType<typeof sendApnsAlert>>, { ok: true }>): string {
+  if ('skipped' in result) return 'no APNs key on this deployment';
+  const why = result.reason ? ` ${result.reason}` : '';
+  return 'disable' in result ? `Apple ${result.status}${why}, device disabled` : `Apple ${result.status}${why}`;
 }

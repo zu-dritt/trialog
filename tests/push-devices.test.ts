@@ -269,3 +269,35 @@ test('an unchanged flight does not notify again; a new since does', async () => 
   assert.equal(calls.length, 2);
   await store.deletePushDevice('ana', token);
 });
+
+test('why a push did not go out, in a few words for the log, never with a token', async () => {
+  const { pushOutcome } = await import('../lib/push');
+  assert.equal(pushOutcome({ ok: false, skipped: 'not configured' }), 'no APNs key on this deployment');
+  assert.equal(pushOutcome({ ok: false, status: 403, reason: 'InvalidProviderToken' }), 'Apple 403 InvalidProviderToken');
+  assert.equal(pushOutcome({ ok: false, disable: true, status: 410, reason: 'Unregistered' }), 'Apple 410 Unregistered, device disabled');
+  assert.equal(pushOutcome({ ok: false, status: 0, reason: 'transport_error' }), 'Apple 0 transport_error');
+});
+
+test('a push that is not delivered is logged with the reason, and without the device token', async () => {
+  const store = await getStore();
+  const token = 'e'.repeat(64);
+  await store.upsertPushDevice({ participant: 'ana', token, platform: 'ios', env: 'production', bundle_id: 'dev.trialog.app.test' });
+  process.env.APNS_KEY_ID = 'TESTKEYID1';
+  process.env.APNS_TEAM_ID = 'TESTTEAM01';
+  process.env.APNS_KEY_P8 = testP8;
+  setApnsTransportForTests(transport);
+  nextResponse = { status: 400, reason: 'TopicDisallowed' };
+  const lines: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    await notifyPushForMessage(store, messageTo('ana', 21));
+  } finally {
+    console.warn = warn;
+  }
+  const line = lines.find((l) => l.includes('not delivered'));
+  assert.ok(line, lines.join('\n'));
+  assert.match(line!, /Apple 400 TopicDisallowed \(production, dev\.trialog\.app\.test\)/);
+  assert.ok(!lines.some((l) => l.includes(token)), 'never the device token');
+  await store.deletePushDevice('ana', token);
+});
