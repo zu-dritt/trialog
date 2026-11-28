@@ -330,10 +330,11 @@ test('a card in Now opens read-only: title, who is on it, note, PRs, progress, d
 });
 
 test('on the board, a Now card\'s title opens the window; Next and Later keep ✎ edit; Done stays plain', () => {
-  const items = [card('rm_n', 'now', 0, { owner: 'claude' }), card('rm_x', 'next', 0), card('rm_d', 'done', 0)];
+  const items = [card('rm_n', 'now', 0, { owner: 'claude' }), card('rm_x', 'next', 0), card('rm_l', 'later', 0), card('rm_d', 'done', 0)];
   const html = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, edit: async () => true, remove: async () => true }} />);
   assert.match(html, /data-view="rm_n"/);
   assert.match(html, /data-edit="rm_x"/);
-  assert.ok(!/data-view="rm_x"|data-view="rm_d"|data-edit="rm_d"/.test(html));
+  assert.match(html, /data-edit="rm_l"/, 'Later keeps ✎ too (Grok\'s nit on PR 170)');
+  assert.ok(!/data-view="rm_x"|data-view="rm_l"|data-view="rm_d"|data-edit="rm_d"/.test(html));
   assert.match(renderToStaticMarkup(<RoadmapBoard items={items} />), /data-view="rm_n"/, 'viewing needs no rights');
 });
