@@ -42,4 +42,11 @@ final class HubAccountTests: XCTestCase {
     func testPushTokenIsHex() {
         XCTAssertEqual(Push.hex(Data([0x00, 0xab, 0xff])), "00abff")
     }
+
+    func testDictatedWordsReachThePageEscaped() {
+        let call = HubView.Coordinator.dictationCall(text: "it's \"done\" </script>", final: false, error: nil)
+        XCTAssertEqual(call, "window.trialogDictation && window.trialogDictation.apply(null, [\"it's \\\"done\\\" </script>\",false,null]);")
+        let failed = HubView.Coordinator.dictationCall(text: "", final: true, error: "The microphone is off")
+        XCTAssertTrue(failed.hasSuffix("[\"\",true,\"The microphone is off\"]);"), failed)
+    }
 }
