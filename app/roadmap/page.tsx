@@ -150,7 +150,7 @@ export default function RoadmapPage() {
     setBusy(true);
     try {
       if (card.column !== column) await api(`/api/roadmap/${id}`, { method: 'PATCH', body: JSON.stringify({ column }) });
-      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column, ids }) });
+      await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column, ids, moved: id }) });
       setError('');
     } catch (e) {
       if (e instanceof Error && e.message !== 'unauthorized') setError(`Not saved: ${e.message}`);

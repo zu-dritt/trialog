@@ -20,7 +20,9 @@ test('a change needs something to change; an order needs every id once', () => {
   assert.deepEqual(parseItemChange({ column: 'done' }, NAMES), { ok: true, change: { column: 'done' } });
   assert.deepEqual(parseItemChange({ owner: null }, NAMES), { ok: true, change: { owner: null } });
   assert.equal(parseItemChange({}, NAMES).ok, false);
-  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] });
+  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: null });
+  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: 'rm_bbbbbbbb' }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: 'rm_bbbbbbbb' });
+  assert.equal(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa'], moved: 'rm_bbbbbbbb' }).ok, false, 'the dragged card is one of the ids');
   for (const bad of [{ column: 'next', ids: ['rm_aaaaaaaa', 'rm_aaaaaaaa'] }, { column: 'next', ids: ['nope'] }, { column: 'x', ids: [] }, { column: 'next' }]) {
     assert.equal(parseOrder(bad).ok, false, JSON.stringify(bad));
   }
@@ -447,10 +449,13 @@ async function moveAndPickRules(store: Store) {
   // An edit is not a move.
   const edited = (await store.updateRoadmapItem(a.id, { title: 'A2' }, 'david'))!;
   assert.deepEqual([edited.moved_by, edited.updated_by], [null, 'david']);
-  // A drag (reorder) is: only the cards whose place changed.
-  const order = (await store.reorderRoadmap('next', [b.id, a.id], 'david'))!;
-  assert.deepEqual(order.map((i) => i.moved_by), ['david', 'david']);
-  assert.ok(order.every((i) => i.moved_at));
+  // A drag is a move, of the dragged card only: the others just made room.
+  const order = (await store.reorderRoadmap('next', [b.id, a.id], 'david', b.id))!;
+  assert.deepEqual(order.map((i) => [i.title, i.moved_by]), [['B', 'david'], ['A2', null]]);
+  assert.ok(order[0].moved_at);
+  // An order without a named card (an older client) moves nobody.
+  const plain = (await store.reorderRoadmap('next', [a.id, b.id], 'grok'))!;
+  assert.deepEqual(plain.map((i) => i.moved_by), [null, 'david']);
   // The column menu is a move too, and entering Next sets the time.
   const moved = (await store.updateRoadmapItem(later.id, { column: 'next' }, 'david'))!;
   assert.equal(moved.moved_by, 'david');

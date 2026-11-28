@@ -411,7 +411,7 @@ export interface Store {
   listRoadmapPicks(): Promise<{ participant: string; item_id: string; picked_at: string }[]>;
   startRoadmapItem(id: string, by: Sender): Promise<{ status: 'ok'; item: RoadmapItem; from: RoadmapColumn } | { status: 'started'; item: RoadmapItem } | { status: 'not_found' }>;
   /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
-  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
+  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender, moved?: string | null): Promise<RoadmapItem[] | null>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -1827,15 +1827,17 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { status: 'ok' as const, item: toRoadmap(row), from: item.column };
       });
     },
-    async reorderRoadmap(column, ids, by) {
+    async reorderRoadmap(column, ids, by, moved = null) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
         const have = (await tx.query(`SELECT id FROM roadmap_items WHERE col = $1::text`, [column])).map((r) => String(r.id));
         if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
         for (const [i, id] of ids.entries()) {
-          await tx.query(`UPDATE roadmap_items SET position = $2::int, updated_by = $3::text, updated_at = now(), moved_by = $3::text, moved_at = now() WHERE id = $1::text AND position <> $2::int`, [id, i, by]);
+          await tx.query(`UPDATE roadmap_items SET position = $2::int, updated_by = $3::text, updated_at = now() WHERE id = $1::text AND position <> $2::int`, [id, i, by]);
         }
+        // Only the card that was dragged counts as moved; the others only made room (migration 021).
+        if (moved) await tx.query(`UPDATE roadmap_items SET moved_by = $2::text, moved_at = now() WHERE id = $1::text`, [moved, by]);
         return sortRoadmap((await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE col = $1::text`, [column])).map(toRoadmap));
       });
     },
@@ -2811,11 +2813,14 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       item.moved_at = item.updated_at;
       return { status: 'ok' as const, item: { ...item, attachments: [...item.attachments] }, from };
     },
-    async reorderRoadmap(column, ids, by) {
+    async reorderRoadmap(column, ids, by, moved = null) {
       const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);
       if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
       const at = new Date(now()).toISOString();
-      ids.forEach((id, i) => { const item = roadmap.get(id)!; if (item.position !== i) { item.position = i; item.updated_by = shaped(by); item.updated_at = at; item.moved_by = item.updated_by; item.moved_at = at; } });
+      ids.forEach((id, i) => { const item = roadmap.get(id)!; if (item.position !== i) { item.position = i; item.updated_by = shaped(by); item.updated_at = at; } });
+      // Only the card that was dragged counts as moved; the others only made room (migration 021).
+      const dragged = moved ? roadmap.get(moved) : undefined;
+      if (dragged) { dragged.moved_by = shaped(by); dragged.moved_at = at; }
       return sortRoadmap([...roadmap.values()].filter((i) => i.column === column)).map((i) => ({ ...i }));
     },
     async listFlights() {

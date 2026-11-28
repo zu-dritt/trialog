@@ -50,6 +50,6 @@ export const PUT = safe(async (request: Request) => {
   if (bad) return bad;
   const input = parseOrder(body);
   if (!input.ok) return error(input.status, input.error);
-  const items = await (await getStore()).reorderRoadmap(input.column, input.ids, me);
+  const items = await (await getStore()).reorderRoadmap(input.column, input.ids, me, input.moved);
   return items ? json({ items }) : error(409, 'The cards changed in the meantime: «ids» must be exactly the cards now in that column. Reload and try again.');
 });
