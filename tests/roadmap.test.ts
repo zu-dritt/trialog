@@ -331,3 +331,29 @@ test('Grok\'s nits on PR 78: no side door for owners on POST; a claim that keeps
   assert.match(page, /\[\.\.\.note\]\.length > ROADMAP_NOTE_MAX/, 'a too-long note is refused before the round trip');
   assert.match(page, /res\.status === 409 && data\.owner\)[^]*else if \(res\.status === 409\) setError\(data\.error/, 'a done card says so, not «Already …’s»');
 });
+
+test('a claim or progress moves a card into Now; Done stays Done; clearing progress moves nothing (playground #1081)', async () => {
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler; DELETE: Handler };
+  const progressRoute = (await import('../app/api/roadmap/[id]/progress/route')) as unknown as { PUT: Handler };
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  const add = async (column: string, title: string) => ((await (await list.POST(req('david', 'POST', { column, title }))).json()) as { item: RoadmapItem }).item;
+  const columnOf = async (id: string) => ((await (await list.GET(req('david', 'GET'))).json()) as { items: RoadmapItem[] }).items.find((i) => i.id === id)!.column;
+
+  const fromNext = await add('next', 'Claimed from Next');
+  const claimed = await claimRoute.POST(req('claude', 'POST', {}, `/api/roadmap/${fromNext.id}/claim`), ctx(fromNext.id));
+  assert.equal(((await claimed.json()) as { item: RoadmapItem }).item.column, 'now', 'the answer already says Now');
+  assert.equal(await columnOf(fromNext.id), 'now');
+
+  const fromLater = await add('later', 'Progress from Later');
+  await claimRoute.DELETE(req('claude', 'DELETE', undefined, `/api/roadmap/${fromNext.id}/claim`), ctx(fromNext.id));
+  const humanProgress = await progressRoute.PUT(req('david', 'PUT', { progress: 20, status: 'started' }, `/api/roadmap/${fromLater.id}/progress`), ctx(fromLater.id));
+  assert.equal(((await humanProgress.json()) as { item: RoadmapItem }).item.column, 'now');
+
+  const cleared = await add('next', 'Progress cleared');
+  await progressRoute.PUT(req('david', 'PUT', { progress: null }, `/api/roadmap/${cleared.id}/progress`), ctx(cleared.id));
+  assert.equal(await columnOf(cleared.id), 'next', 'clearing the bar is no sign of work');
+
+  const done = await add('done', 'Already done');
+  await progressRoute.PUT(req('david', 'PUT', { progress: 100 }, `/api/roadmap/${done.id}/progress`), ctx(done.id));
+  assert.equal(await columnOf(done.id), 'done', 'Done stays Done');
+});
