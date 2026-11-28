@@ -22,29 +22,55 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 
 ## How we review
 
-Taken from what made early code review at Google work, and fitted to one human and agents from
-different makers, who write fast and see different things.
+These rules start from what made code review work at Google in its early years (roughly
+2004–2008), adjusted for how we work now: one human and AI agents from different makers. Typing
+code is almost free for us; a careful review and the human's attention are the scarce parts. Each
+rule was agreed by all three of us in the playground hub (decision number in brackets) and says
+why, so you can judge it without having worked at Google. We revisit them as we gather data.
 
-1. **Small changes.** One coherent thing per pull request, about 200 changed lines or fewer outside
-   tests. Our pull requests are already mostly there (in late November 2026, half changed under 40
-   lines and three in four under 120). Bigger? Split it, or say in the description why it can't be.
-   Small changes are reviewed in minutes, reverted cheaply, and actually read.
-2. **The bar is code health, not perfection.** Approve when the change leaves the code better than
-   it was: sound design, plain names, tests, nothing harder to change later. A review sorts what it
-   finds: **must-fix** (a bug, a security or privacy problem, lost data, a broken promise in the
-   API) blocks the merge; everything else is a **nit**, labelled as one, and the author decides.
-3. **Reviews spread knowledge.** The reviewer is the second person who knows the change. Say what
-   you checked and how (what you ran, what you looked at), and what you didn't. With agents from
-   different makers this matters more, not less: each catches what the other is blind to.
-4. **Evidence of testing.** A change people use comes with tests, or with one line on why it can't
-   have them. The description names the test that would fail without the change, and says what
-   was run and seen («`a second go is refused` fails without it; 847 tests pass; tried it on a local
-   demo hub»). Green CI is needed, not sufficient.
-5. **A short note before the big things.** For anything that takes more than an afternoon, or
-   changes the database, the API or how we work, write the plan in a few lines first (a roadmap card
-   or a hub message), and start when the other two have seen it.
-6. **Fast by default, human for high stakes.** The reviewer merges when the review is clean and CI
-   is green. Database changes, money, secrets, the live hub and `main` wait for the orchestrator.
+1. **Small: one idea per pull request** (#1253). A reviewer can check every line in about 10
+   minutes; tests and generated files don't count. Risky parts (sign-in, money, database changes,
+   deletes) go in their own short pull request, even when the feature around them is big. A big
+   feature ships in slices, each live on the playground. A review starts within 15 minutes of the
+   ask.
+   *Why.* Google asked for small changes because a reviewer's hour was scarce. Our reviewers are
+   fast, so we measure size by how well it can be reviewed, not by lines: a small change is read
+   line by line, undone on its own, and followed from one picture. On 28 November 2026 the server
+   hole in pull request 138 (an agent could post the orchestrator's go) was found only because the
+   change was small, and was fixed in 10 minutes. We aim for the clock, not the size: Google aimed
+   for a review within a day, and ours take minutes.
+2. **Code health, not perfection** (#1260). Approve when the change leaves the code better than it
+   was. A **must-fix** is anything the orchestrator or a user could feel: a bug, a security or
+   privacy problem, lost data, a broken promise in the API. It comes with the steps to see it, and
+   the author answers each one with «fixed in <commit>» or why not. Everything else is a **nit**,
+   labelled as one: it never blocks, and the author fixes it in the same pull request or leaves it.
+   *Why.* At Google this rule kept reviews from stalling on taste. With cheap reverts and changes
+   live within the hour, «better than before» is the right bar; holding out for perfect only slows
+   the next fix. Steps for every must-fix make it quick to agree on what is wrong.
+3. **Reviews spread knowledge** (#1269). Every review ends with three short lines: what I ran,
+   what I looked at, and what I didn't check, said plainly (for example «I didn't run the iOS
+   tests»). No other ceremony.
+   *Why.* At Google, review was how knowledge of the code spread from one person to the next. Here
+   the reviewer is a different model from a different maker, with different blind spots, so a
+   second look catches more. The three lines tell the orchestrator how far the review went.
+4. **Show the tests** (#1274). Each pull request names a test that would fail without it. What
+   tests can't reach (a screen, the phone) gets a picture, with a yellow box around what changed, or
+   a run in a headless browser. Green CI is needed, but not enough.
+   *Why.* Google's culture expected tests with every change. For agents a test costs minutes, so we
+   ask for more: a test that proves this change, not only a count of passing ones. What wasn't run
+   is said, so nobody takes «all green» for more than it is.
+5. **A short note before the big things** (#1281). Before work on the database, the API,
+   security or how we work, or anything over about two hours: three lines on the roadmap card (what,
+   why, which slices), and a picture. For something you'll see, a quick mock with a yellow box
+   around what changes; for the backend, a small diagram or a before/after example; pure plumbing
+   stays at three lines. Start once the other agent has seen it, and the orchestrator too when it
+   needs their yes.
+   *Why.* Google wrote short design notes so a team didn't build the wrong thing. Our builds take
+   6 to 20 minutes, so «more than an afternoon» was far too long a threshold. A picture is how the
+   human gets the idea at a glance.
+6. **Fast by default, the human for high stakes.** The reviewer merges when the review is clean
+   and CI is green. Database changes, money, secrets, the live hub and `main` wait for the
+   orchestrator. *(Still being discussed.)*
 
 ## Use a no-reply address for your commits
 
