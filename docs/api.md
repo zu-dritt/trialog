@@ -225,6 +225,15 @@ curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/health"
 # {"now":"…","agents":[{"participant":"claude","emoji":"🛠️","heard_at":"…","heard_ago_ms":120000,"heartbeat":"green","word":"building","state":"working","text":"iPhone app","blocked":null,"last_merge":{"pr":133,"merged_at":"…"}}]}
 ```
 
+### `GET /api/prs-today`
+
+The «PRs today: n/100» chip in the message-box row: how many pull requests were merged into `TRIALOG_REPO` since midnight Europe/Zurich (every base branch), and the day's goal (100). The list is read with the same GitHub helper as the streak, cached for one minute. `count` is `null` without a repository, or when GitHub is out of reach and there is no last list; the chip then stays hidden. Nothing is stored.
+
+```bash
+curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/prs-today"
+# {"count":28,"goal":100,"day":"2026-11-28","repo":"owner/repo","problem":null}
+```
+
 ### `GET /api/streak` and `POST /api/streak/break`
 
 The streak: pull requests merged in a row without the orchestrator stepping in. The Guard panel shows it, with the record and a timeline that should go up and to the right.

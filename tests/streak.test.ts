@@ -75,6 +75,17 @@ test('the list is cached for five minutes, and on a failure the last good list i
   assert.match(later.problem ?? '', /GitHub answered 503\)\. Showing the last list\./);
 });
 
+test('a shorter maxAge refetches, and a null base asks GitHub for every branch', async () => {
+  const good = pretendGitHub([[{ number: 1, title: 'a', merged_at: at(1) }]]);
+  const t0 = Date.parse(at(12));
+  await cachedMerges('o/r', null, t0, good.impl, 60_000);
+  await cachedMerges('o/r', null, t0 + 59_000, good.impl, 60_000);
+  assert.equal(good.asked.length, 1, 'cached under the shorter maxAge');
+  assert.equal(good.asked[0], 'https://api.github.com/repos/o/r/pulls?state=closed&per_page=100&page=1');
+  await cachedMerges('o/r', null, t0 + 60_000, good.impl, 60_000);
+  assert.equal(good.asked.length, 2, 'refetched at the shorter maxAge');
+});
+
 function pgliteDb(pg: PGlite): Db {
   return {
     query: async (text, params) => (await pg.query(text, params)).rows as Row[],
