@@ -265,13 +265,19 @@ test('Delete asks in the edit window, not in the browser\'s box (#1306)', async 
   assert.ok(!html.includes('data-delete-for-good'), 'nothing is deleted by the first click');
 });
 
-test('a card in Next says who last placed or changed it, and when (#1327)', async () => {
-  const { whyHere, shortAge } = await import('../app/roadmap-board');
-  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+test('a card in Next says why it is there: your drag, how long it has waited, or its last change; and the agents\' picks (#1327)', async () => {
+  const { whyHere, shortAge, picksOf } = await import('../app/roadmap-board');
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
   const now = Date.parse('2026-11-28T10:00:00Z');
-  assert.equal(whyHere({ column: 'next', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), 'Last change: David · 12 min ago');
-  assert.equal(whyHere({ column: 'now', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), null, 'only in Next');
+  const base = { column: 'next' as const, updated_by: 'grok', updated_at: '2026-11-28T09:48:00Z' };
+  assert.equal(whyHere({ ...base, moved_by: 'david', moved_at: '2026-11-28T09:48:00Z', entered_next_at: '2026-11-25T10:00:00Z' }, people, now), '📌 David moved it here · 12 min ago', 'your drag wins');
+  assert.equal(whyHere({ ...base, moved_by: 'grok', moved_at: '2026-11-28T09:48:00Z', entered_next_at: '2026-11-25T10:00:00Z' }, people, now), 'In Next for 3 d', 'an agent\'s move is no override');
+  assert.equal(whyHere({ ...base, moved_by: null, moved_at: null, entered_next_at: null }, people, now), 'Last change: Grok · 12 min ago', 'a card from before migration 021');
+  assert.equal(whyHere({ ...base, column: 'now' }, people, now), null, 'only in Next');
   assert.deepEqual(['2026-11-28T10:00:00Z', '2026-11-28T08:58:00Z', '2026-11-25T10:00:00Z'].map((t) => shortAge(t, now)), ['just now', '1 h ago', '3 d ago']);
-  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_next0000', 'next', 0, { updated_by: 'grok' })]} participants={people} now={new Date(now)} />);
-  assert.match(html, /data-why=""[^>]*>Last change: Grok · /);
+  const picks = [{ participant: 'grok', item_id: 'rm_next0000' }, { participant: 'claude', item_id: 'rm_next0000' }];
+  assert.deepEqual(picksOf('rm_next0000', picks, people), ['Claude', 'Grok'], 'in the roster\'s order');
+  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_next0000', 'next', 0, { moved_by: 'david', moved_at: '2026-11-28T09:48:00Z' })]} participants={people} picks={picks} now={new Date(now)} />);
+  assert.match(html, /data-why=""[^>]*>📌 David moved it here · 12 min ago</);
+  assert.match(html, /data-picks=""[^>]*>⭐ Claude&#x27;s pick · Grok&#x27;s pick</);
 });

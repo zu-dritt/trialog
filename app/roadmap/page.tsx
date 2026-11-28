@@ -47,6 +47,18 @@ export default function RoadmapPage() {
     return res.json() as Promise<unknown>;
   }, [token]);
 
+  // Each agent's one pick in Next (migration 021). Read with the cards, and every minute: a pick
+  // changes no card, so the stream doesn't carry it.
+  const [picks, setPicks] = useState<{ participant: string; item_id: string }[]>([]);
+  const loadPicks = useCallback(async () => {
+    try { setPicks(((await api('/api/roadmap/picks')) as { picks: { participant: string; item_id: string }[] }).picks); } catch { /* the board works without them */ }
+  }, [api]);
+  useEffect(() => {
+    if (!token) return undefined;
+    void loadPicks();
+    const t = setInterval(() => { if (!document.hidden) void loadPicks(); }, 60_000);
+    return () => clearInterval(t);
+  }, [token, loadPicks, items.length]);
   const load = useCallback(async () => {
     try {
       setItems(((await api('/api/roadmap')) as { items: RoadmapItem[] }).items);
@@ -296,7 +308,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build, edit, remove }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} picks={picks} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build, edit, remove }} loadImage={loadImage} />
     </main>
   );
 }
