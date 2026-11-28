@@ -292,3 +292,18 @@ test('Save in the card window counts a change of pictures, and waits for uploads
   assert.deepEqual(editState(was, 'Sounds', 'Two.', false, [ready('att_a'), ready('att_b'), { state: 'uploading' }]), { ready: false, label: 'Uploading…' });
   assert.equal(editState(was, 'Sounds', 'Two.', false, [ready('att_a'), { state: 'failed' }]).ready, false, 'a failed upload blocks Save');
 });
+
+test('«c» opens Compose, but not while typing in a field or with a modifier (#1403)', async () => {
+  const { isComposeKey, ComposeIdea } = await import('../app/compose-idea');
+  const div = { tagName: 'DIV' } as unknown as EventTarget;
+  const input = { tagName: 'INPUT', type: 'text' } as unknown as EventTarget;
+  const textarea = { tagName: 'TEXTAREA' } as unknown as EventTarget;
+  assert.equal(isComposeKey({ key: 'c', target: div }), true);
+  assert.equal(isComposeKey({ key: 'c', target: input }), false, 'typing a c in a field');
+  assert.equal(isComposeKey({ key: 'c', target: textarea }), false);
+  assert.equal(isComposeKey({ key: 'c', metaKey: true, target: div }), false, '⌘C copies');
+  assert.equal(isComposeKey({ key: 'x', target: div }), false);
+  const html = renderToStaticMarkup(<ComposeIdea onAdd={async () => true} upload={async () => { throw new Error('no'); }} />);
+  assert.match(html, /shortcut: c/);
+  assert.match(html, /<kbd[^>]*>c<\/kbd>/);
+});

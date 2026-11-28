@@ -1740,6 +1740,8 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
            WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
           [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description, change.reviewer === undefined ? item.reviewer : change.reviewer, moved],
         );
+        // A pick is for a card in Next: when the card leaves, the pick goes (Grok's nit on PR 149).
+        if (moved && item.column === 'next') await tx.query(`DELETE FROM roadmap_picks WHERE item_id = $1::text`, [id]);
         return toRoadmap(row);
       });
     },
@@ -1860,6 +1862,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
           `UPDATE roadmap_items SET col = 'now', position = 0, updated_by = $2::text, updated_at = now(), moved_by = $2::text, moved_at = now() WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
           [id, by],
         );
+        await tx.query(`DELETE FROM roadmap_picks WHERE item_id = $1::text`, [id]);
         return { status: 'ok' as const, item: toRoadmap(row), from: item.column };
       });
     },
@@ -2776,6 +2779,8 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         }
         item.column = change.column;
         // A move, not an edit (migrations/021): who moved it, and when it entered Next.
+        // A pick is for a card in Next: when the card leaves, the pick goes.
+        if (change.column !== 'next') for (const [who, p] of picks) if (p.item_id === id) picks.delete(who);
         item.moved_by = shaped(by);
         item.moved_at = new Date(now()).toISOString();
         if (change.column === 'next') item.entered_next_at = item.moved_at;
@@ -2867,6 +2872,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       item.updated_at = new Date(now()).toISOString();
       item.moved_by = item.updated_by;
       item.moved_at = item.updated_at;
+      for (const [who, p] of picks) if (p.item_id === id) picks.delete(who);
       return { status: 'ok' as const, item: { ...item, attachments: [...item.attachments] }, from };
     },
     async reorderRoadmap(column, ids, by, moved = null) {

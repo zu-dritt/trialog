@@ -539,3 +539,27 @@ test('API: PUT …/pictures checks its input', async () => {
   assert.equal((await put({ attachments: [] })).status, 200);
   assert.equal((await put({ attachments: [] }, 'rm_00000000')).status, 404);
 });
+
+async function picksLeaveRules(store: Store) {
+  const a = (await store.addRoadmapItem({ column: 'next', title: 'A', note: '', owner: null, by: 'grok' }))!;
+  const b = (await store.addRoadmapItem({ column: 'next', title: 'B', note: '', owner: null, by: 'grok' }))!;
+  assert.equal(await store.setRoadmapPick('claude', a.id), true);
+  assert.equal(await store.setRoadmapPick('grok', b.id), true);
+  // A to Later and back: its pick is gone, not hidden (Grok's nit on PR 149).
+  await store.updateRoadmapItem(a.id, { column: 'later' }, 'david');
+  await store.updateRoadmapItem(a.id, { column: 'next' }, 'david');
+  // B started with Build it: its pick goes too.
+  await store.startRoadmapItem(b.id, 'david');
+  assert.deepEqual(await store.listRoadmapPicks(), []);
+  // An edit keeps a pick.
+  assert.equal(await store.setRoadmapPick('claude', a.id), true);
+  await store.updateRoadmapItem(a.id, { title: 'A2' }, 'david');
+  assert.equal((await store.listRoadmapPicks()).length, 1);
+}
+
+test('a pick goes when its card leaves Next; an edit keeps it (memory and PGlite)', async () => {
+  await picksLeaveRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await picksLeaveRules(store);
+});
