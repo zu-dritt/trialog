@@ -10,7 +10,7 @@ import type { Participant } from '../lib/shared';
 import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from '../lib/store';
 import { linksPullRequest, pullRequestNumbers } from '../app/links';
 import { formatClock, shipChipText } from '../lib/build-it';
-import { SHIP_EMOJI, SHIP_HELP, ShipIt, shipToggle, shippersOf, shipGoesOf } from '../app/ship';
+import { SHIP_EMOJI, SHIP_HELP, SHIPPED_HELP, ShipIt, shipToggle, shippersOf, shipGoesOf } from '../app/ship';
 import { ReactionBar } from '../app/reactions';
 import { canonicalEmoji } from '../app/emoji-data';
 
@@ -103,6 +103,16 @@ test('the chip says «shipped» only when the pull request is known to be merged
   const done = renderToStaticMarkup(<ShipIt message={m} me="david" participants={people} onToggle={() => {}} merged />);
   assert.match(done, /🚀 shipped · 13:48/);
   assert.ok(!done.includes('go from'));
+});
+
+test('once the pull request is merged, Ship it greys out: nothing left to give a go for', () => {
+  const open = renderToStaticMarkup(<ShipIt message={base()} me="david" participants={people} onToggle={() => {}} merged={false} />);
+  assert.ok(!/disabled=""/.test(open) && !open.includes('data-merged'), 'an open PR: the button works');
+  const done = renderToStaticMarkup(<ShipIt message={base()} me="david" participants={people} onToggle={() => {}} merged />);
+  assert.match(done, /disabled=""/);
+  assert.match(done, /data-merged=""/);
+  assert.match(done, /opacity-50/);
+  assert.ok(done.includes(`title="${SHIPPED_HELP}"`), done);
 });
 
 test('the reaction row leaves out the 🚀 it shows as chips, and keeps the other pills', () => {

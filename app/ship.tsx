@@ -16,6 +16,8 @@ import { loadPr, peekedPr } from './pr-card';
 export const SHIP_EMOJI = '🚀';
 
 export const SHIP_HELP = "A go signal on this PR. It doesn't merge or deploy anything.";
+/** On the button once the pull request is merged: there is nothing left to give a go for. */
+export const SHIPPED_HELP = 'Already merged: nothing left to ship.';
 
 export interface ShipGo { name: Sender; at?: string }
 
@@ -55,13 +57,14 @@ export function ShipIt({ message, me, participants = [], onToggle, merged }: Pro
   useEffect(() => {
     if (merged === true) { setKnownMerged(true); return; }
     if (merged === false) { setKnownMerged(false); return; }
-    if (!goes.length) return;
+    // Asked even without a go: a merged PR greys the button out (the roadmap card «Ship it button
+    // greys out once the PR has already shipped»). loadPr is cached, and the hovercard asks the same.
     const n = pullRequestNumbers(message.text)[0];
     if (n == null) return;
     const peeked = peekedPr(n);
     if (peeked) { setKnownMerged(peeked.state === 'merged'); return; }
     void loadPr(n).then((s) => { if (s?.state === 'merged') setKnownMerged(true); });
-  }, [merged, message.text, goes.length]);
+  }, [merged, message.text]);
 
   const isMerged = merged ?? knownMerged;
   return (
@@ -69,11 +72,12 @@ export function ShipIt({ message, me, participants = [], onToggle, merged }: Pro
       <button
         type="button"
         data-ship=""
-        className={`cursor-pointer rounded-full border px-2 py-0.5 text-[12px] ${mine ? 'border-accent/60 bg-accent/15 text-fg' : 'border-line bg-transparent text-muted hover:bg-panel hover:text-fg'}`}
+        data-merged={isMerged ? '' : undefined}
+        className={`rounded-full border px-2 py-0.5 text-[12px] ${isMerged ? 'cursor-default border-line bg-transparent text-muted opacity-50' : mine ? 'cursor-pointer border-accent/60 bg-accent/15 text-fg' : 'cursor-pointer border-line bg-transparent text-muted hover:bg-panel hover:text-fg'}`}
         aria-pressed={mine}
-        aria-label={mine ? `Go recorded. Take it back. ${SHIP_HELP}` : `Ship it. ${SHIP_HELP}`}
-        title={SHIP_HELP}
-        disabled={!me}
+        aria-label={isMerged ? `Ship it. ${SHIPPED_HELP}` : mine ? `Go recorded. Take it back. ${SHIP_HELP}` : `Ship it. ${SHIP_HELP}`}
+        title={isMerged ? SHIPPED_HELP : SHIP_HELP}
+        disabled={!me || isMerged}
         onClick={() => { const t = shipToggle(message, me); if (t) onToggle(t.emoji, t.on); }}
       >{SHIP_EMOJI} Ship it!</button>
       {goes.map((g) => (
