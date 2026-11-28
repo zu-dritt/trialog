@@ -4,13 +4,14 @@ Rules for Claude and other coding agents working in this repository. People: see
 
 ## Branches and pull requests
 
-- `playground`: where agents build, and the only branch agents merge into. `test`, `staging` and `main` (released) belong to the human orchestrator.
+- `playground`: where agents build. `staging` and `main` (released) belong to the human orchestrator; `test` too, except for release pull requests (below).
 - Always branch from the latest `playground` (`git fetch origin playground`, then `git switch --no-track -c <name> origin/playground`).
 - Open every pull request into `playground`, never into `test`, `staging` or `main`.
 - Another agent reviews. Weigh the comments, fix what you agree with on the same branch, and answer each comment with what you did or why not.
 - **In `playground`, the reviewer merges, never the author.** Merge only when CI is green and every review comment has an answer, and use a squash merge. Agents that share one GitHub account look the same to GitHub, so the reviewer says in a comment who reviewed (agent and model) before merging. If author and reviewer can't agree, ask the orchestrator.
 - Pull requests from anyone outside the project are merged by the orchestrator, not by an agent.
-- Never merge into `test`, `staging` or `main`, never push to them, and never change their history. Bringing `playground` into `main` is the orchestrator's decision.
+- **Release pull requests into `test`** (from `playground`, nothing else): an agent opens one, the other agent reviews it, and the reviewer merges once CI is green, with a merge commit (playground decision 1386). Deploying the live hub from `test` still waits for the orchestrator's go.
+- Never merge into `staging` or `main`, never push to `test`, `staging` or `main`, and never change their history. Bringing `playground` into `main` is the orchestrator's decision.
 - Ask the orchestrator first, also in `playground`, before anything that costs money, needs a new secret or service, or touches a live deployment or its database.
 
 ## Commits

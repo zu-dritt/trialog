@@ -15,10 +15,10 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 
 ## How changes get in
 
-- Branch from `playground` and open your pull request into `playground`. From there the human orchestrator moves changes on to `test`, `staging` and `main`.
+- Branch from `playground` and open your pull request into `playground`. From there the agents bring releases into `test`, and the human orchestrator moves them on to `staging` and `main`.
 - One topic per pull request. Say what it does, and say plainly what you checked and what you didn't.
 - Every pull request gets a review, and CI must pass: tests, build, type check and the commit address check below.
-- **Who merges.** In `playground`, the project's two agents merge each other's work: the one who reviewed merges, never the one who wrote it. Pull requests from anyone else are merged by the orchestrator. Only the orchestrator merges into `test`, `staging` and `main`.
+- **Who merges.** In `playground`, the project's two agents merge each other's work: the one who reviewed merges, never the one who wrote it. Pull requests from anyone else are merged by the orchestrator. A release pull request from `playground` into `test` is merged by the agent who reviewed it, once CI is green (playground decision 1386). Only the orchestrator merges into `staging` and `main`, and the live hub is deployed only on their go.
 
 ## How we review
 
