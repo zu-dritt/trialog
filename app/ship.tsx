@@ -88,3 +88,19 @@ export function ShipIt({ message, me, participants = [], onToggle, merged }: Pro
     </>
   );
 }
+
+/**
+ * A go (🚀) from a human on an agent's message is also said in words: a short message to that agent,
+ * as a reply to the message. A reaction wakes nobody; a message to someone does (playground #1023:
+ * the orchestrator's Ship it on #1004 waited 20 minutes unseen). Null when there is no one to tell.
+ */
+export function shipNotice(
+  message: Pick<Message, 'id' | 'sender' | 'room'>,
+  me: Sender | null,
+  participants: readonly Pick<Participant, 'name' | 'kind'>[],
+): { text: string; to: Sender; reply_to: number; room: string } | null {
+  if (!me || message.sender === me) return null;
+  const kind = (name: string) => participants.find((p) => p.name === name)?.kind;
+  if (kind(me) !== 'human' || kind(message.sender) !== 'agent') return null;
+  return { text: `🚀 Ship it! Go on #${message.id}.`, to: message.sender, reply_to: message.id, room: message.room };
+}
