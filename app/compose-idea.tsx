@@ -131,13 +131,18 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
 }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  // Delete asks in the window itself (David, playground #1306: the browser's box shows the site's
+  // address and a bare «OK»). Esc or «Keep it» goes back.
+  const [confirming, setConfirming] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (confirming) keepRef.current?.focus(); }, [confirming]);
   useEffect(() => { titleRef.current?.focus(); }, []);
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (confirming) setConfirming(false); else onClose(); } };
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
-  }, [onClose]);
+  }, [onClose, confirming]);
   const state = editState(card, title, description, busy);
   const pictures = card.attachments?.length ?? 0;
   const submit = async (e: FormEvent) => {
@@ -146,8 +151,8 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
     if (await onSave({ title: title.trim(), description: description.trim() })) onClose();
   };
   const remove = async () => {
-    if (!window.confirm(`Delete «${card.title}»? This can't be undone.`)) return;
     if (await onDelete()) onClose();
+    else setConfirming(false);
   };
   return (
     <div role="dialog" aria-modal="false" aria-label={`Edit «${card.title}»`} data-edit-window={card.id}
@@ -162,12 +167,23 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={ROADMAP_DESCRIPTION_MAX}
           placeholder="Say it in full." aria-label="Description of the card"
           className="min-h-[10rem] flex-1 resize-y rounded-md border border-line bg-bg px-2 py-1.5 text-sm leading-relaxed" />
-        <div className="flex items-center gap-2">
-          <button type="submit" disabled={!state.ready} className="cursor-pointer rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#0f1115] disabled:cursor-default disabled:opacity-40">{state.label}</button>
-          <button type="button" data-delete-card={card.id} onClick={() => { void remove(); }} disabled={busy}
-            className="cursor-pointer rounded-md border border-[#f85149] bg-transparent px-2 py-1 text-sm text-[#ff7b72] hover:bg-[#f85149]/15 disabled:opacity-40">Delete</button>
-          <span className="ml-auto text-xs text-muted">{pictures > 0 && `🖼 ${pictures} stay · `}{[...description].length}/{ROADMAP_DESCRIPTION_MAX}</span>
-        </div>
+        {confirming ? (
+          <div role="alertdialog" aria-label="Delete this card?" data-confirm-delete={card.id}
+            className="flex flex-wrap items-center gap-2 rounded-lg border border-[#f85149] bg-[#f85149]/10 px-3 py-2">
+            <span className="min-w-0 flex-1 text-sm text-fg">Delete «{card.title}»{pictures > 0 && ` and its ${pictures === 1 ? 'picture' : `${pictures} pictures`}`}? <span className="text-muted">This can't be undone.</span></span>
+            <button ref={keepRef} type="button" data-keep-card="" onClick={() => setConfirming(false)}
+              className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-1 text-sm text-fg hover:bg-[#343a47]">Keep it</button>
+            <button type="button" data-delete-for-good={card.id} onClick={() => { void remove(); }} disabled={busy}
+              className="cursor-pointer rounded-md border border-[#f85149] bg-[#f85149] px-3 py-1 text-sm font-semibold text-[#0f1115] hover:bg-[#ff7b72] disabled:opacity-40">Delete for good</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button type="submit" disabled={!state.ready} className="cursor-pointer rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#0f1115] disabled:cursor-default disabled:opacity-40">{state.label}</button>
+            <button type="button" data-delete-card={card.id} onClick={() => setConfirming(true)} disabled={busy}
+              className="cursor-pointer rounded-md border border-[#f85149] bg-transparent px-2 py-1 text-sm text-[#ff7b72] hover:bg-[#f85149]/15 disabled:opacity-40">Delete</button>
+            <span className="ml-auto text-xs text-muted">{pictures > 0 && `🖼 ${pictures} stay · `}{[...description].length}/{ROADMAP_DESCRIPTION_MAX}</span>
+          </div>
+        )}
       </form>
     </div>
   );
