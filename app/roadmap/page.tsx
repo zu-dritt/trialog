@@ -12,6 +12,7 @@ import { uploadRequest, useImageLoader } from '../attachments';
 import { FlightBar } from '../flight';
 import type { NewIdea } from '../compose-idea';
 import { eitherSignal, watchNap } from '../nap';
+import { REST_POLL_MS, cardsKey, paceFor } from '../roadmap-pace';
 import { createSseParser, type SseEvent } from '../../lib/sse';
 
 const TOKEN_KEY = 'collabHubToken';
@@ -55,18 +56,48 @@ export default function RoadmapPage() {
 
   useEffect(() => {
     if (!token) return undefined;
-    void load();
     void api('/api/participants').then((d) => { const p = d as { me?: string; participants: Participant[] }; setParticipants(p.participants); setMe(p.me ?? null); }).catch(() => {});
-    // The cards arrive live (/api/roadmap/stream), a second or two after any change. A tab hidden
-    // for a while naps, as the hub does, so the database can sleep. When the stream can't be had,
-    // the page asks every 20 seconds until it can.
+    // The cards arrive live (/api/roadmap/stream), a second or two after any change, while someone is
+    // there. A hidden tab asks nothing; a visible one nobody has touched for 10 minutes rests and looks
+    // once every 6, so the database can scale to zero (app/roadmap-pace.ts, Grok's review of PR 121).
+    // When the stream can't be had, the page asks every 20 seconds until it can.
     const abort = new AbortController();
     let conn: AbortController | null = null;
-    const nap = watchNap(document, () => conn?.abort());
+    let lastActive = Date.now();
+    let wakeUp: (() => void) | null = null;
+    const stirred = () => { lastActive = Date.now(); wakeUp?.(); };
+    const onVisible = () => { if (!document.hidden) stirred(); };
+    const ACTIVITY = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'focus'] as const;
+    for (const type of ACTIVITY) window.addEventListener(type, stirred, { passive: true });
+    document.addEventListener('visibilitychange', onVisible);
+    // Hidden: the stream stops at once (afterMs 0), not after the hub's 15 minutes.
+    const nap = watchNap(document, () => conn?.abort(), { afterMs: 0 });
+    // While live: nobody there for REST_AFTER_MS ends the stream, and the loop below rests.
+    const check = setInterval(() => { if (paceFor(document.hidden, Date.now(), lastActive) === 'rest') conn?.abort(); }, 30_000);
+    let seen = '';
+    // A change of a card counts as activity, like a movement on the page.
+    const take = (list: RoadmapItem[]) => {
+      const key = cardsKey(list);
+      if (seen && key !== seen) lastActive = Date.now();
+      seen = key;
+      setItems(list);
+      setError('');
+    };
+    const look = async () => {
+      try { take(((await api('/api/roadmap')) as { items: RoadmapItem[] }).items); } catch (e) { if (e instanceof Error && e.message !== 'unauthorized') setError(e.message); }
+    };
     const run = async () => {
       while (!abort.signal.aborted) {
         if (nap.napping) await nap.awake(abort.signal);
         if (abort.signal.aborted) return;
+        if (paceFor(document.hidden, Date.now(), lastActive) === 'rest') {
+          await look();
+          if (paceFor(document.hidden, Date.now(), lastActive) === 'rest') {
+            await new Promise<void>((resolve) => { wakeUp = resolve; void pause(REST_POLL_MS, abort.signal).then(resolve); });
+            wakeUp = null;
+          }
+          continue;
+        }
         const opened = Date.now();
         try {
           conn = new AbortController();
@@ -74,7 +105,7 @@ export default function RoadmapPage() {
           if (res.status === 401) { setToken(''); return; }
           if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
           const parser = createSseParser((event: SseEvent) => {
-            if (event.event === 'roadmap') { setItems((JSON.parse(event.data) as { items: RoadmapItem[] }).items); setError(''); }
+            if (event.event === 'roadmap') take((JSON.parse(event.data) as { items: RoadmapItem[] }).items);
           });
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
@@ -86,17 +117,24 @@ export default function RoadmapPage() {
         } catch {
           if (abort.signal.aborted) return;
         }
-        // A stream that ran its course (4 minutes) or napped: straight back. One that failed at once: poll a while.
-        if (nap.napping || Date.now() - opened >= STREAM_MIN_MS) continue;
-        for (const until = Date.now() + POLL_MS * 3; !abort.signal.aborted && !nap.napping && Date.now() < until;) {
-          if (!document.hidden) await load();
+        // A stream that ran its course (4 minutes), napped or went to rest: straight back to the top.
+        // One that failed at once: poll a while.
+        if (nap.napping || paceFor(document.hidden, Date.now(), lastActive) !== 'live' || Date.now() - opened >= STREAM_MIN_MS) continue;
+        for (const until = Date.now() + POLL_MS * 3; !abort.signal.aborted && !nap.napping && paceFor(document.hidden, Date.now(), lastActive) === 'live' && Date.now() < until;) {
+          await look();
           await pause(POLL_MS, abort.signal);
         }
       }
     };
     void run();
-    return () => { abort.abort(); nap.stop(); };
-  }, [token, load, api]);
+    return () => {
+      abort.abort();
+      nap.stop();
+      clearInterval(check);
+      for (const type of ACTIVITY) window.removeEventListener(type, stirred);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [token, api]);
 
   useEffect(() => {
     const id = window.location.hash.replace(/^#/, '');

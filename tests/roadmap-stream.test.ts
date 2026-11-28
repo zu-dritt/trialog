@@ -7,6 +7,7 @@ import { createMemoryStore, createSqlStore, type Db, type Row, type Store } from
 import { createRoadmapStream } from '../lib/stream';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import type { RoadmapItem } from '../lib/roadmap';
+import { REST_AFTER_MS, REST_POLL_MS, cardsKey, paceFor } from '../app/roadmap-pace';
 
 function pgliteDb(pg: PGlite): Db {
   return {
@@ -86,4 +87,28 @@ test('a quiet stream sends a ping now and then, so proxies keep it open', async 
   let raw = '';
   for (;;) { const { done, value } = await reader.read(); if (done) break; raw += decoder.decode(value, { stream: true }); }
   assert.match(raw, /: ping/);
+});
+
+// --- how eagerly the page follows (Grok's review of PR 121) ----------------------------------------
+
+test('a hidden tab asks nothing; a visible one is live, and rests after 10 quiet minutes', () => {
+  const t = 1_000_000_000;
+  assert.equal(paceFor(true, t, t), 'off', 'hidden: off at once, even right after a movement');
+  assert.equal(paceFor(false, t, t), 'live');
+  assert.equal(paceFor(false, t + REST_AFTER_MS - 1, t), 'live');
+  assert.equal(paceFor(false, t + REST_AFTER_MS, t), 'rest');
+});
+
+test('while resting it looks less often than the database needs to fall asleep (5 minutes)', () => {
+  assert.ok(REST_POLL_MS > 5 * 60_000);
+  assert.ok(REST_AFTER_MS > REST_POLL_MS, 'and it rests only after a good while');
+});
+
+test('a look while resting sees a change by the cards key, whatever their order', () => {
+  const a = { id: 'rm_a', column: 'now', position: 0, updated_at: '2026-11-28T05:00:00.000Z' };
+  const b = { id: 'rm_b', column: 'next', position: 0, updated_at: '2026-11-28T05:00:00.000Z' };
+  assert.equal(cardsKey([a, b]), cardsKey([b, a]));
+  assert.notEqual(cardsKey([a, b]), cardsKey([a, { ...b, position: 1 }]));
+  assert.notEqual(cardsKey([a, b]), cardsKey([a, { ...b, column: 'now' }]));
+  assert.notEqual(cardsKey([a, b]), cardsKey([a]));
 });
