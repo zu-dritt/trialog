@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { forYou, forYouPushText } from '../lib/for-you';
-import { ForYouList, forYouLabel } from '../app/for-you';
+import { ForYouList, forYouLabel, newWaits } from '../app/for-you';
 import type { RoadmapItem } from '../lib/roadmap';
 
 const people = [
@@ -69,4 +69,12 @@ test('the morning push: the count and the oldest item, cut for a lock screen', (
   assert.equal(forYouPushText(items.slice(1, 2)), '⛔ 1 for you: Grok waits: merge PR 160');
   const long = forYouPushText([{ ...items[0], text: 'x'.repeat(300) }]);
   assert.ok([...long].length < 140 && long.endsWith('…'));
+});
+
+test('the sound rings only for a wait that is new since the last poll, never for what was there on load', () => {
+  const items = forYou({ ...base, me: 'david' });
+  assert.equal(newWaits(null, items), 0, 'the first poll is what was already there');
+  const seen = new Set(items.slice(0, 2).map((i) => i.key));
+  assert.equal(newWaits(seen, items), 1, 'the card that joined');
+  assert.equal(newWaits(new Set(items.map((i) => i.key)), items.slice(1)), 0, 'one went away: quiet');
 });
