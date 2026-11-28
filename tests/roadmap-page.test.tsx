@@ -253,3 +253,14 @@ test('a card in Next or Later opens for editing from its title; Save needs a tit
   assert.deepEqual(editState(was, '  ', 'Two.', false), { ready: false, label: 'Save' }, 'a title is needed');
   assert.deepEqual(editState(was, 'Sounds', 'Two, a chime.', true), { ready: false, label: 'Saving…' });
 });
+
+test('Delete asks in the edit window, not in the browser\'s box (#1306)', async () => {
+  const { EditCard } = await import('../app/compose-idea');
+  const src = readFileSync(new URL('../app/compose-idea.tsx', import.meta.url), 'utf8');
+  assert.ok(!src.includes('window.confirm'), 'no browser confirm box');
+  assert.match(src, /Keep it/);
+  assert.match(src, /Delete for good/);
+  const html = renderToStaticMarkup(<EditCard card={{ id: 'rm_x0000000', title: 'Two new sounds', description: '' }} onSave={async () => true} onDelete={async () => true} onClose={() => {}} />);
+  assert.match(html, /data-delete-card="rm_x0000000"/, 'first a plain Delete');
+  assert.ok(!html.includes('data-delete-for-good'), 'nothing is deleted by the first click');
+});
