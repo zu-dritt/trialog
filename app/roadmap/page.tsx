@@ -203,6 +203,24 @@ export default function RoadmapPage() {
     } finally { setBusy(false); }
   }, [api]);
 
+  // «🚀 Build it!» from a card in Next or Later (playground #1185): one call. The hub moves the card
+  // to the top of Now and posts the go (to its owner, or to everyone: the first claim wins), which
+  // wakes the agents. Only the orchestrator may; a card already under way answers 409, no second go.
+  const build = useCallback(async (card: RoadmapItem): Promise<boolean> => {
+    setBusy(true);
+    try {
+      await api(`/api/roadmap/${card.id}/build-it`, { method: 'POST' });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Build it didn't go out: ${e.message}`);
+      return false;
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [api, load]);
+
   // A picture for the Compose window: the same upload as a message's (resized, scale noted).
   const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {
     const request = await uploadRequest(file, pasted);
@@ -254,7 +272,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build }} loadImage={loadImage} />
     </main>
   );
 }

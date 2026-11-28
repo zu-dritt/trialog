@@ -395,6 +395,11 @@ export interface Store {
   releaseRoadmapItem(id: string, by: Sender): Promise<ClaimResult>;
   /** The owner says how far it is (0–100, null to clear) and how, in a short line. Someone else's card: «taken». */
   setRoadmapProgress(id: string, by: Sender, progress: number | null, status: string | null, human?: boolean): Promise<ClaimResult>;
+  /**
+   * «🚀 Build it!» (playground #1185): a card in Next or Later goes to the top of Now, in one locked
+   * step. Anywhere else it is «started» and nothing changes, so a second go finds it already moved.
+   */
+  startRoadmapItem(id: string, by: Sender): Promise<{ status: 'ok'; item: RoadmapItem; from: RoadmapColumn } | { status: 'started'; item: RoadmapItem } | { status: 'not_found' }>;
   /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
   reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
   /**
@@ -1759,6 +1764,22 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       if (pictures.length) await blobs.delete(db, pictures);
       return gone;
     },
+    async startRoadmapItem(id, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [cur] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return { status: 'not_found' as const };
+        const item = toRoadmap(cur);
+        if (item.column !== 'next' && item.column !== 'later') return { status: 'started' as const, item };
+        await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = 'now'`, []);
+        const [row] = await tx.query(
+          `UPDATE roadmap_items SET col = 'now', position = 0, updated_by = $2::text, updated_at = now() WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
+          [id, by],
+        );
+        return { status: 'ok' as const, item: toRoadmap(row), from: item.column };
+      });
+    },
     async reorderRoadmap(column, ids, by) {
       await ensure();
       return db.transaction(async (tx) => {
@@ -2703,6 +2724,18 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       item.updated_by = shaped(by);
       item.updated_at = new Date(now()).toISOString();
       return { status: 'ok', item: { ...item } };
+    },
+    async startRoadmapItem(id, by) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' as const };
+      if (item.column !== 'next' && item.column !== 'later') return { status: 'started' as const, item: { ...item, attachments: [...item.attachments] } };
+      const from = item.column;
+      for (const other of roadmap.values()) if (other.column === 'now') other.position += 1;
+      item.column = 'now';
+      item.position = 0;
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      return { status: 'ok' as const, item: { ...item, attachments: [...item.attachments] }, from };
     },
     async reorderRoadmap(column, ids, by) {
       const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);

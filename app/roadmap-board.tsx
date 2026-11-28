@@ -61,6 +61,8 @@ export interface BoardActions {
   upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
   /** «🚀 Ship it!» from a card: posts the go as a message with the 🚀 on it; true when sent. */
   ship?: (card: RoadmapItem, prs: readonly number[]) => Promise<boolean>;
+  /** «🚀 Build it!» on a card in Next or Later (playground #1184/#1185): posts the go and moves the card to the top of Now; true when sent. */
+  build?: (card: RoadmapItem) => Promise<boolean>;
 }
 
 /**
@@ -88,6 +90,13 @@ export function boardStatus(card: Pick<RoadmapItem, 'column' | 'note' | 'owner' 
 /** The message a Ship it from the board posts; the 🚀 on it is the go, as on any message. */
 export function shipText(card: Pick<RoadmapItem, 'title'>, prs: readonly number[]): string {
   return `🚀 Ship it! ${prs.map((n) => `PR ${n}`).join(', ')} (from the roadmap card «${card.title}»)`;
+}
+
+export { buildText } from '../lib/build-it';
+
+/** Whether a card gets the Build it button: the orchestrator's, on a card not yet started (Next or Later). */
+export function buildable(card: Pick<RoadmapItem, 'column'>, human: boolean): boolean {
+  return human && (card.column === 'next' || card.column === 'later');
 }
 
 /**
@@ -220,6 +229,18 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                           </button>
                         );
                       })()}
+                      {actions?.build && buildable(card, human) && (
+                        <button type="button" data-build={card.id} disabled={busy || sending.has(card.id)} draggable={false}
+                          onClick={() => {
+                            if (sending.has(card.id)) return;
+                            setSending((s) => new Set(s).add(card.id));
+                            void actions.build!(card).finally(() => setSending((s) => { const n = new Set(s); n.delete(card.id); return n; }));
+                          }}
+                          title="Your go: posts «🚀 Build it!» for this card in the hub, which wakes the agents, and moves the card to the top of Now."
+                          className="mt-1.5 mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#3fb950] bg-[#3fb950]/15 px-2 py-0.5 text-xs font-semibold text-[#56d364] hover:bg-[#3fb950]/25 disabled:opacity-50">
+                          🚀 Build it!
+                        </button>
+                      )}
                       {(() => {
                         // A card that waits on a human, with an address in its note: one click to where it is unblocked.
                         const href = unblockHref(card, boardStatus(card, at, humans, merged));

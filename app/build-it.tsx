@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import type { Message, Sender } from '../lib/core';
 import type { RoadmapItem } from '../lib/roadmap';
-import { buildChipText, builtAtFromNote, cardHref, findBuiltCard } from '../lib/build-it';
+import { buildChipText, builtAtFromNote, cardHref, findBuiltCard, isGoText } from '../lib/build-it';
 import type { Participant } from '../lib/shared';
 type ApiFn = (path: string, options?: RequestInit) => Promise<Response>;
 
@@ -29,7 +29,8 @@ export function isBuildableMessage(
   namesPr: boolean,
 ): boolean {
   // A go («🚀 Ship it! …», also the one a 🚀 on an agent's message sends, playground #1023) is an answer, not an idea to build.
-  if (message.text.trimStart().startsWith('🚀 Ship it!')) return false;
+  // The same for a go from a roadmap card («🚀 Build it! …», #1185, possibly after «@claude »): the card exists already.
+  if (isGoText(message.text)) return false;
   return !namesPr && participants.some((p) => p.name === message.sender && p.kind === 'human');
 }
 
