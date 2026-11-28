@@ -311,12 +311,40 @@ test('«c» opens Compose, but not while typing in a field or with a modifier (#
   assert.match(html, /<kbd[^>]*>c<\/kbd>/);
 });
 
-test('⧉ Duplicate: the same title with «(copy)», description and pictures, no note; from Now it goes to the top of Next', async () => {
+test('a card in Now opens read-only: title, who is on it, note, PRs, progress, description; no inputs (#1552)', async () => {
+  const { ViewCard } = await import('../app/roadmap-board');
+  const people = [{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const T = Date.parse('2026-11-28T16:30:00Z');
+  const c = card('rm_now1', 'now', 0, { title: 'Two new sounds', owner: 'claude', note: 'PR 162, in review', progress: 80, status: 'in review', progress_at: '2026-11-28T16:20:00Z', description: 'Sound 2: the knock.', updated_by: 'claude', updated_at: '2026-11-28T16:20:00Z' });
+  const html = renderToStaticMarkup(<ViewCard card={c} participants={people} now={T} status={{ tone: 'review', label: 'in review' }} onClose={() => {}} repo="zu-dritt/trialog" />);
+  assert.match(html, /data-view-window="rm_now1"/);
+  assert.match(html, /read-only/);
+  assert.match(html, /Two new sounds/);
+  assert.match(html, /Claude<\/span> builds/);
+  assert.match(html, /data-view-note/);
+  assert.match(html, /href="https:\/\/github.com\/zu-dritt\/trialog\/pull\/162"[^>]*>PR 162 ↗/);
+  assert.match(html, /80%/);
+  assert.match(html, /Sound 2: the knock\./);
+  assert.match(html, /Last change: Claude · 10 min ago/);
+  assert.ok(!/<input|<textarea|Delete/.test(html), 'nothing to change');
+});
+
+test('on the board, a Now card\'s title opens the window; Next and Later keep ✎ edit; Done stays plain', () => {
+  const items = [card('rm_n', 'now', 0, { owner: 'claude' }), card('rm_x', 'next', 0), card('rm_l', 'later', 0), card('rm_d', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, edit: async () => true, remove: async () => true }} />);
+  assert.match(html, /data-view="rm_n"/);
+  assert.match(html, /data-edit="rm_x"/);
+  assert.match(html, /data-edit="rm_l"/, 'Later keeps ✎ too (Grok\'s nit on PR 170)');
+  assert.ok(!/data-view="rm_x"|data-view="rm_l"|data-view="rm_d"|data-edit="rm_d"/.test(html));
+  assert.match(renderToStaticMarkup(<RoadmapBoard items={items} />), /data-view="rm_n"/, 'viewing needs no rights');
+});
+
+test('⧉ Duplicate: the same title with «(copy)» and description; no note, no pictures; from Now to the top of Next', async () => {
   const { duplicateOf } = await import('../app/roadmap-board');
   const pic = { id: 'att_1', type: 'image/png', size: 1, width: 1, height: 1 } as never;
   assert.deepEqual(duplicateOf(card('a', 'next', 0, { title: 'Sound 3', description: 'A soft chime', attachments: [pic], note: 'Claude: on it' })),
-    { column: 'next', title: 'Sound 3 (copy)', description: 'A soft chime', attachments: ['att_1'], top: false });
-  assert.deepEqual(duplicateOf(card('b', 'now', 0, { title: 'Two new sounds' })), { column: 'next', title: 'Two new sounds (copy)', description: '', attachments: [], top: true });
+    { column: 'next', title: 'Sound 3 (copy)', description: 'A soft chime', top: false }, 'a picture belongs to one card: the copy has none (Grok, PR 171)');
+  assert.deepEqual(duplicateOf(card('b', 'now', 0, { title: 'Two new sounds' })), { column: 'next', title: 'Two new sounds (copy)', description: '', top: true });
   const long = duplicateOf(card('c', 'later', 0, { title: 'x'.repeat(80) })).title;
   assert.equal([...long].length, 80, 'stays within the title limit');
   assert.ok(long.endsWith('… (copy)'));

@@ -277,7 +277,7 @@ export default function RoadmapPage() {
     const copy = duplicateOf(card);
     setBusy(true);
     try {
-      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: copy.column, title: copy.title, note: '', description: copy.description, attachments: copy.attachments, top: copy.top }) })) as { item: RoadmapItem };
+      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: copy.column, title: copy.title, note: '', description: copy.description, top: copy.top }) })) as { item: RoadmapItem };
       if (!copy.top) {
         const ids = columnOf(items, card.column).map((i) => i.id).filter((id) => id !== item.id);
         ids.splice(ids.indexOf(card.id) + 1, 0, item.id);

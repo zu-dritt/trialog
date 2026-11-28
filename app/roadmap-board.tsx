@@ -3,7 +3,7 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { Fragment, useState, type DragEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react';
 import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, ROADMAP_TITLE_MAX, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
@@ -73,14 +73,15 @@ export interface BoardActions {
 
 /**
  * The copy a «⧉ Duplicate» adds, to start a similar card faster: the same title with «(copy)», the
- * same description and pictures, no note, no owner. It goes right below the original; a copy of a
- * card in Now goes to the top of Next instead, because nobody is working on it yet.
+ * same description, no note, no owner. Pictures stay with the original: a picture belongs to one
+ * card only, so sharing its id would be refused (Grok's review of PR 171). The copy goes right
+ * below the original; a copy of a card in Now goes to the top of Next, because nobody works on it.
  */
-export function duplicateOf(card: Pick<RoadmapItem, 'column' | 'title' | 'description' | 'attachments'>): { column: RoadmapColumn; title: string; description: string; attachments: string[]; top: boolean } {
+export function duplicateOf(card: Pick<RoadmapItem, 'column' | 'title' | 'description'>): { column: RoadmapColumn; title: string; description: string; top: boolean } {
   const suffix = ' (copy)';
   const title = [...card.title].length + suffix.length > ROADMAP_TITLE_MAX ? `${[...card.title].slice(0, ROADMAP_TITLE_MAX - suffix.length - 1).join('')}…${suffix}` : `${card.title}${suffix}`;
   const fromNow = card.column === 'now';
-  return { column: fromNow ? 'next' : card.column, title, description: card.description, attachments: card.attachments.map((a) => a.id), top: fromNow };
+  return { column: fromNow ? 'next' : card.column, title, description: card.description, top: fromNow };
 }
 
 /** Cards that can be edited: not yet started (Next or Later). Now and Done are history in the making. */
@@ -206,6 +207,62 @@ export function CardDetails({ card, load }: { card: Pick<RoadmapItem, 'descripti
 }
 
 
+/**
+ * A card in «Now», read-only (playground #1503, #1552): everything about it in one window, with no
+ * way to change it, because someone is working on it. Esc or ✕ closes it.
+ */
+export function ViewCard({ card, participants = [], now, status, load, onClose, repo = REPO }: {
+  card: RoadmapItem;
+  /** The hub's repository, for the pull request links (TRIALOG_REPO). */
+  repo?: string | null;
+  participants?: readonly Participant[];
+  now: number;
+  status: CardStatus | null;
+  load?: LoadImage;
+  onClose: () => void;
+}) {
+  // Focus moves into the window when it opens, as in the edit window (Grok's nit on PR 170), so a
+  // screen reader starts here and Tab stays in it.
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => { close.current?.focus(); }, []);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [onClose]);
+  const prs = repo ? pullRequestNumbers(card.note, repo) : [];
+  return (
+    <div role="dialog" aria-modal="false" aria-label={`Card «${card.title}»`} data-view-window={card.id}
+      className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90vh] flex-col rounded-t-xl border border-line bg-panel shadow-2xl sm:inset-x-auto sm:right-6 sm:w-[34rem] sm:rounded-xl sm:bottom-6">
+      <div className="flex items-center justify-between rounded-t-xl bg-[#2a2f3a] px-4 py-2">
+        <span className="text-sm font-semibold">Card in Now · read-only while someone works on it</span>
+        <button ref={close} type="button" onClick={onClose} aria-label="Close" title="Close (Esc)" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4 text-sm">
+        <h3 className="m-0 text-base font-semibold leading-snug">{card.title}{status && <CardLed status={status} />}</h3>
+        {cardRoles(card, participants).length > 0 && (
+          <div data-view-roles="">
+            {cardRoles(card, participants).map((r, i) => (
+              <Fragment key={`${r.role}:${r.name}`}>{i > 0 && ' · '}<span className="font-semibold" style={{ color: colorOf(r.name, participants) }}>{labelOf(r.name, participants)}</span>{r.verb && ` ${r.verb}`}</Fragment>
+            ))}
+          </div>
+        )}
+        {card.note && <div data-view-note=""><span className="text-muted">Note: </span><FlightText text={card.note} /></div>}
+        {prs.length > 0 && (
+          <div data-view-prs="">
+            <span className="text-muted">Pull requests: </span>
+            {prs.map((n, i) => <Fragment key={n}>{i > 0 && ', '}<a href={`https://github.com/${repo}/pull/${n}`} target="_blank" rel="noopener noreferrer" className="text-accent">PR {n} ↗</a></Fragment>)}
+          </div>
+        )}
+        <ProgressBar card={card} now={now} />
+        {card.description && <p data-view-description="" className="m-0 whitespace-pre-wrap text-fg/90">{card.description}</p>}
+        {load && card.attachments.length > 0 && <MessageImages attachments={card.attachments} load={load} />}
+        <div className="text-xs text-muted">Last change: {labelOf(card.updated_by, participants)} · {shortAge(card.updated_at, now)}</div>
+      </div>
+    </div>
+  );
+}
+
 export function RoadmapBoard({ items, participants = [], actions, busy = false, me = null, now, loadImage, merged = new Set(), picks = [] }: { items: readonly RoadmapItem[]; participants?: readonly Participant[]; actions?: BoardActions; busy?: boolean; me?: string | null; now?: Date; loadImage?: LoadImage; /** PRs known to be merged (useMergedPrs). */ merged?: ReadonlySet<number>; /** Each agent's one pick in Next (GET /api/roadmap/picks). */ picks?: readonly { participant: string; item_id: string }[] }) {
   const today = todayLine(items, now);
   const at = (now ?? new Date()).getTime();
@@ -220,6 +277,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   // The card open in the edit window, if any.
   const [editing, setEditing] = useState<string | null>(null);
   const editCard = editing ? items.find((i) => i.id === editing) ?? null : null;
+  // The card in «Now» open read-only, if any.
+  const [viewing, setViewing] = useState<string | null>(null);
+  const viewCard = viewing ? items.find((i) => i.id === viewing && i.column === 'now') ?? null : null;
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/plain');
@@ -231,6 +291,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
       {editCard && actions?.edit && actions.remove && (
         <EditCard key={editCard.id} card={editCard} busy={busy} onClose={() => setEditing(null)} upload={actions.upload} load={loadImage}
           onSave={(change) => actions.edit!(editCard.id, change)} onDelete={() => actions.remove!(editCard.id)} />
+      )}
+      {viewCard && (
+        <ViewCard key={viewCard.id} card={viewCard} participants={participants} now={at} status={boardStatus(viewCard, at, humans, merged)} load={loadImage} onClose={() => setViewing(null)} />
       )}
       {ROADMAP_COLUMNS.map((column) => {
         const cards = columnOf(items, column);
@@ -260,7 +323,10 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       <div className="text-sm font-semibold leading-snug">{actions?.edit && editable(card)
                         ? <button type="button" data-edit={card.id} draggable={false} onClick={() => setEditing(card.id)} title="Edit or delete this card"
                             className="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline hover:decoration-dotted">{card.title} <span aria-hidden="true" className="text-xs font-normal text-muted">✎</span></button>
-                        : card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
+                        : card.column === 'now'
+                          ? <button type="button" data-view={card.id} draggable={false} onClick={() => setViewing(card.id)} title="Open this card (read-only while someone works on it)"
+                              className="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline hover:decoration-dotted">{card.title}</button>
+                          : card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
                       {(card.note || card.owner || card.reviewer || card.raised_by) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {cardRoles(card, participants).map((r, i) => (
@@ -334,8 +400,8 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                         <button type="button" disabled={busy || index === cards.length - 1} onClick={() => actions.place(card.id, column, index + 1)} aria-label={`Move «${card.title}» down`} className="cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg disabled:opacity-30">↓</button>
                         {actions.duplicate && column !== 'done' && (
                           // Small and quiet, for the odd time it's needed (the card's own words).
-                          <button type="button" data-duplicate={card.id} disabled={busy} draggable={false} title={column === 'now' ? 'Duplicate: a copy goes to the top of Next' : 'Duplicate: a copy goes right below'} aria-label={`Duplicate «${card.title}»`}
-                            onClick={() => { void actions.duplicate!(card).then((id) => { if (id && column !== 'now' && actions.edit) setEditing(id); }); }}
+                          <button type="button" data-duplicate={card.id} disabled={busy} draggable={false} title={`Duplicate: a copy goes ${column === 'now' ? 'to the top of Next' : 'right below'} (without the pictures)`} aria-label={`Duplicate «${card.title}»`}
+                            onClick={() => { void actions.duplicate!(card).then((id) => { if (id && actions.edit) setEditing(id); }); }}
                             className="cursor-pointer rounded border border-transparent bg-transparent px-1.5 text-xs leading-5 text-muted opacity-50 hover:border-line hover:text-fg hover:opacity-100 disabled:opacity-20">⧉</button>
                         )}
                       </span>

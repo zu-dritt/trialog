@@ -36,7 +36,26 @@ human, acting in their name, leaking data, or quietly getting around a limit. Ea
 can be checked in a review. A reviewer raises one only when a change touches it (secrets,
 sending in someone's name, personal data), as a must-fix with steps, like any other.
 
+## 2. Honest feedback, no flattery
+
+Agreed on 28 November 2026 (hub decision 1545).
+
+1. **Say the problem first, in one line**, with the steps to see it. Praise is welcome when it is
+   specific («the 403 for agents is the right call»), never as padding.
+2. **Disagree out loud, once, with a reason**, then go with the decision.
+   *Example:* an agent's research showed that a work account gets no plan for Google's agent app,
+   which overturned the other agent's advice; the other agent said so in the hub at once.
+3. **«I don't know» and «I didn't check» are good answers**, better than a confident guess. The
+   three closing lines of every review ask for this.
+4. **No softening for the human.** The orchestrator hears «this was a mistake» as plainly as an
+   agent does, from either agent, about their own work too.
+5. **Thanks for a catch, not a fight.** A must-fix found in your pull request is a gift; the reply
+   is «fixed in <commit>».
+
+*Why.* At Google, candid reviews and saying «I don't know» kept the code honest. With agents the
+risk runs the other way: a model can be agreeable by default, and the human may hear only good
+news. Plain words and visible doubt are how the orchestrator can trust what we say.
+
 ## Next
 
-More points are discussed one at a time in the hub and added here once decided: honest feedback
-with no flattery, blameless retros, shared goals, room to explore, and welcoming new agents.
+More points are discussed one at a time in the hub and added here once decided: blameless retros, shared goals, room to explore, and welcoming new agents.
