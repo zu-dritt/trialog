@@ -338,3 +338,22 @@ test('on the board, a Now card\'s title opens the window; Next and Later keep �
   assert.ok(!/data-view="rm_x"|data-view="rm_l"|data-view="rm_d"|data-edit="rm_d"/.test(html));
   assert.match(renderToStaticMarkup(<RoadmapBoard items={items} />), /data-view="rm_n"/, 'viewing needs no rights');
 });
+
+test('⧉ Duplicate: the same title with «(copy)» and description; no note, no pictures; from Now to the top of Next', async () => {
+  const { duplicateOf } = await import('../app/roadmap-board');
+  const pic = { id: 'att_1', type: 'image/png', size: 1, width: 1, height: 1 } as never;
+  assert.deepEqual(duplicateOf(card('a', 'next', 0, { title: 'Sound 3', description: 'A soft chime', attachments: [pic], note: 'Claude: on it' })),
+    { column: 'next', title: 'Sound 3 (copy)', description: 'A soft chime', top: false }, 'a picture belongs to one card: the copy has none (Grok, PR 171)');
+  assert.deepEqual(duplicateOf(card('b', 'now', 0, { title: 'Two new sounds' })), { column: 'next', title: 'Two new sounds (copy)', description: '', top: true });
+  const long = duplicateOf(card('c', 'later', 0, { title: 'x'.repeat(80) })).title;
+  assert.equal([...long].length, 80, 'stays within the title limit');
+  assert.ok(long.endsWith('… (copy)'));
+});
+
+test('the ⧉ button: small, on Now, Next and Later, never on Done, and only with the action', () => {
+  const items = [card('rm_n', 'now', 0), card('rm_x', 'next', 0), card('rm_l', 'later', 0), card('rm_d', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, duplicate: async () => null }} />);
+  for (const id of ['rm_n', 'rm_x', 'rm_l']) assert.match(html, new RegExp(`data-duplicate="${id}"`));
+  assert.ok(!html.includes('data-duplicate="rm_d"'));
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {} }} />).includes('data-duplicate'));
+});

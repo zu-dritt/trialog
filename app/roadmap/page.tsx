@@ -4,7 +4,7 @@
 // one it sends the reader to the hub to sign in first. The cards arrive live (/api/roadmap/stream),
 // so a move by anyone shows within a couple of seconds while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
-import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
+import { RoadmapBoard, columnOf, duplicateOf, placeAt, shipText } from '../roadmap-board';
 import { useMergedPrs } from '../merged';
 import { ROADMAP_NOTE_MAX, type RoadmapColumn, type RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
@@ -271,6 +271,29 @@ export default function RoadmapPage() {
   }, [token]);
   const loadImage = useImageLoader(token, () => setToken(''));
 
+  // «⧉ Duplicate»: the copy (duplicateOf) right below the original, or at the top of Next for a card
+  // in Now. The copy's id comes back, so the board can open it for editing.
+  const duplicate = useCallback(async (card: RoadmapItem): Promise<string | null> => {
+    const copy = duplicateOf(card);
+    setBusy(true);
+    try {
+      const { item } = (await api('/api/roadmap', { method: 'POST', body: JSON.stringify({ column: copy.column, title: copy.title, note: '', description: copy.description, top: copy.top }) })) as { item: RoadmapItem };
+      if (!copy.top) {
+        const ids = columnOf(items, card.column).map((i) => i.id).filter((id) => id !== item.id);
+        ids.splice(ids.indexOf(card.id) + 1, 0, item.id);
+        await api('/api/roadmap', { method: 'PUT', body: JSON.stringify({ column: card.column, ids }) });
+      }
+      setError('');
+      return item.id;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not duplicated: ${e.message}`);
+      return null;
+    } finally {
+      setBusy(false);
+      void load();
+    }
+  }, [api, items, load]);
+
   // An idea: a card at the top of «Later», noted as whose idea it is. No message: nobody is woken.
   const addIdea = useCallback(async ({ title, description, attachments }: NewIdea) => {
     setBusy(true);
@@ -311,7 +334,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard merged={merged} picks={picks} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build, edit, remove }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} picks={picks} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build, edit, remove, duplicate }} loadImage={loadImage} />
     </main>
   );
 }
