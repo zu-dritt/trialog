@@ -14,8 +14,19 @@ export function tidyButton(draft: string, undo: { before: string; after: string 
   return draft.trim() ? { label: '✨ Tidy', action: 'tidy' } : null;
 }
 
+export interface TidyChoice { id: string; label: string }
+/** Where this browser remembers the writer's provider (playground #1440). */
+export const TIDY_PROVIDER_KEY = 'trialogTidyProvider';
+
+/** The provider to use: the remembered one if the hub still offers it, else the first. */
+export function chosenProvider(remembered: string | null, offered: readonly TidyChoice[]): string | null {
+  return offered.find((p) => p.id === remembered)?.id ?? offered[0]?.id ?? null;
+}
+
 export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: string) => void) {
   const [available, setAvailable] = useState(false);
+  const [providers, setProviders] = useState<TidyChoice[]>([]);
+  const [provider, setProviderState] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [undo, setUndo] = useState<{ before: string; after: string } | null>(null);
@@ -25,7 +36,15 @@ export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: strin
   useEffect(() => {
     if (!api) return;
     let gone = false;
-    api('/api/tidy').then((r) => r.json()).then((d: { available?: boolean }) => { if (!gone) setAvailable(Boolean(d.available)); }, () => {});
+    api('/api/tidy').then((r) => r.json()).then((d: { available?: boolean; providers?: TidyChoice[] }) => {
+      if (gone) return;
+      const offered = Array.isArray(d.providers) ? d.providers : [];
+      setAvailable(Boolean(d.available));
+      setProviders(offered);
+      let remembered: string | null = null;
+      try { remembered = localStorage.getItem(TIDY_PROVIDER_KEY); } catch { /* storage off */ }
+      setProviderState(chosenProvider(remembered, offered));
+    }, () => {});
     return () => { gone = true; };
   }, [api]);
   const button = available ? tidyButton(draft, undo, busy) : null;
@@ -35,7 +54,7 @@ export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: strin
     if (button.action === 'undo' && undo) { setDraft(undo.before); setUndo(null); return; }
     setBusy(true);
     try {
-      const res = await api('/api/tidy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: draft }) });
+      const res = await api('/api/tidy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: draft, ...(provider ? { provider } : {}) }) });
       const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
       if (!res.ok || typeof data.text !== 'string') { setError(data.error || `Tidy didn't work (HTTP ${res.status}). Your text is unchanged.`); return; }
       if (current.current !== draft) { setError('You changed the text while it was being tidied, so it stays as you wrote it. Press Tidy again.'); return; }
@@ -46,6 +65,10 @@ export function useTidy(api: ApiFn | null, draft: string, setDraft: (text: strin
       const said = e instanceof Error && e.message !== 'unauthorized' ? e.message : '';
       setError(`${said || 'Tidy didn\'t work.'} Your text is unchanged.`.replace('unchanged. Your text is unchanged.', 'unchanged.'));
     } finally { setBusy(false); }
-  }, [api, button, busy, undo, draft, setDraft]);
-  return { button, busy, error, press };
+  }, [api, button, busy, undo, draft, setDraft, provider]);
+  const setProvider = useCallback((id: string) => {
+    setProviderState(id);
+    try { localStorage.setItem(TIDY_PROVIDER_KEY, id); } catch { /* storage off */ }
+  }, []);
+  return { button, busy, error, press, providers, provider, setProvider };
 }

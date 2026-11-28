@@ -2,8 +2,8 @@
 // No real API call: a fake client stands in for Anthropic.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { TIDY_MAX_CHARS, TIDY_MODEL, tidiedText, tidy, tidyRequest } from '../lib/tidy';
-import { tidyButton } from '../app/tidy';
+import { TIDY_MAX_CHARS, TIDY_MODEL, anthropicProvider, availableProviders, pickProvider, tidiedText, tidy, tidyRequest, type TidyProvider } from '../lib/tidy';
+import { chosenProvider, tidyButton } from '../app/tidy';
 
 const fake = (reply: { text?: string; stop_reason?: string }) => {
   const calls: unknown[] = [];
@@ -60,7 +60,7 @@ test('API: without an API key the hub says tidy is off', async () => {
     const route = await import('../app/api/tidy/route');
     const req = (method: string, body?: unknown, token = process.env.DAVID_TOKEN) => new Request('http://hub.test/api/tidy', { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
     assert.equal((await route.GET(req('GET', undefined, ''))).status, 401);
-    assert.deepEqual(await (await route.GET(req('GET'))).json(), { available: false });
+    assert.deepEqual(await (await route.GET(req('GET'))).json(), { available: false, providers: [] });
     assert.equal((await route.POST(req('POST', { text: 'hi' }))).status, 503);
   } finally {
     if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
@@ -74,4 +74,39 @@ test('at most 20 tidies a minute per participant', async () => {
   assert.equal(underLimit('limit-test', t + 30), false, 'the 21st within the minute');
   assert.equal(underLimit('other-one', t + 30), true, 'per participant');
   assert.equal(underLimit('limit-test', t + 61_000), true, 'a minute later');
+});
+
+test('providers: offered when the hub has their key; the asked one, else the first (#1440)', () => {
+  const fakeXai: TidyProvider = { id: 'xai', label: 'Grok', configured: (env = {}) => Boolean(env.XAI_API_KEY), run: async () => ({ ok: true, text: 'x', usage: { input_tokens: 1, output_tokens: 1 } }) };
+  const all = [anthropicProvider, fakeXai];
+  assert.deepEqual(availableProviders({}, all), []);
+  assert.deepEqual(availableProviders({ ANTHROPIC_API_KEY: 'k' }, all).map((p) => p.id), ['anthropic']);
+  const both = availableProviders({ ANTHROPIC_API_KEY: 'k', XAI_API_KEY: 'x' }, all);
+  assert.deepEqual(both.map((p) => p.id), ['anthropic', 'xai']);
+  assert.equal(pickProvider(undefined, both)?.id, 'anthropic', 'none asked: the first');
+  assert.equal(pickProvider('xai', both)?.id, 'xai');
+  assert.equal(pickProvider('openai', both), null, 'an unknown one is refused, not swapped');
+  assert.equal(pickProvider('xai', availableProviders({ ANTHROPIC_API_KEY: 'k' }, all)), null, 'one without its key is refused');
+  // The page remembers the writer's choice while the hub still offers it.
+  const offered = [{ id: 'anthropic', label: 'Claude' }, { id: 'xai', label: 'Grok' }];
+  assert.equal(chosenProvider('xai', offered), 'xai');
+  assert.equal(chosenProvider('gone', offered), 'anthropic');
+  assert.equal(chosenProvider(null, []), null);
+});
+
+test('the picker shows only with two or more providers', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { createElement } = await import('react');
+  const { ComposerTools } = await import('../app/composer');
+  const base = {
+    to: '', onTo: () => {}, recipients: [],
+    emoji: { open: false, onOpenChange: () => {}, onInsert: () => {}, boxRef: { current: null } },
+    image: { disabled: false, onPick: () => {} }, decision: { open: false, onToggle: () => {} }, poll: { open: false, onToggle: () => {} },
+    expand: { expanded: false, onToggle: () => {} }, send: { disabled: true, label: 'Send' }, fieldClassName: 'f', toolClassName: 't',
+  };
+  const one = renderToStaticMarkup(createElement(ComposerTools, { ...base, tidy: { label: '✨ Tidy', busy: false, onPress: () => {}, providers: [{ id: 'anthropic', label: 'Claude' }], provider: 'anthropic', onProvider: () => {} } } as never));
+  assert.ok(!one.includes('data-tidy-provider'));
+  const two = renderToStaticMarkup(createElement(ComposerTools, { ...base, tidy: { label: '✨ Tidy', busy: false, onPress: () => {}, providers: [{ id: 'anthropic', label: 'Claude' }, { id: 'xai', label: 'Grok' }], provider: 'xai', onProvider: () => {} } } as never));
+  assert.match(two, /data-tidy-provider=""[^>]*aria-label="Tidy with"/);
+  assert.match(two, /<option value="xai" selected="">Grok<\/option>/);
 });

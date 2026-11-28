@@ -26,6 +26,19 @@ export const TIDY_SYSTEM = [
   'Reply with the tidied message only: no tags, no preface, no comments.',
 ].join('\n');
 
+/**
+ * A model maker that can tidy (playground #1440): Anthropic today, xAI next. Each is offered only
+ * when the hub has its key; the writer picks one, and each call logs which one it used.
+ */
+export interface TidyProvider {
+  id: string;
+  /** Shown in the picker: «Claude», «Grok». */
+  label: string;
+  /** Whether the hub has what this provider needs (its API key). */
+  configured(env?: Record<string, string | undefined>): boolean;
+  run(text: string): Promise<TidyResult>;
+}
+
 export type TidyResult =
   | { ok: true; text: string; usage: { input_tokens: number; output_tokens: number } }
   | { ok: false; status: number; error: string };
@@ -56,10 +69,19 @@ export function tidiedText(response: Pick<Anthropic.Message, 'content' | 'stop_r
   return text || null;
 }
 
-export async function tidy(text: string, client: Pick<Anthropic, 'messages'> = new Anthropic()): Promise<TidyResult> {
+/** The checks every provider shares: something to tidy, and not too much. Null when the text is fine. */
+export function checkText(text: string): TidyResult | null {
   const input = text.trim();
   if (!input) return { ok: false, status: 400, error: 'Nothing to tidy.' };
   if ([...input].length > TIDY_MAX_CHARS) return { ok: false, status: 413, error: `At most ${TIDY_MAX_CHARS} characters can be tidied at once.` };
+  return null;
+}
+
+/** Tidy with Claude Haiku 5.5 (the Anthropic provider). */
+export async function tidy(text: string, client: Pick<Anthropic, 'messages'> = new Anthropic()): Promise<TidyResult> {
+  const bad = checkText(text);
+  if (bad) return bad;
+  const input = text.trim();
   try {
     const response = await client.messages.create(tidyRequest(input));
     const tidied = tidiedText(response);
@@ -83,4 +105,25 @@ export function underLimit(who: string, now = Date.now(), limit = TIDY_PER_MINUT
   if (times.length >= limit) { recent.set(who, times); return false; }
   recent.set(who, [...times, now]);
   return true;
+}
+
+export const anthropicProvider: TidyProvider = {
+  id: 'anthropic',
+  label: 'Claude',
+  configured: (env = process.env) => Boolean(env.ANTHROPIC_API_KEY?.trim()),
+  run: (text) => tidy(text),
+};
+
+/** Every provider the hub knows, in the order the picker shows them. xAI is added next (#1441). */
+export const TIDY_PROVIDERS: readonly TidyProvider[] = [anthropicProvider];
+
+/** The providers the hub can use now (it has their key). */
+export function availableProviders(env: Record<string, string | undefined> = process.env, all: readonly TidyProvider[] = TIDY_PROVIDERS): TidyProvider[] {
+  return all.filter((p) => p.configured(env));
+}
+
+/** The provider to use: the one asked for if it's available, else the first available; null if none or an unknown one. */
+export function pickProvider(asked: unknown, available: readonly TidyProvider[]): TidyProvider | null {
+  if (asked === undefined || asked === null || asked === '') return available[0] ?? null;
+  return available.find((p) => p.id === asked) ?? null;
 }

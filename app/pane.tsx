@@ -1145,7 +1145,7 @@ export function RoomPane({
             emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
             image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
             dictate={dictation.available ? { listening: dictation.listening, onToggle: dictation.toggle } : undefined}
-            tidy={tidier.button ? { label: tidier.button.label, busy: tidier.busy, onPress: () => { void tidier.press(); } } : undefined}
+            tidy={tidier.button ? { label: tidier.button.label, busy: tidier.busy, onPress: () => { void tidier.press(); }, providers: tidier.providers, provider: tidier.provider, onProvider: tidier.setProvider } : undefined}
             decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
