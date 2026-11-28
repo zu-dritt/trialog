@@ -175,6 +175,8 @@ export interface ComposerToolsProps {
   recipients: readonly { name: string; label: string }[];
   emoji: { open: boolean; onOpenChange: (open: boolean) => void; onInsert: (char: string, focusBox: boolean) => void; boxRef: RefObject<HTMLTextAreaElement | null> };
   image: { disabled: boolean; onPick: () => void };
+  /** Only inside the iPhone app (app/dictation.ts): «Speak» while idle, «Stop» while it listens. */
+  dictate?: { listening: boolean; onToggle: () => void };
   decision: { open: boolean; onToggle: () => void };
   poll: { open: boolean; onToggle: () => void };
   expand: { expanded: boolean; onToggle: () => void };
@@ -195,7 +197,7 @@ export interface ComposerToolsProps {
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, health, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, decision, poll, expand, send, guard, health, fieldClassName, toolClassName }: ComposerToolsProps) {
   return (
     <div className="relative flex flex-wrap items-center gap-2">
       <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={`${fieldClassName} min-w-0 max-w-full`}>
@@ -207,6 +209,12 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
         type="button" className={toolClassName} onClick={image.onPick} disabled={image.disabled}
         title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
       >Image</button>
+      {dictate && (
+        <button
+          type="button" data-dictate="" className={`${toolClassName} ${dictate.listening ? 'border-bad text-bad' : ''}`} onClick={dictate.onToggle}
+          aria-pressed={dictate.listening} title={dictate.listening ? 'Stop listening' : 'Speak: your words go into the box, you read them before Send'}
+        >{dictate.listening ? '■ Stop' : '🎤 Speak'}</button>
+      )}
       <button
         type="button" data-tour="decision" className={toolClassName} onClick={decision.onToggle}
         aria-pressed={decision.open} aria-expanded={decision.open} aria-controls={decision.open ? 'decision-composer' : undefined}

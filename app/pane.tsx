@@ -28,6 +28,7 @@ import {
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ShortcutsHelp, shortcutButton, stepTo, useShortcuts } from './shortcuts';
+import { useDictation } from './dictation';
 import { SHIP_EMOJI, ShipIt, alreadySaid, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
@@ -142,6 +143,8 @@ export function RoomPane({
   openRoomsRef.current = openRooms;
   const streamToken = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
+  // «Speak» in the iPhone app: the words land in the box as you say them (app/dictation.ts).
+  const dictation = useDictation(draft, setDraft);
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
@@ -1123,6 +1126,7 @@ export function RoomPane({
               )}
             </p>
           )}
+          {dictation.error && <p role="alert" className="text-xs text-bad">{dictation.error}</p>}
           <input
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
@@ -1131,6 +1135,7 @@ export function RoomPane({
             to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: shown(p.name) }))}
             emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
             image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
+            dictate={dictation.available ? { listening: dictation.listening, onToggle: dictation.toggle } : undefined}
             decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
