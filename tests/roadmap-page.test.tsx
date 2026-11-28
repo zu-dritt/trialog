@@ -264,3 +264,14 @@ test('Delete asks in the edit window, not in the browser\'s box (#1306)', async 
   assert.match(html, /data-delete-card="rm_x0000000"/, 'first a plain Delete');
   assert.ok(!html.includes('data-delete-for-good'), 'nothing is deleted by the first click');
 });
+
+test('a card in Next says who last placed or changed it, and when (#1327)', async () => {
+  const { whyHere, shortAge } = await import('../app/roadmap-board');
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+  const now = Date.parse('2026-11-28T10:00:00Z');
+  assert.equal(whyHere({ column: 'next', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), 'Last change: David · 12 min ago');
+  assert.equal(whyHere({ column: 'now', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), null, 'only in Next');
+  assert.deepEqual(['2026-11-28T10:00:00Z', '2026-11-28T08:58:00Z', '2026-11-25T10:00:00Z'].map((t) => shortAge(t, now)), ['just now', '1 h ago', '3 d ago']);
+  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_next0000', 'next', 0, { updated_by: 'grok' })]} participants={people} now={new Date(now)} />);
+  assert.match(html, /data-why=""[^>]*>Last change: Grok · /);
+});
