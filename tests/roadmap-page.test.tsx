@@ -137,6 +137,9 @@ test('card LEDs: red and blinking when a card waits on the orchestrator, amber i
   assert.equal(cardStatus(c('next', 'queued'), T), null, 'queued cards stay quiet');
   assert.equal(cardStatus(c('done', '⛔ old note'), T), null, 'done is done');
   assert.equal(cardStatus(c('now', 'Davidson: not him'), T)?.tone, 'working', 'whole names only');
+  assert.equal(cardStatus(c('now', 'PR 162, in review (sound 2 «Waiting on you»)'), T)?.tone, 'review', 'a quoted «Waiting on you» is a name, not a wait (#1503)');
+  assert.equal(cardStatus(c('now', 'the «⛔ n for you» button, PR 159 in review'), T)?.tone, 'review', 'a quoted ⛔ too');
+  assert.equal(cardStatus(c('now', 'built «Waiting on you»; ⛔ WAITING ON DAVID: listen to it'), T)?.tone, 'blocked', 'outside the quotes it still counts');
   assert.equal(cardStatus(c('next', 'your call: clean start or today’s breaks', { owner: 'david' }), T)?.tone, 'blocked', 'the orchestrator’s own card waits on him');
   assert.equal(cardStatus(c('now', 'trying the demo', { owner: 'david' }), T)?.tone, 'working', 'his own card in Now: he is on it, no blink');
 

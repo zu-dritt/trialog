@@ -5,7 +5,7 @@
 import { waitUntil } from '@vercel/functions';
 import type { Flight, Message, Participant, Sender } from './core';
 import { labelOf } from './shared';
-import type { RoadmapItem } from './roadmap';
+import { unquoted, type RoadmapItem } from './roadmap';
 import { loadRoster } from './participants';
 import { messagePreview } from './webhook';
 import { sendApnsAlert } from './apns';
@@ -97,7 +97,7 @@ export function humansForCard(
   if (item.column !== 'now' && item.owner && humans.some((h) => h.name === item.owner)) {
     names.add(item.owner);
   }
-  const note = item.note.trim();
+  const note = unquoted(item.note.trim());
   for (const h of humans) {
     const tokens = [h.name, h.label].filter((x): x is string => Boolean(x)).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const any = tokens.join('|');

@@ -204,13 +204,22 @@ export function todayLine(items: readonly RoadmapItem[], now: Date = new Date(),
 export type CardTone = 'blocked' | 'review' | 'working' | 'stale';
 export interface CardStatus { tone: CardTone; label: string }
 
+/**
+ * A note without its quoted words. A quote is a name, not a wait: «Waiting on you», the name of a
+ * sound, turned a card red (playground #1503). Used for the wait cues only.
+ */
+export function unquoted(note: string): string {
+  return note.replace(/«[^»]*»|“[^”]*”|"[^"]*"/g, ' ');
+}
+
 /** Hours without a change after which a card in «Now» counts as stale (grey). */
 export const CARD_STALE_HOURS = 3;
 
 /**
  * The LED for a card, from its own words, so it needs nothing else to load:
  * - red, blinking: it waits on a human. A human owns it outside «Now» (it waits for their pick),
- *   or the note says «⛔ …», «waiting on David/the orchestrator/you»
+ *   or the note says «⛔ …», «waiting on David/the orchestrator/you» (outside quotes: a quoted
+ *   «Waiting on you» is a name, not a wait)
  *   or starts with «David: …» / «Orchestrator: …» (the same «Name: step» as a flight).
  * - amber: «in review» (a pull request waits for the other agent).
  * - green: in «Now» with an owner, changed within the last CARD_STALE_HOURS.
@@ -221,9 +230,10 @@ export const CARD_STALE_HOURS = 3;
 export function cardStatus(item: Pick<RoadmapItem, 'column' | 'note' | 'owner' | 'updated_at'>, now: number = Date.now(), humans: readonly string[] = ['david', 'orchestrator']): CardStatus | null {
   if (item.column === 'done') return null;
   const note = item.note.trim();
+  const said = unquoted(note);
   const names = humans.map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const human = item.column !== 'now' && item.owner !== null && humans.some((h) => h.toLowerCase() === item.owner!.toLowerCase());
-  if (human || /⛔/.test(note) || new RegExp(`waiting on (the )?(${names}|you)\\b`, 'i').test(note) || new RegExp(`^@?(${names})\\s*:`, 'i').test(note)) return { tone: 'blocked', label: 'waiting on you' };
+  if (human || /⛔/.test(said) || new RegExp(`waiting on (the )?(${names}|you)\\b`, 'i').test(said) || new RegExp(`^@?(${names})\\s*:`, 'i').test(note)) return { tone: 'blocked', label: 'waiting on you' };
   if (/\bin review\b/i.test(note)) return { tone: 'review', label: 'in review' };
   if (item.column !== 'now' || !item.owner) return null;
   const hours = (now - Date.parse(item.updated_at)) / 3_600_000;
