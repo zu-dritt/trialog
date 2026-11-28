@@ -88,6 +88,8 @@ export function goToStep(digits: string | null, e: KeyLike): { digits: string | 
     if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || typing(e.target)) return { digits: null, handled: false };
     return e.key === 'g' || e.key === 'G' ? { digits: '', handled: true } : { digits: null, handled: false };
   }
+  // Focus moved into a text box meanwhile (a click, Tab): the keys are text now, not ours (Grok's should-fix on PR 120).
+  if (typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return { digits: null, handled: false };
   if (/^\d$/.test(e.key)) return { digits: digits.length < GO_TO_MAX_DIGITS ? digits + e.key : digits, handled: true };
   if (e.key === 'Backspace') return { digits: digits.slice(0, -1), handled: true };
   if (e.key === 'Enter') {

@@ -169,9 +169,11 @@ export function cardText(href: string): string {
 
 /**
  * A message number written as «#966» (playground #970): a link that jumps to that message. Not
- * inside a word, an address or an HTML entity («&#39;»), and not a colour like «#4fb3ff».
+ * inside a word, an address or an HTML entity («&#39;»), and not a colour like «#4fb3ff». Never the
+ * number of «PR #116» or «pull request #116»: that is a pull request, linked or not (Grok's must-fix
+ * on PR 120: without a repository setting, and in card notes, it became a jump to message 116).
  */
-const MESSAGE_REF = /(^|[^A-Za-z0-9_&#/])#(\d{1,6})(?![A-Za-z0-9_])/g;
+const MESSAGE_REF = /(^|[^A-Za-z0-9_&#/])(?<!(?:^|[^A-Za-z0-9_])(?:PR|pull request) ?)#(\d{1,6})(?![A-Za-z0-9_])/gi;
 
 export interface MessageRef { id: number; typed: string }
 

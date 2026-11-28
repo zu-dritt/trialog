@@ -18,6 +18,27 @@ test('«#966» is a message reference; words, addresses, entities and colours ar
   assert.deepEqual(splitMessageRefs('#0'), ['#0']);
 });
 
+test('«PR #116» and «pull request #116» are never a message, whatever the case (Grok, PR 120)', () => {
+  for (const text of ['PR #116', 'see PR #116.', 'pr #116', 'pull request #116', '(PR#116)', 'Pull Request #116']) {
+    assert.ok(splitMessageRefs(text).every((p) => typeof p === 'string'), text);
+  }
+  assert.deepEqual(splitMessageRefs('APR #5'), ['APR ', { id: 5, typed: '#5' }], 'a word ending in PR is no pull request');
+  assert.deepEqual(splitMessageRefs('PR #116 after #990'), ['PR #116 after ', { id: 990, typed: '#990' }]);
+});
+
+test('without a repository setting, «PR #116» stays text, and «#2» next to it still jumps', () => {
+  const html = renderToStaticMarkup(<MessageBody text="Agree in #2, see PR #116." repo={null} />);
+  assert.equal((html.match(/data-message-ref/g) ?? []).length, 1, html);
+  assert.match(html, /data-message-ref="2"/);
+  assert.match(html, /see PR #116\./);
+});
+
+test('in the strip and card notes, «PR #116» is no jump either', () => {
+  const html = renderToStaticMarkup(<FlightText text="review of PR #116, then #936" />);
+  assert.equal((html.match(/data-message-ref/g) ?? []).length, 1, html);
+  assert.match(html, /data-message-ref="936"/);
+});
+
 test('the address of a message, and back', () => {
   assert.equal(messageHref(966), '/#m-966');
   assert.equal(messageIdOfHash('#m-966'), 966);
@@ -73,6 +94,9 @@ test('g is not ours while typing or with a modifier, and the number has a limit'
   assert.deepEqual(goToStep(null, key('g', { target: { tagName: 'TEXTAREA' } })), { digits: null, handled: false });
   assert.deepEqual(goToStep(null, key('g', { metaKey: true })), { digits: null, handled: false });
   assert.deepEqual(goToStep(null, key('5')), { digits: null, handled: false });
+  // A pending «g», then focus moves into a text box: the digits and Enter are text again.
+  assert.deepEqual(goToStep('9', key('6', { target: { tagName: 'TEXTAREA' } })), { digits: null, handled: false });
+  assert.deepEqual(goToStep('9', key('Enter', { target: { tagName: 'INPUT', type: 'text' } })), { digits: null, handled: false });
   const full = '1'.repeat(GO_TO_MAX_DIGITS);
   assert.equal(goToStep(full, key('2')).digits, full);
 });
