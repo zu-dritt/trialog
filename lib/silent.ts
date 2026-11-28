@@ -1,12 +1,16 @@
 // The watchdog (B of playground #1509): an agent someone asked for something, that has said nothing
 // since. On 28 Nov an agent's listener stopped twice (#1191–#1201, #1507) and only the orchestrator
-// noticed. Now the hub notices: after SILENT_AFTER_MIN the wait joins the orchestrator's
+// noticed. Now the hub notices: after SILENT_AFTER_MIN minutes the wait joins the orchestrator's
 // «⛔ n for you» list. Read from the latest messages; nothing is stored.
 import type { Message } from './core';
 import type { Participant } from './shared';
 
-/** How long an agent may stay quiet after being addressed before the orchestrator hears of it. */
-export const SILENT_AFTER_MIN = 30;
+/**
+ * How long an agent may stay quiet after being addressed before the orchestrator hears of it. An
+ * experiment at 5 minutes (the orchestrator, playground #1516): a short «on it» is enough to stay
+ * off the list. We look at the false alarms after a day.
+ */
+export const SILENT_AFTER_MIN = 5;
 
 export interface SilentAgent {
   agent: string;

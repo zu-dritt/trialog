@@ -22,11 +22,12 @@ test('a message asks an agent when it is addressed to it or names it as @name; n
   assert.ok(!asks(m(1, 'hub', '@grok guard', 0), 'grok'));
 });
 
-test('silent: asked over 30 min ago and nothing since; any message of its own wakes it', () => {
+test('silent: asked over SILENT_AFTER_MIN (5) min ago and nothing since; any message of its own wakes it', () => {
+  assert.equal(SILENT_AFTER_MIN, 5, 'the experiment from #1516');
   const quiet = [m(10, 'grok', 'on it', 70), m(11, 'claude', '@grok PR 163 is up', 40), m(12, 'claude', 'and PR 164', 35, 'grok')];
   assert.deepEqual(silentAgents(quiet, people, NOW), [{ agent: 'grok', message: { id: 11, room: 'main', created_at: at(40) }, minutes: 40 }]);
   assert.deepEqual(silentAgents([...quiet, m(13, 'grok', 'reviewing now', 5)], people, NOW), [], 'it spoke: awake');
-  assert.deepEqual(silentAgents([m(11, 'claude', '@grok PR 163', SILENT_AFTER_MIN - 1)], people, NOW), [], 'not yet 30 min');
+  assert.deepEqual(silentAgents([m(11, 'claude', '@grok PR 163', SILENT_AFTER_MIN - 1)], people, NOW), [], 'not yet 5 min');
   assert.deepEqual(silentAgents([m(11, 'david', 'to everyone, no name', 90)], people, NOW), [], 'not asked');
 });
 
