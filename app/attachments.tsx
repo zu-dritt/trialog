@@ -11,13 +11,14 @@
 // An image is only ever served with the Bearer token (GET /api/attachments/<id>), and an
 // <img src="…"> can't send that header. So the page fetches the bytes itself and shows them from
 // a blob: URL, which lives in this tab only. No <img> here ever points at the API.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
   DOWNSIZE_LONG_EDGE, IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_SCALE_HINT, SCALE_HINT_HEADER,
   downsizePlan, fitWithin, ownSize, pngDensity, scaleFromDensity, validScale, type Attachment,
 } from '../lib/shared';
 import { Chip } from './chips';
+import { imageNav, imageStep, lightboxKey, swipeStep } from '../lib/image-nav';
 
 export const ACCEPT = IMAGE_TYPES.join(',');
 const THUMB_MAX = { width: 320, height: 240 };
@@ -178,63 +179,158 @@ export function popOut(viewed: Pick<Viewed, 'url' | 'size'>, open: typeof window
  * click on it switches to its real size, every pixel of it, and back. A click outside the image,
  * the Close button or Escape closes the view. It is the same view for an image in the stream and
  * for one that is still waiting in the composer.
+ *
+ * When a message has several images (playground #1198), ← →, on-screen buttons and a swipe page
+ * through them, with a «2/4» counter. They stop at the ends. Focus stays in the dialog while it is
+ * open. A single image has none of that chrome, and works as it did.
  */
-function Lightbox({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
+export function Lightbox({
+  viewed,
+  items,
+  index = 0,
+  onIndex,
+  onClose,
+}: {
+  viewed?: Viewed;
+  items?: readonly Viewed[];
+  index?: number;
+  onIndex?: (i: number) => void;
+  onClose: () => void;
+}) {
+  const list = items ?? (viewed ? [viewed] : []);
+  const current = list[index] ?? viewed;
+  const count = list.length;
+  const nav = count > 1;
+  const bar = imageNav(index, count);
+  const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const startX = useRef<number | null>(null);
   const [realSize, setRealSize] = useState(false);
   // The browser refused the pop-out window: say so, and keep the view open.
   const [blocked, setBlocked] = useState(false);
   // A local file says how large it is only once it has loaded.
   const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => { setRealSize(false); setMeasured(null); }, [index, current?.url]);
+
+  const go = useCallback((delta: number) => {
+    if (!nav || !onIndex) return;
+    const next = imageStep(index, count, delta);
+    if (next !== index) onIndex(next);
+  }, [nav, onIndex, index, count]);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
     closeRef.current?.focus();
+    const focusable = () => {
+      const root = rootRef.current;
+      if (!root) return [] as HTMLElement[];
+      return [...root.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]')];
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const f = focusable();
+      const action = lightboxKey(e, {
+        index, count, focusCount: f.length,
+        focusIndex: f.indexOf(document.activeElement as HTMLElement),
+      });
+      if (!action) return;
+      if (action.type === 'close') { e.preventDefault(); onClose(); return; }
+      if (action.type === 'step') { e.preventDefault(); onIndex?.(action.index); return; }
+      if (action.type === 'focus') { e.preventDefault(); f[action.index]?.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  const size = viewed.size ?? (measured ? { ...measured, scale: viewed.scale } : undefined);
-  const info = viewedInfo(size, viewed.bytes);
+  }, [onClose, onIndex, index, count]);
+
+  if (!current) return null;
+  const size = current.size ?? (measured ? { ...measured, scale: current.scale } : undefined);
+  const info = viewedInfo(size, current.bytes);
+  const onSwipeStart = (e: TouchEvent) => { startX.current = e.changedTouches[0]?.clientX ?? null; };
+  const onSwipeEnd = (e: TouchEvent) => {
+    const from = startX.current;
+    startX.current = null;
+    const to = e.changedTouches[0]?.clientX;
+    if (from == null || to == null) return;
+    const delta = swipeStep(from, to);
+    if (delta) go(delta);
+  };
+
   return (
-    <div role="dialog" aria-modal="true" aria-label="Image, full size" onClick={onClose}
-      className="fixed inset-0 z-50 flex flex-col bg-black/90 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-      <div className="flex items-center gap-3 px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
+    <div ref={rootRef} role="dialog" aria-modal="true"
+      aria-label={nav ? `Image ${bar.at}, full size` : 'Image, full size'} onClick={onClose}
+      className="fixed inset-0 z-[100] flex flex-col bg-black/95 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-center gap-3 bg-black px-4 py-2 text-[13px] text-muted" onClick={(e) => e.stopPropagation()}>
         <span>{info}</span>
         {blocked && <span role="status" className="text-bad">Pop-up blocked: allow pop-ups for this site, then try again.</span>}
         <span className="flex-1" />
-        {viewed.saveAs && <a href={viewed.url} download={viewed.saveAs}>Save</a>}
+        {current.saveAs && current.url && <a href={current.url} download={current.saveAs}>Save</a>}
         <button
           type="button" title="Open the image in its own window, next to the hub"
-          onClick={() => { if (popOut({ url: viewed.url, size })) onClose(); else setBlocked(true); }}
+          onClick={() => { if (current.url && popOut({ url: current.url, size })) onClose(); else setBlocked(true); }}
           className="cursor-pointer rounded-md border border-line bg-transparent px-3 py-[5px] text-fg hover:bg-[#343a47] max-sm:hidden"
         >Pop out ↗</button>
         <button ref={closeRef} type="button" onClick={onClose} className="cursor-pointer rounded-md border border-line bg-[#2a2f3a] px-3 py-[5px] text-fg hover:bg-[#343a47]">Close</button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        <img src={viewed.url} alt={size ? `Attached image, ${size.width}×${size.height}` : 'Attached image'}
-          onLoad={(e) => { if (!viewed.size) setMeasured({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight }); }}
-          onClick={(e) => { e.stopPropagation(); setRealSize((v) => !v); }}
-          title={realSize ? 'Fit to window' : 'Show at real size'}
-          style={realSize ? undefined : (size ? fitLimits(size) : { maxWidth: '100%', maxHeight: '100%' })}
-          className={realSize ? 'mx-auto block max-w-none cursor-zoom-out' : 'mx-auto block cursor-zoom-in object-contain'} />
+      <div className="relative min-h-0 flex-1 overflow-auto p-3"
+        onTouchStart={nav ? onSwipeStart : undefined} onTouchEnd={nav ? onSwipeEnd : undefined}>
+        {current.url
+          ? <img src={current.url} alt={size ? `Attached image, ${size.width}×${size.height}` : 'Attached image'}
+              onLoad={(e) => { if (!current.size) setMeasured({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight }); }}
+              onClick={(e) => { e.stopPropagation(); setRealSize((v) => !v); }}
+              title={realSize ? 'Fit to window' : 'Show at real size'}
+              style={realSize ? undefined : (size ? fitLimits(size) : { maxWidth: '100%', maxHeight: '100%' })}
+              className={realSize ? 'mx-auto block max-w-none cursor-zoom-out' : 'mx-auto block cursor-zoom-in object-contain'} />
+          : <p className="m-0 grid h-full place-items-center text-sm text-muted">image…</p>}
+        {nav && (
+          <div data-image-nav="" className="pointer-events-none absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <button type="button" data-image-prev="" aria-label="Previous image" disabled={!bar.prev} onClick={() => go(-1)}
+              className="pointer-events-auto flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-line bg-[#2a2f3a] text-lg text-fg hover:bg-[#343a47] disabled:cursor-default disabled:opacity-30">←</button>
+            <span data-image-counter="" aria-live="polite" className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums text-fg">{bar.at}</span>
+            <button type="button" data-image-next="" aria-label="Next image" disabled={!bar.next} onClick={() => go(1)}
+              className="pointer-events-auto flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-line bg-[#2a2f3a] text-lg text-fg hover:bg-[#343a47] disabled:cursor-default disabled:opacity-30">→</button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 /** The images of one message: thumbnails, and the full-size view of the one that was clicked. */
+function viewedAttachment(a: Attachment, url: string): Viewed {
+  return { url, size: a, bytes: a.bytes, saveAs: `${a.id}.${EXTENSION[a.content_type] ?? 'img'}` };
+}
+
 export function MessageImages({ attachments, load }: { attachments: Attachment[]; load: LoadImage }) {
-  const [open, setOpen] = useState<Viewed | null>(null);
-  const close = useCallback(() => setOpen(null), []);
+  const [index, setIndex] = useState<number | null>(null);
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const remember = useCallback((id: string, url: string) => {
+    setUrls((cur) => (cur[id] === url ? cur : { ...cur, [id]: url }));
+  }, []);
+  const openAt = useCallback((i: number, url?: string) => {
+    const a = attachments[i];
+    if (!a) return;
+    if (url) remember(a.id, url);
+    else if (!urls[a.id]) load(a.id).then((u) => remember(a.id, u), () => {});
+    setIndex(i);
+    for (const j of [i - 1, i + 1]) {
+      const n = attachments[j];
+      if (n && !urls[n.id]) load(n.id).then((u) => remember(n.id, u), () => {});
+    }
+  }, [attachments, load, remember, urls]);
+  const close = useCallback(() => setIndex(null), []);
   if (!attachments.length) return null;
+  const items = attachments.map((a) => viewedAttachment(a, urls[a.id] ?? ''));
   return (
     <div className="mt-1.5 flex flex-wrap items-start gap-2">
-      {attachments.map((a) => (
+      {attachments.map((a, i) => (
         <Thumb
           key={a.id} attachment={a} load={load}
-          onOpen={(attachment, url) => setOpen({ url, size: attachment, bytes: attachment.bytes, saveAs: `${attachment.id}.${EXTENSION[attachment.content_type] ?? 'img'}` })}
+          onOpen={(_attachment, url) => openAt(i, url)}
         />
       ))}
-      {open && <Lightbox viewed={open} onClose={close} />}
+      {index !== null && typeof document !== 'undefined' && createPortal(
+        <Lightbox items={items} index={index} onIndex={(i) => openAt(i)} onClose={close} />,
+        document.body,
+      )}
     </div>
   );
 }
@@ -305,7 +401,12 @@ export function DraftChips({ drafts, onRemove }: { drafts: Draft[]; onRemove: (k
       ))}
       {/* The view lies over the whole page, so it is put at the end of the page, not into the row of chips. */}
       {viewed && typeof document !== 'undefined' && createPortal(
-        <Lightbox viewed={viewedDraft(viewed)} onClose={close} />,
+        <Lightbox
+          items={drafts.map(viewedDraft)}
+          index={Math.max(0, drafts.findIndex((d) => d.key === viewing))}
+          onIndex={(i) => setViewing(drafts[i]?.key ?? null)}
+          onClose={close}
+        />,
         document.body,
       )}
     </>
