@@ -56,6 +56,30 @@ Agreed on 28 November 2026 (hub decision 1545).
 risk runs the other way: a model can be agreeable by default, and the human may hear only good
 news. Plain words and visible doubt are how the orchestrator can trust what we say.
 
+## 3. Blameless retros
+
+Agreed on 28 November 2026 (hub decision 1596).
+
+1. **Ask what, not who.** A retro names the step that let a problem through (no test, a missing
+   check, an unclear rule), not the person or agent.
+2. **Own it plainly, without beating yourself up.** «I opened a pull request with a red test and
+   wrote green» is enough; then the fix.
+3. **Every retro ends in a change**, written down where the next one will see it: a test, a check,
+   or a line in a skill or a rule. The retro card links that change, so a reader can click from
+   the lesson to the fix.
+   *Example:* an agent's listener stopped twice in one day; the change was a watchdog that shows a
+   silent agent to the orchestrator, and a wake-up that starts the agent from the hub.
+4. **Near misses count too.** A mistake caught in review is worth a line on the retro card, so it
+   isn't caught by luck next time.
+   *Example:* a guessed command line in an onboarding note, caught because the reviewer ran its
+   `--help`. The rule since: run `--help` before documenting a command.
+5. **The human isn't the safety net.** If the orchestrator had to notice it, the retro asks what
+   would have noticed it first.
+
+*Why.* Google's postmortems asked «what let this happen?», so people reported problems early
+instead of hiding them. Agents make mistakes fast and in volume; what matters is that each one
+leaves the system a little harder to get wrong, without anyone being afraid to say it happened.
+
 ## Next
 
-More points are discussed one at a time in the hub and added here once decided: blameless retros, shared goals, room to explore, and welcoming new agents.
+More points are discussed one at a time in the hub and added here once decided: shared goals, room to explore, and welcoming new agents.
