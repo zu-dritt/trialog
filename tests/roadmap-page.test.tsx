@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
+import { RoadmapBoard, buildText, buildable, columnOf, placeAt } from '../app/roadmap-board';
 import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
@@ -224,4 +224,17 @@ test('a card says who raised it first, so David knows whom to ask (playground #6
   assert.equal([...twice.matchAll(/data-role="(raiser|reviewer)"/g)].length, 2, 'both shown (keys by role and name, Grok’s nit)');
   const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_raise000', 'next', 0, { raised_by: 'david', note: '#670' })]} participants={[{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' }] as never} />);
   assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · <a href="\/#m-670"[^>]*>#670<\/a>/);
+});
+
+test('«🚀 Build it!» on cards in Next and Later, only for the orchestrator (#1185)', () => {
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_now00000', 'now', 0), card('rm_next0000', 'next', 0), card('rm_later000', 'later', 0), card('rm_done0000', 'done', 0)];
+  const board = (me: string) => renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me={me} now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {}, build: async () => true }} />);
+  const buttons = (html: string) => [...html.matchAll(/data-build="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(buttons(board('david')), ['rm_next0000', 'rm_later000']);
+  assert.deepEqual(buttons(board('claude')), [], 'an agent has no go to give');
+  assert.equal(buildable({ column: 'now' }, true), false);
+  // The go names the card; with an owner it goes to them, without one the first claim wins.
+  assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: null }), '🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now). First claim wins.');
+  assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: 'claude' }), '@claude 🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now)');
 });

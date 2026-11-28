@@ -83,6 +83,10 @@ test('only an orchestrator message that names no pull request is buildable, and 
   assert.equal(isBuildableMessage(base(), people, false), true);
   assert.equal(isBuildableMessage(base({ sender: 'claude' }), people, false), false);
   assert.equal(isBuildableMessage(base({ text: 'PR 66 is up' }), people, true), false);
+  // A go from a roadmap card is an answer, not a new idea: no second card from it (#1185).
+  assert.equal(isBuildableMessage(base({ text: '🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now). First claim wins.' }), people, false), false);
+  assert.equal(isBuildableMessage(base({ text: '@claude 🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now)' }), people, false), false);
+  assert.equal(isBuildableMessage(base({ text: 'Build it like this: two sounds' }), people, false), true);
 });
 
 test('the button, a disabled button for an agent, and the chip once a card exists', () => {

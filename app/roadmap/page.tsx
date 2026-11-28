@@ -4,7 +4,7 @@
 // one it sends the reader to the hub to sign in first. The cards arrive live (/api/roadmap/stream),
 // so a move by anyone shows within a couple of seconds while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
-import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
+import { RoadmapBoard, buildText, columnOf, placeAt, shipText } from '../roadmap-board';
 import { useMergedPrs } from '../merged';
 import { ROADMAP_NOTE_MAX, type RoadmapColumn, type RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
@@ -203,6 +203,24 @@ export default function RoadmapPage() {
     } finally { setBusy(false); }
   }, [api]);
 
+  // «🚀 Build it!» from a card in Next or Later (playground #1184/#1185): the go as a message (to the
+  // card's owner if it has one, otherwise to everyone: the first claim wins), then the card moves to
+  // the top of Now. A message from the orchestrator wakes the agents; the card alone wouldn't.
+  const build = useCallback(async (card: RoadmapItem): Promise<boolean> => {
+    setBusy(true);
+    try {
+      await api('/api/messages', { method: 'POST', body: JSON.stringify({ text: buildText(card), ...(card.owner ? { to: card.owner } : {}) }) });
+      setError('');
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Build it didn't go out: ${e.message}`);
+      setBusy(false);
+      return false;
+    }
+    setBusy(false);
+    await place(card.id, 'now', 0);
+    return true;
+  }, [api, place]);
+
   // A picture for the Compose window: the same upload as a message's (resized, scale noted).
   const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {
     const request = await uploadRequest(file, pasted);
@@ -254,7 +272,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build }} loadImage={loadImage} />
     </main>
   );
 }

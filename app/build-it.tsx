@@ -29,7 +29,8 @@ export function isBuildableMessage(
   namesPr: boolean,
 ): boolean {
   // A go («🚀 Ship it! …», also the one a 🚀 on an agent's message sends, playground #1023) is an answer, not an idea to build.
-  if (message.text.trimStart().startsWith('🚀 Ship it!')) return false;
+  // The same for a go from a roadmap card («🚀 Build it! …», #1185, possibly after «@claude »): the card exists already.
+  if (/^(@[\w-]+\s+)?🚀 (Ship|Build) it!/u.test(message.text.trimStart())) return false;
   return !namesPr && participants.some((p) => p.name === message.sender && p.kind === 'human');
 }
 
