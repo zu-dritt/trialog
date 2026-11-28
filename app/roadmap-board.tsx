@@ -3,7 +3,7 @@
 // The roadmap board: four columns of cards (lib/roadmap.ts). Drag a card to a new place, in its
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
-import { Fragment, useEffect, useState, type DragEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react';
 import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
@@ -206,6 +206,10 @@ export function ViewCard({ card, participants = [], now, status, load, onClose, 
   load?: LoadImage;
   onClose: () => void;
 }) {
+  // Focus moves into the window when it opens, as in the edit window (Grok's nit on PR 170), so a
+  // screen reader starts here and Tab stays in it.
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => { close.current?.focus(); }, []);
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', esc);
@@ -217,7 +221,7 @@ export function ViewCard({ card, participants = [], now, status, load, onClose, 
       className="fixed inset-x-0 bottom-0 z-50 flex max-h-[90vh] flex-col rounded-t-xl border border-line bg-panel shadow-2xl sm:inset-x-auto sm:right-6 sm:w-[34rem] sm:rounded-xl sm:bottom-6">
       <div className="flex items-center justify-between rounded-t-xl bg-[#2a2f3a] px-4 py-2">
         <span className="text-sm font-semibold">Card in Now · read-only while someone works on it</span>
-        <button type="button" onClick={onClose} aria-label="Close" title="Close (Esc)" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
+        <button ref={close} type="button" onClick={onClose} aria-label="Close" title="Close (Esc)" className="cursor-pointer rounded px-1.5 text-muted hover:text-fg">✕</button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4 text-sm">
         <h3 className="m-0 text-base font-semibold leading-snug">{card.title}{status && <CardLed status={status} />}</h3>
