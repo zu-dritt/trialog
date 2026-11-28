@@ -10,7 +10,8 @@ export const STREAK_REASON_MAX_LENGTH = 200;
 export const STREAK_CACHE_MS = 5 * 60_000;
 const MAX_PAGES = 5;
 
-export interface Merge { number: number; title: string; merged_at: string }
+/** `branch` is the pull request's own branch (head), when GitHub says; «claude/push-logs» shows who wrote it. */
+export interface Merge { number: number; title: string; merged_at: string; branch?: string }
 export interface StreakBreak { id: number; participant: string; reason: string; created_at: string }
 
 /** One point of the timeline: the streak right after a merge or a break. */
@@ -89,8 +90,11 @@ export async function fetchMerges(repo: string, base: string, fetchImpl: typeof 
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
     const rows = (await res.json()) as unknown;
     if (!Array.isArray(rows)) throw new Error('GitHub answered something that is not a list');
-    for (const r of rows as { number?: unknown; title?: unknown; merged_at?: unknown }[]) {
-      if (typeof r.number === 'number' && typeof r.merged_at === 'string') merges.push({ number: r.number, title: String(r.title ?? ''), merged_at: r.merged_at });
+    for (const r of rows as { number?: unknown; title?: unknown; merged_at?: unknown; head?: { ref?: unknown } | null }[]) {
+      if (typeof r.number === 'number' && typeof r.merged_at === 'string') {
+        const branch = typeof r.head?.ref === 'string' ? r.head.ref : undefined;
+        merges.push({ number: r.number, title: String(r.title ?? ''), merged_at: r.merged_at, ...(branch ? { branch } : {}) });
+      }
     }
     if (rows.length < 100) break;
   }

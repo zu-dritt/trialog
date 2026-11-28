@@ -67,7 +67,16 @@
 .status-dot-2 { animation-delay: 0.2s; }
 .status-dot-3 { animation-delay: 0.4s; }
 
+/* The heartbeat dot of the health chips (app/health.tsx): a soft ring while the agent was heard from lately. */
+@keyframes health-beat {
+  0% { box-shadow: 0 0 0 0 rgb(63 185 80 / 0.5); }
+  70% { box-shadow: 0 0 0 6px rgb(63 185 80 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(63 185 80 / 0); }
+}
+.health-beat { animation: health-beat 1.6s ease-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
+  .health-beat { animation: none; }
   .status-dot {
     animation: none;
     opacity: 0.75;

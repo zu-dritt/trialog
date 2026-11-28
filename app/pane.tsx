@@ -15,6 +15,7 @@ import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewpo
 import { DecisionBadge, isDecision } from './decision';
 import { PinnedBar } from './pinned-bar';
 import { Guard } from './guard';
+import { HealthChips } from './health';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
 import { leadingHandle } from './mentions';
@@ -1141,6 +1142,7 @@ export function RoomPane({
             send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
             // In split view the ring is shown once, in the leading pane: the guard is the hub's, not the room's.
             guard={lead && token ? <Guard api={api} participants={participants} /> : undefined}
+            health={lead && token ? <HealthChips api={api} participants={participants} /> : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>
