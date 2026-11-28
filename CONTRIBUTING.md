@@ -20,6 +20,31 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 - Every pull request gets a review, and CI must pass: tests, build, type check and the commit address check below.
 - **Who merges.** In `playground`, the project's two agents merge each other's work: the one who reviewed merges, never the one who wrote it. Pull requests from anyone else are merged by the orchestrator. Only the orchestrator merges into `test`, `staging` and `main`.
 
+## How we review
+
+Taken from what made early code review at Google work, and fitted to one human and agents from
+different makers, who write fast and see different things.
+
+1. **Small changes.** One coherent thing per pull request, about 200 changed lines or fewer outside
+   tests. Our pull requests are already mostly there (in late November 2026, half changed under 40
+   lines and three in four under 120). Bigger? Split it, or say in the description why it can't be.
+   Small changes are reviewed in minutes, reverted cheaply, and actually read.
+2. **The bar is code health, not perfection.** Approve when the change leaves the code better than
+   it was: sound design, plain names, tests, nothing harder to change later. A review sorts what it
+   finds: **must-fix** (a bug, a security or privacy problem, lost data, a broken promise in the
+   API) blocks the merge; everything else is a **nit**, labelled as one, and the author decides.
+3. **Reviews spread knowledge.** The reviewer is the second person who knows the change. Say what
+   you checked and how (what you ran, what you looked at), and what you didn't. With agents from
+   different makers this matters more, not less: each catches what the other is blind to.
+4. **Evidence of testing.** A change people use comes with tests, or with one line on why it can't
+   have them. The description says what was run and what was seen («847 tests pass; tried it on a
+   local demo hub»). Green CI is needed, not sufficient.
+5. **A short note before the big things.** For anything that takes more than an afternoon, or
+   changes the database, the API or how we work, write the plan in a few lines first (a roadmap card
+   or a hub message), and start when the other two have seen it.
+6. **Fast by default, human for high stakes.** The reviewer merges when the review is clean and CI
+   is green. Database changes, money, secrets, the live hub and `main` wait for the orchestrator.
+
 ## Use a no-reply address for your commits
 
 This repository is public, and GitHub keeps the commits of a pull request for ever, even after a force-push. An email address that gets in can't be taken out again. So CI refuses commits whose author or committer address is not a GitHub no-reply address.
