@@ -5,21 +5,24 @@
 //   n       to the message box                           /   to search
 //   ?       this list                                    Esc close the list, then clear the selection
 //   g 966 ↵ go to message #966, in whichever room it is (playground #970)
+//   s / b   Ship it / Build it on the selected message   Esc in the message box: out of it, draft kept (#1057)
 // They never fire while you type (in a text box, a field or anything editable), and never with
 // Ctrl, ⌘ or Alt held, so the browser's own shortcuts keep working.
 import { useEffect, useRef, useState } from 'react';
 
-export type ShortcutAction = 'next' | 'previous' | 'reply' | 'compose' | 'search' | 'help' | 'escape';
+export type ShortcutAction = 'next' | 'previous' | 'reply' | 'compose' | 'search' | 'help' | 'escape' | 'ship' | 'build';
 
 export const SHORTCUTS: readonly { keys: string; action: string }[] = [
   { keys: 'j', action: 'Next message (newer)' },
   { keys: 'k', action: 'Previous message (older)' },
   { keys: 'r', action: 'Reply to the selected message' },
+  { keys: 's', action: 'Ship it on the selected message' },
+  { keys: 'b', action: 'Build it on the selected message' },
   { keys: 'n', action: 'Write a message' },
   { keys: '/', action: 'Search' },
   { keys: 'g 966 ↵', action: 'Go to message #966' },
   { keys: '?', action: 'Show these shortcuts' },
-  { keys: 'Esc', action: 'Close this list, then clear the selection' },
+  { keys: 'Esc', action: 'Leave the message box (the draft stays); close this list; clear the selection' },
 ];
 
 interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; target?: EventTarget | null; isComposing?: boolean }
@@ -43,6 +46,8 @@ export function shortcutFor(e: KeyLike): ShortcutAction | null {
     case 'j': return 'next';
     case 'k': return 'previous';
     case 'r': return 'reply';
+    case 's': return 'ship';
+    case 'b': return 'build';
     case 'n': return 'compose';
     case '/': return 'search';
     case '?': return 'help';
@@ -188,4 +193,17 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+/**
+ * The button «s» or «b» presses on the selected message (playground #1057): its «🚀 Ship it!» or
+ * «⚙️ Build it!», when it is there and can be pressed. «s» only gives a go, never takes one back:
+ * a go already given (aria-pressed) stays as it is.
+ */
+export function shortcutButton(message: ParentNode | null | undefined, action: 'ship' | 'build'): HTMLButtonElement | null {
+  if (!message) return null;
+  const button = message.querySelector<HTMLButtonElement>(action === 'ship' ? 'button[data-ship]' : 'button[data-build]');
+  if (!button || button.disabled) return null;
+  if (action === 'ship' && button.getAttribute('aria-pressed') === 'true') return null;
+  return button;
 }
