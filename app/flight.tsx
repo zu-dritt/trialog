@@ -157,6 +157,21 @@ export function FlightStrip({ flights, now, participants = [], position = 'top',
           </span>
         );
       })}
+      {/* Every agent is in the strip, also one that hasn't set a flight yet (a new teammate,
+          playground #1617): grey, «no flight yet», so nobody wonders where it went. */}
+      {participants.filter((p) => p.kind === 'agent' && !flights.some((f) => f.participant === p.name)).map((p) => {
+        const shown = labelOf(p.name, participants);
+        return (
+          <span key={`none-${p.name}`} data-flight="none" title={`${shown}: no flight yet`} className="inline-flex min-w-0 flex-none items-center gap-1.5 whitespace-nowrap">
+            <span className="sr-only">{`${shown}: no flight yet`}</span>
+            <span aria-hidden="true" className="contents">
+              <span className="inline-block h-2 w-2 flex-none rounded-full" style={{ background: DOT.idle }} />
+              <span className="font-semibold" style={{ color: colorOf(p.name, participants) }}>{shown}</span>
+              <span className="text-muted max-sm:hidden">no flight yet</span>
+            </span>
+          </span>
+        );
+      })}
       </div>
       {onFlip && (
         <button
