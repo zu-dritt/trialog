@@ -199,8 +199,9 @@ test('a 410 from Apple disables the device; the topic and host come from the dev
   assert.equal(calls[0].host, 'api.sandbox.push.apple.com');
   assert.equal(calls[0].headers['apns-topic'], 'dev.trialog.app.test');
   assert.ok(calls[0].path.endsWith(token));
-  const payload = JSON.parse(calls[0].body) as { aps: { alert: string }; message_id: number };
+  const payload = JSON.parse(calls[0].body) as { aps: { alert: string; 'interruption-level'?: string }; message_id: number };
   assert.match(payload.aps.alert, /Scout: can you look at this\? \(#12\)/);
+  assert.equal(payload.aps['interruption-level'], 'active', 'a message is a normal notification');
   assert.equal(payload.message_id, 12);
   noLeak(calls[0].headers, testP8);
   assert.equal((await store.listPushDevices('ana')).some((d) => d.token === token), false);
@@ -260,6 +261,8 @@ test('an unchanged flight does not notify again; a new since does', async () => 
   const flight = { participant: 'scout' as const, state: 'waiting' as const, text: 'Ana: review the PR', since: '2026-11-28T06:00:00.000Z', updated_at: '2026-11-28T06:00:00.000Z', last_message_at: null };
   await notifyPushForFlight(store, flight, null);
   assert.equal(calls.length, 1);
+  const wait = JSON.parse(calls[0].body) as { aps: { 'interruption-level'?: string } };
+  assert.equal(wait.aps['interruption-level'], 'time-sensitive', 'a wait on a human comes through Focus (#1036)');
   await notifyPushForFlight(store, flight, flight);
   assert.equal(calls.length, 1, 'the same wait does not notify again');
   await notifyPushForFlight(store, { ...flight, since: '2026-11-28T06:05:00.000Z', text: 'Ana: look at the tests' }, flight);
