@@ -1,5 +1,6 @@
 'use client';
 
+import { ForYouButton } from './for-you';
 import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { MAIN_ROOM, MAX_ROOMS, labelOf, type Room } from '../lib/shared';
@@ -333,6 +334,8 @@ export default function Page() {
         />
         {/* By how often they are used (playground #539): the roadmap, the tour's «?», then «⋯» with the
             rest. On a phone the roadmap goes into «⋯» too, and «?» to the end of the rooms' row. */}
+        {/* What waits on you (lib/for-you.ts): only there when something does. */}
+        {me && <ForYouButton api={token ? api : null} onMessage={(r, id) => { if (r !== room) openRoom(r); setSeek({ room: r, id }); }} />}
         <a className="flex-none cursor-pointer rounded-md border border-accent bg-accent px-3 py-[5px] font-semibold text-[#0f1115] no-underline hover:opacity-90 max-sm:hidden" href="/roadmap" target="trialog-roadmap" title="The roadmap: drag to reorder, in its own tab">Roadmap ↗</a>
         {me && <TourButton open={tour.state.open} onToggle={tour.toggle} className="mx-1 max-sm:hidden" />}
         <MoreMenu
