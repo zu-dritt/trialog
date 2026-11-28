@@ -1,5 +1,6 @@
 import { authenticate, error, json, readJson, safe } from '../../../../lib/http';
 import { loadRoster } from '../../../../lib/participants';
+import { notifyPushForRoadmap, schedulePush } from '../../../../lib/push';
 import { ROADMAP_ID, parseItemChange } from '../../../../lib/roadmap';
 import { getStore } from '../../../../lib/store';
 
@@ -20,6 +21,7 @@ export const PATCH = safe(async (request: Request, ctx: Ctx) => {
   const input = parseItemChange(body, roster.map((p) => p.name));
   if (!input.ok) return error(input.status, input.error);
   const store = await getStore();
+  const before = (await store.listRoadmap()).find((i) => i.id === id) ?? null;
   const { owner, ...rest } = input.change;
   // The orchestrator may hand a card to anyone. An agent changes the owner only through the claim
   // lock: take a free card, or let go of its own, never overwrite someone else's claim.
@@ -30,10 +32,14 @@ export const PATCH = safe(async (request: Request, ctx: Ctx) => {
     if (result.status === 'taken') return json({ error: `Already ${result.owner}'s. Nothing changed.`, owner: result.owner, item: result.item }, 409);
     if (result.status === 'done' && owner === me) return json({ error: 'This card is done; there is nothing to claim.', item: result.item }, 409);
     if (result.status === 'busy') return json({ error: 'The card changed while you claimed it. Try again.', item: result.item }, 409);
-    if (!Object.keys(rest).length) return json({ item: result.item });
+    if (!Object.keys(rest).length) {
+      schedulePush(notifyPushForRoadmap(store, result.item, before));
+      return json({ item: result.item });
+    }
   }
   const change = owner !== undefined && roster.find((p) => p.name === me)?.kind === 'human' ? input.change : rest;
   const item = await store.updateRoadmapItem(id, change, me);
+  if (item) schedulePush(notifyPushForRoadmap(store, item, before));
   return item ? json({ item }) : error(404, 'No such card.');
 });
 

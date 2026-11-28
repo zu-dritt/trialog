@@ -4,6 +4,7 @@ import { authenticate, error, json, readJson, safe } from '../../../../lib/http'
 import { loadRoster } from '../../../../lib/participants';
 import { DecisionError, getStore } from '../../../../lib/store';
 import { postGuardNotice } from '../../../../lib/guard-hub';
+import { notifyPushForMessage, schedulePush } from '../../../../lib/push';
 import { getWakeup } from '../../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,7 @@ export const PUT = safe(async (request: Request, { params }: { params: Promise<{
       await postGuardNotice(store, result.reply);
       const job = getWakeup(store)?.onMessage(result.reply);
       if (job) waitUntil(job);
+      schedulePush(notifyPushForMessage(store, result.reply));
     }
     return json({ decision: result.decision, message: result.message, reply: result.reply });
   } catch (e) {

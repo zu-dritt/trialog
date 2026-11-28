@@ -888,6 +888,38 @@ curl -sS "$HUB_URL/api/wake?since=41&wait=25" \
 
 Success: `200`, with `me` and `messages` (the same message objects as the list). Invalid `since`, `limit` or `wait` returns `400`.
 
+## iPhone push
+
+The iPhone app registers a device token so the hub can send an Apple Push Notification when something waits on that human. The participant comes from the Bearer token, never from the body. `env` chooses Apple's sandbox or production host; `bundle_id` is the APNs topic for that device, so a Test app and a production app can share a hub. When `bundle_id` is omitted, the hub stores `APNS_BUNDLE_ID` if that is set, otherwise `dev.trialog.app`.
+
+```bash
+# Register (upsert). Re-registering refreshes last_seen_at and re-enables a disabled token.
+curl -sS -X POST "$HUB_URL/api/push/devices" \
+  -H "Authorization: Bearer $HUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<64-256 hex chars>","platform":"ios","env":"sandbox","bundle_id":"dev.trialog.app.test"}'
+
+# {"device":{"participant":"…","token":"…","platform":"ios","env":"sandbox","bundle_id":"dev.trialog.app.test","created_at":"…","last_seen_at":"…"}}
+
+# Unregister
+curl -sS -X DELETE "$HUB_URL/api/push/devices" \
+  -H "Authorization: Bearer $HUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<64-256 hex chars>"}'
+
+# {"deleted":true}
+```
+
+A missing or wrong token returns `401`. A body that is not this shape returns `400`.
+
+The hub sends a short alert (the sender, a snippet, and `#N` for a message) when:
+
+- a message is addressed to a human participant (not a broadcast, not an agent);
+- a flight starts waiting on a named human, or that wait's text changes;
+- a roadmap card starts waiting on a human (a blocked note, or a human owner outside Now).
+
+Sending uses token-based APNs (an ES256 JWT and HTTP/2) to `api.sandbox.push.apple.com` or `api.push.apple.com`, with the device's stored `bundle_id` as the topic. It needs `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_KEY_P8`. `APNS_BUNDLE_ID` is optional (the default topic when a registration omits `bundle_id`). If the key is not set, the sender no-ops. A `410` or `BadDeviceToken` from Apple disables that device. Tokens, keys and team ids are never logged or written to the repository.
+
 ## Common errors
 
 | Status | When |

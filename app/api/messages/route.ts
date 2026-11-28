@@ -5,6 +5,7 @@ import { waitUntil } from '@vercel/functions';
 import { loadRoster } from '../../../lib/participants';
 import { AttachmentLinkError, ReadError, ReplyTargetError, RoomError, getStore } from '../../../lib/store';
 import { postGuardNotice } from '../../../lib/guard-hub';
+import { notifyPushForMessage, schedulePush } from '../../../lib/push';
 import { getWakeup } from '../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -142,5 +143,6 @@ export const POST = safe(async (request: Request) => {
   // Wake the agents this message should wake, if they have a target registered (lib/webhook.ts), in the background. The sender's response never waits for the webhook or fails because of it.
   const job = getWakeup(store).onMessage(message);
   if (job) waitUntil(job);
+  schedulePush(notifyPushForMessage(store, message));
   return json({ message }, 201);
 });
