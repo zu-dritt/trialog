@@ -1,0 +1,5 @@
+// Settings for every build of the Trialog iPhone app. Your own Apple team and bundle id go into
+// Local.xcconfig next to this file (copy Local.xcconfig.example); it is never committed.
+TRIALOG_BUNDLE_ID = dev.trialog.example
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"
