@@ -106,6 +106,26 @@ export function buildable(card: Pick<RoadmapItem, 'column'>, human: boolean): bo
   return human && (card.column === 'next' || card.column === 'later');
 }
 
+/** «just now», «12 min», «3 h», «2 d»: short enough for one line on a card. */
+export function shortAge(iso: string, now: number): string {
+  const min = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/**
+ * Why a card in «Next» stands where it does (playground #1327, slice 1 of #1337), from what a card
+ * already stores: who last placed or changed it, and when. A card that waits on a human already
+ * says so with its red light. Slice 2 (a migration, hub decision 1338) will tell a drag from an
+ * edit, and add picks and «Oldest».
+ */
+export function whyHere(card: Pick<RoadmapItem, 'column' | 'updated_by' | 'updated_at'>, participants: readonly Participant[], now: number): string | null {
+  if (card.column !== 'next') return null;
+  return `Last change: ${labelOf(card.updated_by, participants)} · ${shortAge(card.updated_at, now)}`;
+}
+
 /**
  * Who builds and who reviews a card, as the card says it: «Claude builds · Grok reviews», in Done
  * «built · reviewed». A human owner is shown by name only (the orchestrator decides, not builds).
@@ -225,6 +245,13 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                           {(card.owner || card.reviewer || card.raised_by) && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
+                      {(() => {
+                        const why = whyHere(card, participants, at);
+                        return why && (
+                          <div data-why="" title="Who last placed or changed this card. Coming next: a drag shown apart from an edit, and each agent's pick."
+                            className="mt-0.5 whitespace-nowrap text-[11px] text-muted">{why}</div>
+                        );
+                      })()}
                       <ProgressBar card={card} now={at} />
                       <CardDetails card={card} load={loadImage} />
                       {(() => {
