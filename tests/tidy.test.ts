@@ -1,6 +1,6 @@
 // «✨ Tidy» (hub decision 1420): the request to Claude Haiku 5.5, what comes back, the button, the route.
 // No real API call: a fake client stands in for Anthropic.
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { TIDY_MAX_CHARS, TIDY_MODEL, TIDY_PROVIDERS, TIDY_XAI_MODEL, TIDY_XAI_URL, availableProviders, pickProvider, tidiedFromXai, tidiedText, tidy, tidyRequest, tidyWithXai, xaiProvider, xaiRequest } from '../lib/tidy';
 import { chosenProvider, tidyButton } from '../app/tidy';
@@ -218,4 +218,29 @@ test('the xAI request gets the team\'s names too (#1455)', async () => {
   const { xaiRequest } = await import('../lib/tidy');
   const r = xaiRequest('crack and Claude', 'message-1', ['Grok', 'Claude']);
   assert.match(r.messages[0].content, /People in this team: Grok, Claude/);
+});
+
+test('API: the route hands the team\'s names and labels to the provider, so «crack» can become «Grok» (#1455)', async () => {
+  const savedXai = process.env.XAI_API_KEY;
+  const savedAnthropic = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  process.env.XAI_API_KEY = 'test-xai-key-not-real';
+  process.env.DAVID_TOKEN = 'david-tidy-token-0123456789abcdefgh';
+  process.env.CLAUDE_TOKEN = 'claude-tidy-token-0123456789abcdefg';
+  process.env.GROK_TOKEN = 'grok-tidy-token-0123456789abcdefghi';
+  const run = vi.spyOn(xaiProvider, 'run').mockResolvedValue({ ok: true, text: 'Grok, schau mal.', usage: { input_tokens: 1, output_tokens: 1 } } as never);
+  try {
+    const route = await import('../app/api/tidy/route');
+    const res = await route.POST(new Request('http://hub.test/api/tidy', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.CLAUDE_TOKEN}` }, body: JSON.stringify({ text: 'crack schau mal', provider: 'xai' }) }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { text: 'Grok, schau mal.', provider: 'xai' });
+    const names = run.mock.calls[0][1] as string[];
+    for (const n of ['grok', 'Grok', 'claude', 'Claude', 'david']) assert.ok(names.includes(n), `${n} in ${names.join(', ')}`);
+  } finally {
+    run.mockRestore();
+    if (savedAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropic;
+    else delete process.env.ANTHROPIC_API_KEY;
+    if (savedXai !== undefined) process.env.XAI_API_KEY = savedXai;
+    else delete process.env.XAI_API_KEY;
+  }
 });
