@@ -5,7 +5,7 @@ import * as messagesRoute from '../messages/route';
 import * as roadmapRoute from '../roadmap/route';
 import * as wakeRoute from '../wake/route';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
-import { handleMcp, type HubCall, type RpcResponse } from '../../../lib/mcp';
+import { MCP_BATCH_MAX, handleMcp, type HubCall, type RpcResponse } from '../../../lib/mcp';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -50,7 +50,8 @@ export const POST = safe(async (request: Request) => {
     return { status: res.status, data: await res.json().catch(() => null) };
   };
   if (Array.isArray(body)) {
-    // Batches were taken out of MCP in 2025; older clients may still send one.
+    // Batches were taken out of MCP in 2025; older clients may still send one, of a few messages.
+    if (body.length > MCP_BATCH_MAX) return json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: `At most ${MCP_BATCH_MAX} messages in one batch.` } }, 400);
     const answers = (await Promise.all(body.map((m) => handleMcp(m, call)))).filter((a): a is RpcResponse => a !== null);
     return answers.length ? json(answers) : new Response(null, { status: 202 });
   }

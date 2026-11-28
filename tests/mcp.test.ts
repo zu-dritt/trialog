@@ -89,3 +89,24 @@ test('mistakes come back as tool errors in the hub\'s own words, not as crashes'
   assert.match((await call('claude', 'decide', { decision_id: 'nope', stance: 'agree' })).content[0].text, /^400: Decision id must look like/);
   assert.equal((await rpc('claude', 'tools/call', { name: 'rm_rf' })).body.error.code, -32602);
 });
+
+test('hardening (Grok\'s review of PR 173): wrong token, batch cap, ranges, prototype names, a throwing tool', async () => {
+  const wrong = await route.POST(new Request('http://hub.test/api/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-a-real-token-0123456789abcdef' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) }));
+  assert.equal(wrong.status, 401);
+  const post = (body: unknown) => route.POST(new Request('http://hub.test/api/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKENS.claude}` }, body: JSON.stringify(body) }));
+  const ping = (i: number) => ({ jsonrpc: '2.0', id: i, method: 'ping' });
+  assert.equal((await post(Array.from({ length: 20 }, (_, i) => ping(i)))).status, 200, '20 is fine');
+  const big = await post(Array.from({ length: 21 }, (_, i) => ping(i)));
+  assert.equal(big.status, 400);
+  assert.match((await big.json()).error.message, /At most 20/);
+  assert.match((await call('claude', 'read_messages', { limit: 0 })).content[0].text, /at least 1/);
+  assert.match((await call('claude', 'read_messages', { limit: 500 })).content[0].text, /at most 200/);
+  assert.match((await call('claude', 'wait_for_messages', { seconds: 1000 })).content[0].text, /at most 25/);
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    const res = await rpc('claude', 'tools/call', { name: 'read_messages', arguments: JSON.parse(`{"${name}": 1}`) });
+    assert.match(res.body.result.content[0].text, /unknown argument/, name);
+  }
+  const { handleMcp } = await import('../lib/mcp');
+  const boom = await handleMcp({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'roadmap', arguments: {} } }, async () => { throw new Error('db down'); });
+  assert.deepEqual(boom, { jsonrpc: '2.0', id: 9, error: { code: -32603, message: 'Internal error in roadmap' } });
+});
