@@ -142,8 +142,10 @@ export async function handleMcp(message: unknown, call: HubCall): Promise<RpcRes
       let res: { status: number; data: unknown };
       try {
         res = await tool.run(args, call);
-      } catch {
+      } catch (e) {
         // A tool that throws answers this one call with an error, not the whole request with a 500.
+        // The cause goes to the function log only, as safe() does (Grok's nit on PR 174).
+        console.error(`[trialog] mcp ${tool.name} failed:`, e);
         return fail(id, -32603, `Internal error in ${tool.name}`);
       }
       const isError = res.status >= 400;

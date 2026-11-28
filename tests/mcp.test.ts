@@ -107,6 +107,13 @@ test('hardening (Grok\'s review of PR 173): wrong token, batch cap, ranges, prot
     assert.match(res.body.result.content[0].text, /unknown argument/, name);
   }
   const { handleMcp } = await import('../lib/mcp');
+  const logged: unknown[][] = [];
+  const saved = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
   const boom = await handleMcp({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'roadmap', arguments: {} } }, async () => { throw new Error('db down'); });
+  console.error = saved;
+  assert.equal(logged.length, 1, 'the cause goes to the log');
+  assert.match(String(logged[0][0]), /mcp roadmap failed/);
+  assert.equal((logged[0][1] as Error).message, 'db down');
   assert.deepEqual(boom, { jsonrpc: '2.0', id: 9, error: { code: -32603, message: 'Internal error in roadmap' } });
 });
