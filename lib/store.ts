@@ -346,6 +346,12 @@ export interface Store {
   listStreakBreaks(): Promise<StreakBreak[]>;
   /** The roadmap (lib/roadmap.ts), by column and position. */
   listRoadmap(): Promise<RoadmapItem[]>;
+  /**
+   * A short fingerprint of the whole roadmap: it changes whenever a card is added, removed, moved,
+   * reordered or edited. The roadmap's live stream asks for it every few seconds and reads the
+   * cards only when it changed (playground #970 → «Roadmap updates instantly»).
+   */
+  roadmapVersion(): Promise<string>;
   /** A new card at the end of its column; null when the roadmap is full. */
   /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
   addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null }): Promise<RoadmapItem | null>;
@@ -1593,6 +1599,16 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
     },
+    async roadmapVersion() {
+      await ensure();
+      // One small row: the count and a hash over each card's column, place and last change. A
+      // reorder moves positions without touching updated_at, so the positions are in the hash too.
+      const [row] = await db.query(
+        `SELECT count(*)::int AS n, coalesce(md5(string_agg(id || ':' || col || ':' || position || ':' || (extract(epoch FROM updated_at) * 1000)::bigint, ',' ORDER BY id)), '') AS h FROM roadmap_items`,
+        [],
+      );
+      return `${Number(row?.n ?? 0)}|${String(row?.h ?? '')}`;
+    },
     async addRoadmapItem(input) {
       await ensure();
       return db.transaction(async (tx) => {
@@ -2498,6 +2514,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     },
     async listRoadmap() {
       return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
+    },
+    async roadmapVersion() {
+      const cards = [...roadmap.values()].sort((a, b) => a.id.localeCompare(b.id));
+      return `${cards.length}|${cards.map((i) => `${i.id}:${i.column}:${i.position}:${i.updated_at}:${i.progress ?? ''}:${i.owner ?? ''}:${i.note}`).join(',')}`;
     },
     async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
       if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
