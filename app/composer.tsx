@@ -177,6 +177,8 @@ export interface ComposerToolsProps {
   image: { disabled: boolean; onPick: () => void };
   /** Only inside the iPhone app (app/dictation.ts): «Speak» while idle, «Stop» while it listens. */
   dictate?: { listening: boolean; onToggle: () => void };
+  /** «✨ Tidy» / «↩ Undo tidy» (app/tidy.ts); absent when the hub can't tidy or the box is empty. */
+  tidy?: { label: string; busy: boolean; onPress: () => void };
   decision: { open: boolean; onToggle: () => void };
   poll: { open: boolean; onToggle: () => void };
   expand: { expanded: boolean; onToggle: () => void };
@@ -201,7 +203,7 @@ export interface ComposerToolsProps {
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, decision, poll, expand, send, guard, health, openDecisions, prsToday, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, tidy, decision, poll, expand, send, guard, health, openDecisions, prsToday, fieldClassName, toolClassName }: ComposerToolsProps) {
   const statusChips = Boolean(health || openDecisions || prsToday);
   return (
     <div className="relative flex flex-wrap items-center gap-2">
@@ -219,6 +221,12 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, dec
           type="button" data-dictate="" className={`${toolClassName} ${dictate.listening ? 'border-bad text-bad' : ''}`} onClick={dictate.onToggle}
           aria-pressed={dictate.listening} title={dictate.listening ? 'Stop listening' : 'Speak: your words go into the box, you read them before Send'}
         >{dictate.listening ? '■ Stop' : '🎤 Speak'}</button>
+      )}
+      {tidy && (
+        <button
+          type="button" data-tidy="" className={toolClassName} onClick={tidy.onPress} disabled={tidy.busy}
+          title="AI tidies the text in the box (punctuation, filler words). Nothing is sent: you read it first."
+        >{tidy.label}</button>
       )}
       <button
         type="button" data-tour="decision" className={toolClassName} onClick={decision.onToggle}
