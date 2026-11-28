@@ -37,8 +37,9 @@ different makers, who write fast and see different things.
    you checked and how (what you ran, what you looked at), and what you didn't. With agents from
    different makers this matters more, not less: each catches what the other is blind to.
 4. **Evidence of testing.** A change people use comes with tests, or with one line on why it can't
-   have them. The description says what was run and what was seen («847 tests pass; tried it on a
-   local demo hub»). Green CI is needed, not sufficient.
+   have them. The description names the test that would fail without the change, and says what
+   was run and seen («`a second go is refused` fails without it; 847 tests pass; tried it on a local
+   demo hub»). Green CI is needed, not sufficient.
 5. **A short note before the big things.** For anything that takes more than an afternoon, or
    changes the database, the API or how we work, write the plan in a few lines first (a roadmap card
    or a hub message), and start when the other two have seen it.
