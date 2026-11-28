@@ -127,28 +127,73 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
   );
 }
 
-export interface CardEdit { title: string; description: string }
+export interface CardEdit { title: string; description: string; /** The pictures' upload ids, in order; left out: unchanged. */ attachments?: string[] }
 
-/** What the edit window's Save says, and whether it can be pressed: a title, and something changed. */
-export function editState(card: CardEdit, title: string, description: string, busy: boolean): { ready: boolean; label: string } {
+/** Shown until a picture's bytes have loaded: an empty src would make the browser fetch the page itself. */
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/** The ids of the drafts that are uploaded, in order. */
+const readyIds = (drafts: readonly Pick<Draft, 'attachment'>[]): string[] => drafts.flatMap((d) => (d.attachment ? [d.attachment.id] : []));
+
+/**
+ * What the edit window's Save says, and whether it can be pressed: a title, nothing still
+ * uploading or failed, and something changed (title, text, or the pictures and their order).
+ */
+export function editState(card: { title: string; description: string; attachments?: readonly { id: string }[] }, title: string, description: string, busy: boolean, drafts: readonly Pick<Draft, 'state' | 'attachment'>[] = []): { ready: boolean; label: string } {
+  if (drafts.some((d) => d.state === 'uploading')) return { ready: false, label: 'Uploading…' };
   if (busy) return { ready: false, label: 'Saving…' };
-  const changed = title.trim() !== card.title || description.trim() !== card.description.trim();
-  return { ready: title.trim().length > 0 && changed, label: 'Save' };
+  const had = (card.attachments ?? []).map((a) => a.id);
+  const now = readyIds(drafts);
+  const pictures = had.length !== now.length || had.some((id, i) => id !== now[i]);
+  const changed = title.trim() !== card.title || description.trim() !== card.description.trim() || pictures;
+  return { ready: title.trim().length > 0 && changed && !drafts.some((d) => d.state === 'failed'), label: 'Save' };
 }
 
 /**
- * The same window as Compose, for a card in Next or Later (playground #1098): change its title and
- * text, or delete it. Its pictures stay as they are. Delete asks once more, since it can't be undone.
+ * The same window as Compose, for a card in Next or Later (playground #1098): change its title, text
+ * and pictures (#1403: remove one with ×, add with Image or paste), or delete the card. Delete asks
+ * once more, since it can't be undone.
  */
-export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
-  card: CardEdit & { id: string; attachments?: readonly unknown[] };
+export function EditCard({ card, onSave, onDelete, onClose, busy = false, upload, load }: {
+  card: Omit<CardEdit, 'attachments'> & { id: string; attachments?: readonly Attachment[] };
   onSave: (change: CardEdit) => Promise<boolean>;
   onDelete: () => Promise<boolean>;
   onClose: () => void;
   busy?: boolean;
+  /** Uploads a new picture; without it (and `load`), the pictures can't be changed here. */
+  upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
+  load?: (id: string) => Promise<string>;
 }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  // The card's pictures as the same chips as in Compose; new ones are added after them.
+  const [drafts, setDrafts] = useState<Draft[]>(() => (card.attachments ?? []).map((a, i) => ({ key: -(i + 1), name: `picture ${i + 1}`, preview: BLANK, state: 'ready' as const, attachment: a })));
+  const nextKey = useRef(1);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const editable = Boolean(upload && load);
+  useEffect(() => {
+    if (!load) return;
+    for (const a of card.attachments ?? []) {
+      load(a.id).then((url) => setDrafts((d) => d.map((x) => (x.attachment?.id === a.id ? { ...x, preview: url } : x))), () => {});
+    }
+  }, [card.attachments, load]);
+  const addImages = (files: File[], pasted: boolean) => {
+    if (!upload) return;
+    const room = Math.max(0, ROADMAP_PICTURES_MAX - drafts.length);
+    for (const file of files.slice(0, room)) {
+      const key = nextKey.current++;
+      setDrafts((d) => [...d, { key, name: file.name || 'image', preview: URL.createObjectURL(file), state: 'uploading' }]);
+      upload(file, pasted)
+        .then((attachment) => setDrafts((d) => d.map((x) => (x.key === key ? { ...x, state: 'ready', attachment } : x))))
+        .catch((e: unknown) => setDrafts((d) => d.map((x) => (x.key === key ? { ...x, state: 'failed', error: e instanceof Error ? e.message : 'Upload failed' } : x))));
+    }
+  };
+  const paste = (e: ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files);
+    if (!files.length || !editable) return;
+    e.preventDefault();
+    addImages(files, true);
+  };
   // Delete asks in the window itself (David, playground #1306: the browser's box shows the site's
   // address and a bare «OK»). Esc or «Keep it» goes back.
   const [confirming, setConfirming] = useState(false);
@@ -161,12 +206,12 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   }, [onClose, confirming]);
-  const state = editState(card, title, description, busy);
-  const pictures = card.attachments?.length ?? 0;
+  const state = editState(card, title, description, busy, editable ? drafts : (card.attachments ?? []).map((attachment) => ({ state: 'ready' as const, attachment })));
+  const pictures = editable ? drafts.length : card.attachments?.length ?? 0;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!state.ready) return;
-    if (await onSave({ title: title.trim(), description: description.trim() })) onClose();
+    if (await onSave({ title: title.trim(), description: description.trim(), ...(editable ? { attachments: readyIds(drafts) } : {}) })) onClose();
   };
   const remove = async () => {
     if (await onDelete()) onClose();
@@ -183,8 +228,9 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
         <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={ROADMAP_TITLE_MAX}
           aria-label="Title of the card" className="rounded-md border border-line bg-bg px-2 py-1.5 text-sm font-semibold" />
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={ROADMAP_DESCRIPTION_MAX}
-          placeholder="Say it in full." aria-label="Description of the card"
+          placeholder={editable ? 'Say it in full. Paste a screenshot (⌘V) to add a picture.' : 'Say it in full.'} aria-label="Description of the card" onPaste={paste}
           className="min-h-[10rem] flex-1 resize-y rounded-md border border-line bg-bg px-2 py-1.5 text-sm leading-relaxed" />
+        {editable && drafts.length > 0 && <div data-card-pictures="" className="flex flex-wrap gap-1.5"><DraftChips drafts={drafts} onRemove={(key) => setDrafts((d) => d.filter((x) => x.key !== key))} /></div>}
         {confirming ? (
           <div role="alertdialog" aria-label="Delete this card?" data-confirm-delete={card.id}
             className="flex flex-wrap items-center gap-2 rounded-lg border border-[#f85149] bg-[#f85149]/10 px-3 py-2">
@@ -197,9 +243,15 @@ export function EditCard({ card, onSave, onDelete, onClose, busy = false }: {
         ) : (
           <div className="flex items-center gap-2">
             <button type="submit" disabled={!state.ready} className="cursor-pointer rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-[#0f1115] disabled:cursor-default disabled:opacity-40">{state.label}</button>
+            {editable && (
+              <>
+                <button type="button" onClick={() => fileRef.current?.click()} disabled={drafts.length >= ROADMAP_PICTURES_MAX} className="cursor-pointer rounded-md border border-line bg-transparent px-2 py-1 text-sm text-muted hover:text-fg disabled:opacity-40">Image</button>
+                <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => { addImages(Array.from(e.target.files ?? []), false); e.target.value = ''; }} />
+              </>
+            )}
             <button type="button" data-delete-card={card.id} onClick={() => setConfirming(true)} disabled={busy}
               className="cursor-pointer rounded-md border border-[#f85149] bg-transparent px-2 py-1 text-sm text-[#ff7b72] hover:bg-[#f85149]/15 disabled:opacity-40">Delete</button>
-            <span className="ml-auto text-xs text-muted">{pictures > 0 && `🖼 ${pictures} stay · `}{[...description].length}/{ROADMAP_DESCRIPTION_MAX}</span>
+            <span className="ml-auto text-xs text-muted">{pictures > 0 && `🖼 ${pictures}${editable ? '' : ' stay'} · `}{[...description].length}/{ROADMAP_DESCRIPTION_MAX}</span>
           </div>
         )}
       </form>
