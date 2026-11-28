@@ -26,7 +26,7 @@ import {
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
-import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
+import { ShortcutsHelp, shortcutButton, stepTo, useShortcuts } from './shortcuts';
 import { SHIP_EMOJI, ShipIt, alreadySaid, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
@@ -685,6 +685,14 @@ export function RoomPane({
         startReply(m);
         return true;
       }
+      case 'ship':
+      case 'build': {
+        // s and b press the selected message's Ship it or Build it (playground #1057).
+        const button = shortcutButton(selected === null ? null : listRef.current?.querySelector(`#m-${selected}`), action);
+        if (!button) return false;
+        button.click();
+        return true;
+      }
       case 'compose': boxRef.current?.focus(); return true;
       case 'search': {
         // By a data attribute, not the label (PR 98 renamed it and «/» stopped working). On a phone the
@@ -1084,7 +1092,11 @@ export function RoomPane({
               e.preventDefault();
               addImages(files, true);
             }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+              // Esc: out of the box, the draft kept, so j, k and the other keys work again (playground #1058).
+              else if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); }
+            }}
             className={`${FIELD} block min-h-[60px] w-full resize-none ${handle.kind === 'unknown' ? 'border-bad' : ''}`}
             aria-describedby={handle.kind === 'none' ? undefined : `handle-${room}`}
           />
