@@ -1,3 +1,4 @@
+import LocalAuthentication
 import XCTest
 @testable import Trialog
 
@@ -48,5 +49,13 @@ final class HubAccountTests: XCTestCase {
         XCTAssertEqual(call, "window.trialogDictation && window.trialogDictation.apply(null, [\"it's \\\"done\\\" </script>\",false,null]);")
         let failed = HubView.Coordinator.dictationCall(text: "", final: true, error: "The microphone is off")
         XCTAssertTrue(failed.hasSuffix("[\"\",true,\"The microphone is off\"]);"), failed)
+    }
+
+    func testFaceIDCancelledByIOSAsksAgainWithoutTheLockedMessage() {
+        XCTAssertNil(Unlock.messageAfter(LAError(.systemCancel)), "iOS cancelled: ask again, no message")
+        XCTAssertNil(Unlock.messageAfter(LAError(.appCancel)))
+        XCTAssertNotNil(Unlock.messageAfter(LAError(.userCancel)), "you cancelled: the Unlock button shows")
+        XCTAssertNotNil(Unlock.messageAfter(LAError(.authenticationFailed)))
+        XCTAssertNotNil(Unlock.messageAfter(nil))
     }
 }
