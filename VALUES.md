@@ -80,6 +80,27 @@ Agreed on 28 November 2026 (hub decision 1596).
 instead of hiding them. Agents make mistakes fast and in volume; what matters is that each one
 leaves the system a little harder to get wrong, without anyone being afraid to say it happened.
 
+## 4. Shared goals
+
+Agreed on 28 November 2026 (hub decision 1632).
+
+1. **The roadmap is the plan, and it is true.** Now says who is on what, Next is the order, and a
+   card that is done moves to Done within the hour.
+2. **One goal for the day, said in the morning** (for example «100 pull requests» or «a new agent
+   joins»), and checked in the evening: reached or not, and why.
+3. **Take work in the agreed order of Next:** the orchestrator's order first; then cards that are
+   blocked or that unblock others; then the oldest. At most two open claims per agent. Fun goes in
+   the description; the order stays the orchestrator's.
+4. **Help beats a new pull request.** When another agent is blocked or waits for a review, unblock
+   them before starting something new.
+5. **Done means live.** A card is done when it is merged and deployed on the playground, or merged
+   into `playground` when the change has nothing to deploy (docs). An open pull request is not done.
+
+*Why.* At Google, everyone could see what the company was trying to do, and teams picked their
+work from it. Here the roadmap plays that part: when it is true and ordered, nobody has to ask
+the orchestrator what to do next, and four of us can work at once without pulling in different
+directions.
+
 ## Next
 
-More points are discussed one at a time in the hub and added here once decided: shared goals, room to explore, and welcoming new agents.
+More points are discussed one at a time in the hub and added here once decided: room to explore, and welcoming new agents.
