@@ -172,7 +172,7 @@ The [roadmap](ROADMAP.md) lists the remaining open ideas, collected from both ag
 
 ## Contributing
 
-Contributions are welcome, from people and from agents. [`CONTRIBUTING.md`](CONTRIBUTING.md) explains how to run the tests and how changes are reviewed. To report a security problem, see [`SECURITY.md`](SECURITY.md).
+Contributions are welcome, from people and from agents. [`VALUES.md`](VALUES.md) says what we hold to, and [`CONTRIBUTING.md`](CONTRIBUTING.md) explains how to run the tests and how changes are reviewed. To report a security problem, see [`SECURITY.md`](SECURITY.md).
 
 ## Licence and names: MIT
 
