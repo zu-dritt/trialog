@@ -227,7 +227,7 @@ test('what arrives together is one sound: the agreed chord wins over the message
 test('a hidden tab hears only messages addressed to you and agreed decisions', () => {
   const table: [Cue, boolean][] = [
     [note(false), false], [note(true), true], [{ kind: 'agreed', freqs: [D4] }, true],
-    [{ kind: 'sent', freq: D4 }, false], [{ kind: 'reaction' }, false], [{ kind: 'version' }, true],
+    [{ kind: 'sent', freq: D4 }, false], [{ kind: 'reaction' }, false], [{ kind: 'version' }, true], [{ kind: 'waiting' }, true],
   ];
   for (const [cue, heard] of table) {
     assert.equal(audible(cue, true), heard, `${cue.kind} in a hidden tab`);
@@ -263,7 +263,7 @@ test('a note is a bell on its frequency with a touch of the second harmonic; eve
   assert.ok(freqs.some((f) => Math.abs(f - 2 * D4) < 2), 'its second harmonic');
   assert.ok(fake.oscillators.every((o) => o.stop > o.start && o.stop - o.start < 4), 'every sine ends, within a few seconds');
   assert.ok(MASTER_GAIN <= 0.25);
-  for (const cue of [{ kind: 'sent', freq: D4 }, { kind: 'reaction' }, { kind: 'version' }, { kind: 'agreed', freqs: [1, 2, 3, 4, 5, 6].map((i) => D4 * i) }] as Cue[]) engine.play(cue);
+  for (const cue of [{ kind: 'sent', freq: D4 }, { kind: 'reaction' }, { kind: 'version' }, { kind: 'waiting' }, { kind: 'agreed', freqs: [1, 2, 3, 4, 5, 6].map((i) => D4 * i) }] as Cue[]) engine.play(cue);
   assert.ok(fake.peak() <= 0.5, `no single voice louder than half of a quiet master: ${fake.peak()}`);
 });
 
@@ -353,4 +353,22 @@ test('a new version chimes in a hidden tab too, and wins over a message that com
 test('the reminder comes after 30 minutes', async () => {
   const { VERSION_REMINDER_MS } = await import('../app/sound');
   assert.equal(VERSION_REMINDER_MS, 30 * 60 * 1000);
+});
+
+test('«Waiting on you»: a low two-note fall, heard in a hidden tab, and it wins over a new version at the same moment', () => {
+  const fake = fakeContext();
+  createSoundEngine(fake.ctx).play({ kind: 'waiting' });
+  const starts = [...new Set(fake.oscillators.map((o) => o.start))].sort();
+  assert.equal(starts.length, 2, 'two notes, one after the other');
+  const lowest = (t: number) => Math.min(...fake.oscillators.filter((o) => o.start === t).map((o) => o.freq));
+  assert.ok(lowest(starts[1]) < lowest(starts[0]) && lowest(starts[0]) < D4, 'falling, and below the root D');
+
+  const both = player({ hidden: true });
+  both.p.setOn(true); both.p.wake();
+  both.p.offer({ kind: 'version' });
+  both.p.offer({ kind: 'waiting' });
+  vi.advanceTimersByTime(5000);
+  const lows = both.fake.oscillators.filter((o) => o.freq < D4).length;
+  assert.ok(lows > 0, 'the knock played, not the version rise');
+  vi.useRealTimers();
 });

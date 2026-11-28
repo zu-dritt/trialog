@@ -9,6 +9,8 @@
 //   a decision card everyone agreed  the whole chord, once
 //   «New version available»          a gentle two-note rise, also in a hidden tab, and once more
 //                                    after 30 minutes if the page still has not been reloaded
+//   «Waiting on you»                 a low knock-knock, two notes falling, also in a hidden tab: something
+//                                    new joined your «⛔ n for you» list (playground #1414, #1493)
 //
 // It is off until switched on with the speaker button next to «● live», and the choice is kept in
 // this browser. Browsers allow sound only after a click on the page, and that click is the button.
@@ -55,17 +57,19 @@ export type Cue =
   | { kind: 'sent'; freq: number } // your own message went out
   | { kind: 'reaction' } // someone reacted to your message
   | { kind: 'agreed'; freqs: number[] } // a decision card everyone has agreed
-  | { kind: 'version' }; // «New version available»
+  | { kind: 'version' } // «New version available»
+  | { kind: 'waiting' }; // something new waits on you («⛔ n for you»)
 
 /** Which cue wins when several arrive together (an agreement comes with the message that completed it). */
 // A new version outranks an ordinary message, so it is not lost when both come at once.
 // An addressed note ranks 3 (below); the new version ranks 3.5, so it wins that tie too.
-const RANK: Record<Cue['kind'], number> = { agreed: 4, version: 3.5, note: 2, sent: 2, reaction: 1 };
+// Something waiting on you ranks above a new version: it needs you, the version can wait.
+const RANK: Record<Cue['kind'], number> = { agreed: 4, waiting: 3.75, version: 3.5, note: 2, sent: 2, reaction: 1 };
 const rank = (cue: Cue) => RANK[cue.kind] + (cue.kind === 'note' && cue.addressed ? 1 : 0);
 
-/** While the tab is hidden, only a message addressed to you, an agreed decision and a new version are heard. */
+/** While the tab is hidden, only a message addressed to you, an agreed decision, a new version and a new wait on you are heard. */
 export function audible(cue: Cue, hidden: boolean): boolean {
-  return !hidden || cue.kind === 'agreed' || cue.kind === 'version' || (cue.kind === 'note' && cue.addressed);
+  return !hidden || cue.kind === 'agreed' || cue.kind === 'version' || cue.kind === 'waiting' || (cue.kind === 'note' && cue.addressed);
 }
 
 /** What the sounds need to know about the messages on the page, to tell what is new. */
@@ -226,6 +230,8 @@ export function createSoundEngine(ctx: AudioContextLike) {
       else if (cue.kind === 'sent') bell(cue.freq * 2, now, 0.16, 0.09);
       else if (cue.kind === 'reaction') partial(hz(36), now, 0.07, 0.003, 0.025);
       else if (cue.kind === 'version') { bell(hz(7), now, 0.24, 0.24); bell(hz(12), now + 0.16, 0.24, 0.3); }
+      // Low and short, falling, so it doesn't sound like the version's rise or anyone's note.
+      else if (cue.kind === 'waiting') { bell(hz(-5), now, 0.34, 0.12); bell(hz(-12), now + 0.13, 0.34, 0.2); }
       else cue.freqs.forEach((freq, i) => bell(freq, now + i * 0.07, 0.46 / Math.sqrt(cue.freqs.length), 0.75));
     },
   };
@@ -380,7 +386,10 @@ export function useSoundMode({ messages, me, participants, primed, newVersion }:
     for (const cue of addressedCues(list, me, participants)) player.current!.offer(cue);
   }, [me, participants]);
 
-  return { on, toggle, sent, elsewhere };
+  /** Something new joined your «⛔ n for you» list. */
+  const waiting = useCallback(() => { player.current!.offer({ kind: 'waiting' }); }, []);
+
+  return { on, toggle, sent, elsewhere, waiting };
 }
 
 /**
