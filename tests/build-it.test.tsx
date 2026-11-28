@@ -1,7 +1,7 @@
 // «⚙️ Build it!»: title and description from the message, the Next card (top, note «from #N»,
 // pictures copied when they can be), idempotency, the API (only the orchestrator, no PR messages,
 // no wake), and the button / chip.
-import { beforeAll, test } from 'vitest';
+import { afterEach, beforeAll, test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PGlite } from '@electric-sql/pglite';
@@ -110,11 +110,16 @@ test('the button, a disabled button for an agent, and the chip once a card exist
   assert.ok(!frozen.includes('19:00'), frozen);
 });
 
+afterEach(() => { vi.useRealTimers(); });
+
 test('a message older than today is quiet until hover or focus; today and the chip are not', () => {
   const now = new Date('2026-11-27T14:00:00.000Z');
   assert.equal(isQuietBuildIt(AT, now), false, 'today in Europe/Zurich');
   assert.equal(isQuietBuildIt('2026-11-26T12:00:00.000Z', now), true);
   assert.equal(isQuietBuildIt('2026-11-26T23:30:00.000Z', now), false, 'already 00:30 on the 27th in Zurich');
+  // The component asks the real clock; pin it to the same «now», or this fails on any other day (playground #942).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(now);
   const today = renderToStaticMarkup(<BuildIt message={base()} me="david" participants={people} />);
   assert.ok(!today.includes('data-build-quiet'), today);
   assert.ok(!today.includes(BUILD_IT_QUIET_CLASS), today);
