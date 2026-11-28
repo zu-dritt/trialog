@@ -234,6 +234,15 @@ curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/prs-today"
 # {"count":28,"goal":100,"day":"2026-11-28","repo":"owner/repo","problem":null}
 ```
 
+### `GET /api/retro` and `POST /api/retro`
+
+The retro card after a release («Retro-Karte nach jedem Release», playground #1406). A release is a pull request merged into `TRIALOG_RETRO_BASE` (default `test`: the agents bring playground there). The card says what shipped (the PRs merged into `TRIALOG_STREAK_BASE` since the release before, with the count), the streak at that moment, and what went wrong as the hub knows it: the streak's breaks in that time, each with its reason. Three empty lines are left for the people (what went well, what went wrong, what we change), to fill in with the card's edit window. Releases and merges are read from GitHub for `TRIALOG_REPO` (cached like the streak); nothing new is stored, so there is no migration.
+
+- **`GET /api/retro[?release=<pr>]`** → `{retro: {release, title, note, description, shipped, breaks}, card}`: what the card would say for the latest release (or that release PR), and the card if it is already on the roadmap (else `null`). Adds nothing.
+- **`POST /api/retro {"release"?}`** → the same plus `created`: adds the card to the top of Later (201), or returns the one that is there (200). The card is found again by its note «retro of release PR #N», so it is safe to call after every release; an edited description is never overwritten.
+- Errors: `404` no such release, `409` no `TRIALOG_REPO`, `502` GitHub could not be read.
+- `hub.js retro [preview] [--release <pr>]`.
+
 ### `GET /api/streak` and `POST /api/streak/break`
 
 The streak: pull requests merged in a row without the orchestrator stepping in. The Guard panel shows it, with the record and a timeline that should go up and to the right.

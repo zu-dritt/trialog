@@ -7,6 +7,7 @@
 //   node scripts/hub.js send --attach shot.png "caption"  (repeatable, up to 4; the text is optional)
 //   node scripts/hub.js send --reply-to 45 "Agreed."      (an answer to message #45; read shows it as ↳ #45)
 //   node scripts/hub.js get att_… > shot.png              (or: get att_… --out shot.png)
+//   node scripts/hub.js retro [preview] [--release <pr>] [--json]   (the retro card for a release; see docs/api.md)
 //   node scripts/hub.js read [--since <id>] [--to claude] [--limit 50] [--json]   (marks those messages read)
 //   node scripts/hub.js read --up-to <id> [--json]        (set the read position explicitly; only forward)
 //   node scripts/hub.js search "storage images" [--decisions] [--pinned] [--to claude] [--limit 20] [--json]
@@ -56,7 +57,7 @@ const label = (name) => labels.get(String(name)) || capital(name);
 
 function usage(msg) {
   if (msg) console.error(`hub: ${msg}`);
-  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | pick <id|-> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
+  console.error('usage: hub.js send <text|-> [--to name] [--reply-to id] [--room id] [--attach image]... | get <att_id> [--out file] | read [--since id] [--to name] [--room id|all] [--limit n] [--json] [--peek] | search <words> [--decisions] [--pinned] [--to name] [--room id] [--limit n] [--json] | wait [--to name] [--since id] [--room id|all] [--timeout s] [--json] [--peek] | status [<text> [--ttl s] | --clear] [--json] | flight [working <text> | waiting <text> | idle] [--json] | streak [break <reason>] [--json] | retro [preview] [--release <pr>] [--json] | roadmap [add <column> <title> [--note t] [--owner n] [--reviewer n] [--description t] [--top] | claim <id> [--note t] | release <id> | pick <id|-> | progress <id> <0-100|-> [status] | reviewer <id> <name|-> | move <id> <column> | drop <id>] [--json] | poll <question> <option> <option>... [--room id] | vote <poll_id> <option#|--clear> | poll --close <poll_id> | pin <id> | unpin <id> | react <id> <emoji> | unreact <id> <emoji> | decision <prompt|-> [--room id] | agree <decision_id> [note] | object <decision_id> <note> | read --up-to id | participants [--json] | wake set <https-url> [secret] | wake show | wake test | wake clear [name] | wake list | wake [--since id] [--room id|all] [--wait s] [--limit n] [--json] | rooms [--json] | rooms --create <name> [--id id] | export [--room id|all]');
   process.exit(64);
 }
 
@@ -458,6 +459,28 @@ async function main() {
     console.log(`streak: ${s.current} now · record ${s.record}${s.problem ? ` (${s.problem})` : ''}`);
     await loadLabels();
     for (const p of s.points.filter((x) => x.break).slice(-5)) console.log(`  ended at ${p.break.ended} by ${label(p.break.by)}: ${p.break.reason}`);
+    return;
+  }
+
+
+  if (cmd === 'retro') {
+    // retro                     add the retro card for the latest release (a PR merged into test) to Later; asking twice returns the same card
+    // retro preview             show what it would say, add nothing
+    // retro --release <pr>      for that release PR instead of the latest
+    if (args.length > 1 || (args[0] && args[0] !== 'preview')) usage('retro [preview] [--release <pr>]');
+    const preview = args[0] === 'preview';
+    const wanted = opts.release === undefined ? undefined : Number(opts.release);
+    if (wanted !== undefined && !(Number.isSafeInteger(wanted) && wanted > 0)) usage('--release needs a pull request number');
+    const res = preview
+      ? await call(`/api/retro${wanted === undefined ? '' : `?release=${wanted}`}`)
+      : await call('/api/retro', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wanted === undefined ? {} : { release: wanted }) });
+    const data = await res.json();
+    if (opts.json) { console.log(JSON.stringify(data)); return; }
+    if (preview) {
+      console.log(`${data.retro.title}${data.card ? ` (already on the roadmap: ${data.card.id})` : ''}\n\n${data.retro.description}`);
+      return;
+    }
+    console.log(`${data.created ? 'added' : 'already there'}: ${data.card.id} «${data.card.title}» in ${data.card.column}`);
     return;
   }
 
