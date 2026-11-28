@@ -4,7 +4,7 @@
 // one it sends the reader to the hub to sign in first. The cards arrive live (/api/roadmap/stream),
 // so a move by anyone shows within a couple of seconds while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
-import { RoadmapBoard, buildText, columnOf, placeAt, shipText } from '../roadmap-board';
+import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
 import { useMergedPrs } from '../merged';
 import { ROADMAP_NOTE_MAX, type RoadmapColumn, type RoadmapItem } from '../../lib/roadmap';
 import type { Attachment, Participant } from '../../lib/shared';
@@ -203,23 +203,23 @@ export default function RoadmapPage() {
     } finally { setBusy(false); }
   }, [api]);
 
-  // «🚀 Build it!» from a card in Next or Later (playground #1184/#1185): the go as a message (to the
-  // card's owner if it has one, otherwise to everyone: the first claim wins), then the card moves to
-  // the top of Now. A message from the orchestrator wakes the agents; the card alone wouldn't.
+  // «🚀 Build it!» from a card in Next or Later (playground #1185): one call. The hub moves the card
+  // to the top of Now and posts the go (to its owner, or to everyone: the first claim wins), which
+  // wakes the agents. Only the orchestrator may; a card already under way answers 409, no second go.
   const build = useCallback(async (card: RoadmapItem): Promise<boolean> => {
     setBusy(true);
     try {
-      await api('/api/messages', { method: 'POST', body: JSON.stringify({ text: buildText(card), ...(card.owner ? { to: card.owner } : {}) }) });
+      await api(`/api/roadmap/${card.id}/build-it`, { method: 'POST' });
       setError('');
+      return true;
     } catch (e) {
       if (e instanceof Error && e.message !== 'unauthorized') setError(`Build it didn't go out: ${e.message}`);
-      setBusy(false);
       return false;
+    } finally {
+      setBusy(false);
+      void load();
     }
-    setBusy(false);
-    await place(card.id, 'now', 0);
-    return true;
-  }, [api, place]);
+  }, [api, load]);
 
   // A picture for the Compose window: the same upload as a message's (resized, scale noted).
   const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {

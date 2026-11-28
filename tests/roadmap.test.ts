@@ -383,3 +383,46 @@ test('Done shows the newest first (PGlite) (playground #1086)', async () => {
   await store.ensure();
   await doneNewestFirst(store);
 });
+
+async function startRules(store: Store) {
+  const now = (await store.addRoadmapItem({ column: 'now', title: 'Running', note: '', owner: 'grok', by: 'grok' }))!;
+  const next = (await store.addRoadmapItem({ column: 'next', title: 'Sounds', note: '', owner: null, by: 'david' }))!;
+  const later = (await store.addRoadmapItem({ column: 'later', title: 'Retro', note: '', owner: null, by: 'david' }))!;
+  const first = await store.startRoadmapItem(next.id, 'david');
+  assert.equal(first.status, 'ok');
+  assert.deepEqual(first.status === 'ok' && [first.item.column, first.item.position, first.from, first.item.updated_by], ['now', 0, 'next', 'david']);
+  const nowOrder = (await store.listRoadmap()).filter((i) => i.column === 'now').map((i) => i.title);
+  assert.deepEqual(nowOrder, ['Sounds', 'Running'], 'at the top of Now, the running card below');
+  assert.equal((await store.startRoadmapItem(next.id, 'david')).status, 'started', 'a second go finds it moved');
+  assert.equal((await store.startRoadmapItem(now.id, 'david')).status, 'started');
+  assert.equal((await store.startRoadmapItem(later.id, 'david')).status, 'ok', 'Later works too');
+  assert.equal((await store.startRoadmapItem('rm_00000000', 'david')).status, 'not_found');
+}
+
+test('«🚀 Build it!» moves a card from Next or Later to the top of Now once (memory and PGlite)', async () => {
+  await startRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await startRules(store);
+});
+
+test('API: «🚀 Build it!» is the orchestrator\'s; it posts the go once and moves the card to Now', async () => {
+  const route = (await import('../app/api/roadmap/[id]/build-it/route')) as unknown as { POST: Handler };
+  const messages = (await import('../app/api/messages/route')) as unknown as { GET: Handler };
+  const card = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Two new sounds' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: card.id }) };
+  const path = `/api/roadmap/${card.id}/build-it`;
+  assert.equal((await route.POST(req(undefined, 'POST', undefined, path), ctx)).status, 401);
+  assert.equal((await route.POST(req('claude', 'POST', undefined, path), ctx)).status, 403, 'an agent has no go to give');
+  const res = await route.POST(req('david', 'POST', undefined, path), ctx);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { item: RoadmapItem; message: { sender: string; text: string } };
+  assert.equal(body.item.column, 'now');
+  assert.equal(body.message.sender, 'david');
+  assert.match(body.message.text, new RegExp(`^🚀 Build it! «Two new sounds» \\(roadmap card ${card.id}`));
+  const again = await route.POST(req('david', 'POST', undefined, path), ctx);
+  assert.equal(again.status, 409, 'a second go is refused');
+  const all = ((await (await messages.GET(req('david', 'GET', undefined, '/api/messages?limit=50'))).json()) as { messages: { text: string }[] }).messages;
+  assert.equal(all.filter((m) => m.text.includes(`roadmap card ${card.id}`)).length, 1, 'exactly one go in the stream');
+  assert.equal((await route.POST(req('david', 'POST', undefined, '/api/roadmap/rm_00000000/build-it'), { params: Promise.resolve({ id: 'rm_00000000' }) })).status, 404);
+});

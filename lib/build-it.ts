@@ -59,6 +59,17 @@ export function buildChipText(at?: string): string {
   return at ? `⚙️ go to build · ${formatClock(at)} → card` : '⚙️ go to build → card';
 }
 
+/** «🚀 Ship it! …» or «🚀 Build it! …», possibly after «@name »: a go, never a new card. */
+export function isGoText(text: string): boolean {
+  return /^(@[\w-]+[\s,]+)?🚀 (Ship|Build) it!/u.test(text.trimStart());
+}
+
+/** The go «🚀 Build it!» on a card posts. It names the card, so the agents find it, and its owner, if it has one. */
+export function buildText(card: Pick<RoadmapItem, 'id' | 'title' | 'owner'>): string {
+  const who = card.owner ? `@${card.owner} ` : '';
+  return `${who}🚀 Build it! «${card.title}» (roadmap card ${card.id}, now at the top of Now)${card.owner ? '' : '. First claim wins.'}`;
+}
+
 export const cardHref = (id: string): string => `/roadmap#${id}`;
 
 export type BuildItResult =
@@ -66,6 +77,7 @@ export type BuildItResult =
   | { status: 'exists'; item: RoadmapItem }
   | { status: 'not_found' }
   | { status: 'names_pr' }
+  | { status: 'is_go' }
   | { status: 'not_from_orchestrator' }
   | { status: 'full' };
 
@@ -83,6 +95,8 @@ export async function buildItFromMessage(
   if (!message) return { status: 'not_found' };
   if (!input.humans.includes(message.sender)) return { status: 'not_from_orchestrator' };
   if (input.namesPr) return { status: 'names_pr' };
+  // A go («🚀 Ship it!», «🚀 Build it!», also after «@name ») is an answer, not an idea: no card from it (#1219).
+  if (isGoText(message.text)) return { status: 'is_go' };
   const existing = findBuiltCard(await store.listRoadmap(), input.messageId);
   if (existing) return { status: 'exists', item: existing };
   const copies = await copyPictures(store, message, input.by);

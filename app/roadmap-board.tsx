@@ -92,11 +92,7 @@ export function shipText(card: Pick<RoadmapItem, 'title'>, prs: readonly number[
   return `🚀 Ship it! ${prs.map((n) => `PR ${n}`).join(', ')} (from the roadmap card «${card.title}»)`;
 }
 
-/** The go a Build it from the board posts. It names the card, so the agents find it, and its owner, if it has one. */
-export function buildText(card: Pick<RoadmapItem, 'id' | 'title' | 'owner'>): string {
-  const who = card.owner ? `@${card.owner} ` : '';
-  return `${who}🚀 Build it! «${card.title}» (roadmap card ${card.id}, now at the top of Now)${card.owner ? '' : '. First claim wins.'}`;
-}
+export { buildText } from '../lib/build-it';
 
 /** Whether a card gets the Build it button: the orchestrator's, on a card not yet started (Next or Later). */
 export function buildable(card: Pick<RoadmapItem, 'column'>, human: boolean): boolean {

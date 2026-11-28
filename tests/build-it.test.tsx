@@ -222,6 +222,12 @@ for (const [name, make] of STORES) {
     assert.equal((await buildItFromMessage(store, { messageId: agent.id, by: 'david', humans: ['david'], namesPr: false })).status, 'not_from_orchestrator');
     assert.equal((await buildItFromMessage(store, { messageId: pr.id, by: 'david', humans: ['david'], namesPr: true })).status, 'names_pr');
     assert.equal((await buildItFromMessage(store, { messageId: 999999, by: 'david', humans: ['david'], namesPr: false })).status, 'not_found');
+    // A go is an answer, not an idea: the server refuses to make a card of it, whatever the page shows (#1219).
+    for (const text of ['🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now). First claim wins.', '@claude 🚀 Build it! «Sounds» (roadmap card rm_1)', '🚀 Ship it! PR 7']) {
+      const go = await store.add({ sender: 'david', recipient: null, text });
+      assert.ok(go);
+      assert.equal((await buildItFromMessage(store, { messageId: go.id, by: 'david', humans: ['david'], namesPr: false })).status, 'is_go', text);
+    }
     assert.equal((await store.listRoadmap()).length, 0);
 
     const png = { content_type: 'image/png' as const, width: 4, height: 3, data: Buffer.from('picture-build-it') };
