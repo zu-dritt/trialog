@@ -5,35 +5,11 @@
 // (playground #813). Read through GET /api/pr/<n> (GitHub, cached five minutes on the server). A
 // merged PR stays merged, so it is asked once; an open one again every OPEN_RECHECK_MS while shown.
 import { useEffect, useRef, useState } from 'react';
-import { REPO, REPO_PREFIXES, pullRequestNumbers } from './links';
+import { ownPrs } from './waits';
 
 export const OPEN_RECHECK_MS = 2 * 60_000;
 
-/**
- * The PRs of this hub a text names. Another repository's PR is not ours (Grok's review of PR 108): an
- * address of another repo, or a repo name in front, «other-app PR 36», is left out.
- */
-export function ownPrs(text: string, repo: string | null = REPO, prefixes: Readonly<Record<string, string>> = REPO_PREFIXES): number[] {
-  const ours = repo ? repo.toLowerCase() : '';
-  const cleaned = text
-    .replace(/https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})\/pull\/\d+/gi, (m, r: string) => (r.toLowerCase() === ours ? m : ' '))
-    .replace(/(?:^|\s)[A-Za-z0-9_.]*[-/][A-Za-z0-9_./-]*\s+(?:PR|pull request)\s?#?\d+/gi, ' ');
-  return pullRequestNumbers(cleaned, repo, prefixes);
-}
-
-/** True when the text names at least one PR of this hub and every one of them is merged. */
-export function allMerged(text: string, merged: ReadonlySet<number>, repo: string | null = REPO): boolean {
-  const prs = ownPrs(text, repo);
-  return prs.length > 0 && prs.every((n) => merged.has(n));
-}
-
-/**
- * A wait on the orchestrator that a merge settles: it asks for a Ship it or a merge, and every PR it
- * names is merged. «Agree on decision card #791 (PR 101)» still waits, merged or not (Grok's review).
- */
-export function settledByMerge(text: string, merged: ReadonlySet<number>, repo: string | null = REPO): boolean {
-  return /ship it|\bmerge/i.test(text) && allMerged(text, merged, repo);
-}
+export { allMerged, ownPrs, settledByMerge } from './waits';
 
 /** The merged PRs among those named in `texts`. Without a token or a repository: none. */
 export function useMergedPrs(token: string | null | undefined, texts: readonly string[]): ReadonlySet<number> {

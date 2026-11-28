@@ -209,6 +209,21 @@ node scripts/hub.js flight idle
 node scripts/hub.js flight            # everyone's
 ```
 
+### `GET /api/health`
+
+The health chips next to the Guard ring: one entry per agent, worked out from what the hub already keeps (the agent's last message, its status and its flight). Nothing is stored for it, and nobody reports it: an agent that hangs stops writing, and its heartbeat turns grey by itself, even while its flight still says `working`.
+
+- **`heartbeat`:** `green` when the hub heard from the agent less than 10 minutes ago, `amber` from 10, `grey` from 20 (and for an agent not heard from in the last day). `heard_at` is that moment, `heard_ago_ms` its age by the hub's clock.
+- **`word`:** `building` (a `working` flight), `reviewing` (a `working` flight whose text says review), `waiting`, or `resting` (idle, or no flight).
+- **`blocked`:** `{ on, text, since }` while a `waiting` flight has a step for a human («David: merge PR 36»), until the agent moves on or the PRs it names are merged; otherwise `null`.
+- **`last_merge`:** `{ pr, merged_at }` of the agent's own newest merged pull request (its branch starts «name/»), read from GitHub for `TRIALOG_REPO` and cached for five minutes; `null` without a repository or a merge.
+- **`emoji`:** the agent's chip emoji (🔥 grok, 🛠️ claude, 🙂 until another agent chooses one).
+
+```bash
+curl -s -H "Authorization: Bearer $HUB_TOKEN" "$HUB_URL/api/health"
+# {"now":"…","agents":[{"participant":"claude","emoji":"🛠️","heard_at":"…","heard_ago_ms":120000,"heartbeat":"green","word":"building","state":"working","text":"iPhone app","blocked":null,"last_merge":{"pr":133,"merged_at":"…"}}]}
+```
+
 ### `GET /api/streak` and `POST /api/streak/break`
 
 The streak: pull requests merged in a row without the orchestrator stepping in. The Guard panel shows it, with the record and a timeline that should go up and to the right.

@@ -181,6 +181,8 @@ export interface ComposerToolsProps {
   send: { disabled: boolean; label: string };
   /** The loop and cost guard's ring (app/guard.tsx), after the size button. Only the leading pane has one. */
   guard?: ReactNode;
+  /** The agents' health chips (app/health.tsx), right of the ring. Only the leading pane has them. */
+  health?: ReactNode;
   /** The look of the recipient picker, and of every button in the row. */
   fieldClassName: string;
   toolClassName: string;
@@ -193,9 +195,9 @@ export interface ComposerToolsProps {
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, health, fieldClassName, toolClassName }: ComposerToolsProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="relative flex flex-wrap items-center gap-2">
       <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={`${fieldClassName} min-w-0 max-w-full`}>
         <option value="">to everyone</option>
         {recipients.map((r) => <option key={r.name} value={r.name}>to {r.label}</option>)}
@@ -215,8 +217,10 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
       >Poll</button>
       <ExpandButton expanded={expand.expanded} onToggle={expand.onToggle} className={toolClassName} />
       {guard}
-      <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
-      <button type="submit" className={`${toolClassName} ml-auto flex-none md:ml-0`} disabled={send.disabled}>{send.label}</button>
+      {health}
+      {/* With the chips the row is full on a computer: the keyboard hint moves into Send's tooltip. */}
+      {!health && <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>}
+      <button type="submit" className={`${toolClassName} ml-auto flex-none ${health ? '' : 'md:ml-0'}`} disabled={send.disabled} title={health ? 'Enter sends · Shift+Enter for a new line' : undefined}>{send.label}</button>
     </div>
   );
 }
