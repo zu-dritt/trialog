@@ -22,10 +22,14 @@ so no agent can push anyone.
 
    Type the token in your own terminal. Never paste it in a chat or a hub message.
 
-2. Save this as `~/Library/LaunchAgents/dev.trialog.morning.plist`. It runs at 08:00 in the Mac's
-   own time zone; if the Mac was asleep at 08:00, macOS runs it when it wakes.
+2. Write the job file. launchd starts it without your shell's settings, so it doesn't find `node`
+   by itself when node lives in your home folder. The command below writes node's full path into
+   the file for you. It runs at 08:00 in the Mac's own time zone; if the Mac was asleep at 08:00,
+   macOS runs it when it wakes.
 
-   ```xml
+   ```bash
+   NODE="$(command -v node)" && echo "node: $NODE"
+   cat > ~/Library/LaunchAgents/dev.trialog.morning.plist <<EOF
    <?xml version="1.0" encoding="UTF-8"?>
    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
    <plist version="1.0">
@@ -33,8 +37,8 @@ so no agent can push anyone.
      <key>Label</key><string>dev.trialog.morning</string>
      <key>ProgramArguments</key>
      <array>
-       <string>/bin/zsh</string><string>-lc</string>
-       <string>set -a; . ~/trialog-morning/hub.env; set +a; node ~/trialog-morning/hub.js for-you notify</string>
+       <string>/bin/zsh</string><string>-c</string>
+       <string>set -a; . ~/trialog-morning/hub.env; set +a; "$NODE" ~/trialog-morning/hub.js for-you notify</string>
      </array>
      <key>StartCalendarInterval</key>
      <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
@@ -42,7 +46,11 @@ so no agent can push anyone.
      <key>StandardErrorPath</key><string>/tmp/trialog-morning.log</string>
    </dict>
    </plist>
+   EOF
    ```
+
+   If the first line prints nothing, node isn't installed or not on your path: install it first.
+   If you update node later, run this step again.
 
 3. Switch it on, and try it once now:
 
