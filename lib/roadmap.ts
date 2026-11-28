@@ -221,3 +221,12 @@ export function unblockHref(item: Pick<RoadmapItem, 'note'>, status: CardStatus 
   const m = /https?:\/\/[^\s<>«»"]+[^\s<>«»".,;:!?)]/.exec(item.note);
   return m ? m[0] : null;
 }
+
+/**
+ * A card someone works on is in Now (house rule, playground #1081): a claim, or progress set on it,
+ * moves a card from Next or Later to Now. Done stays Done, and a card already in Now stays where it is.
+ * Clearing the progress (null) is no sign of work and moves nothing.
+ */
+export function movesToNow(item: Pick<RoadmapItem, 'column'>): boolean {
+  return item.column === 'next' || item.column === 'later';
+}

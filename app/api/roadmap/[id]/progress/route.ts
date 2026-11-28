@@ -1,6 +1,6 @@
 import { authenticate, error, json, readJson, safe } from '../../../../../lib/http';
 import { loadRoster } from '../../../../../lib/participants';
-import { ROADMAP_ID, parseProgress } from '../../../../../lib/roadmap';
+import { ROADMAP_ID, movesToNow, parseProgress } from '../../../../../lib/roadmap';
 import { getStore } from '../../../../../lib/store';
 
 export const dynamic = 'force-dynamic';
@@ -20,8 +20,12 @@ export const PUT = safe(async (request: Request, ctx: Ctx) => {
   const input = parseProgress(body);
   if (!input.ok) return error(input.status, input.error);
   const human = loadRoster().participants.find((p) => p.name === me)?.kind === 'human';
-  const result = await (await getStore()).setRoadmapProgress(id, me, input.progress, input.status, human);
+  const store = await getStore();
+  const result = await store.setRoadmapProgress(id, me, input.progress, input.status, human);
   if (result.status === 'not_found') return error(404, 'No such card.');
   if (result.status === 'taken') return json({ error: result.owner ? `It is ${result.owner}'s card; only the owner says how far it is.` : 'Claim the card first.', owner: result.owner || null, item: result.item }, 409);
-  return json({ item: result.status === 'ok' ? result.item : null });
+  if (result.status !== 'ok') return json({ item: null });
+  // Progress on a card means someone works on it: into Now (house rule, playground #1081).
+  const item = input.progress !== null && movesToNow(result.item) ? (await store.updateRoadmapItem(id, { column: 'now' }, me)) ?? result.item : result.item;
+  return json({ item });
 });
