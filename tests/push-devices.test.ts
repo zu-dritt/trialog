@@ -245,7 +245,7 @@ test('only a message or wait addressed to a human notifies them', () => {
   assert.deepEqual(humansForCard(card, roster), ['ana']);
   assert.deepEqual(humansForCard({ column: 'later', note: '', owner: 'ana' }, roster), ['ana']);
   assert.deepEqual(humansForCard({ column: 'now', note: 'in review', owner: 'scout' }, roster), []);
-  const item = { id: 'rm_x', column: 'next', position: 0, title: 'Ship', note: 'waiting on Ana', owner: null, updated_by: 'scout', updated_at: '', progress: null, status: '', progress_at: null, description: '', reviewer: null, raised_by: 'scout', attachments: [] } satisfies RoadmapItem;
+  const item = { id: 'rm_x', column: 'next', position: 0, title: 'Ship', note: 'waiting on Ana', owner: null, updated_by: 'scout', updated_at: '', progress: null, status: '', progress_at: null, description: '', reviewer: null, raised_by: 'scout', moved_by: null, moved_at: null, entered_next_at: null, attachments: [] } satisfies RoadmapItem;
   assert.ok(item);
   assert.match(pushAlertForMessage(messageTo('ana', 9), roster), /Ana: can you look at this\? \(#9\)|Scout: can you look at this\? \(#9\)/);
 });

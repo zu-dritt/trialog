@@ -7,7 +7,7 @@ import { RoadmapBoard, buildText, buildable, columnOf, placeAt } from '../app/ro
 import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
-  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: null, raised_by: null, ...over });
+  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: null, raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over });
 
 test('a card lands where it is put, from its own column or another', () => {
   assert.deepEqual(placeAt(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);

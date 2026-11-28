@@ -36,6 +36,11 @@ export interface RoadmapItem {
   reviewer: string | null;
   /** Who added the card, or null for cards from before migrations/019 (playground #670). Never changed by an edit. */
   raised_by: string | null;
+  /** Who last moved the card (a drag, ↑ ↓, the column menu or Build it; never an edit), and when (migrations/021). Null before. */
+  moved_by: string | null;
+  moved_at: string | null;
+  /** When the card last entered «Next», or null (before migrations/021, or never in Next). */
+  entered_next_at: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };
@@ -100,12 +105,16 @@ export function parseItemChange(body: unknown, names: readonly string[]): { ok: 
 }
 
 /** PUT: {column, ids}: the new order of every card in that column. */
-export function parseOrder(body: unknown): { ok: true; column: RoadmapColumn; ids: string[] } | Fail {
+export function parseOrder(body: unknown): { ok: true; column: RoadmapColumn; ids: string[]; moved: string | null } | Fail {
   const b = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
   if (!b || !isColumn(b.column) || !Array.isArray(b.ids) || !b.ids.every((id) => typeof id === 'string' && ROADMAP_ID.test(id)) || new Set(b.ids).size !== b.ids.length) {
     return { ok: false, status: 400, error: 'Body must be {"column": "next", "ids": ["rm_…", …]}: every card of that column once, in the new order.' };
   }
-  return { ok: true, column: b.column, ids: b.ids as string[] };
+  // «moved»: the one card that was dragged (or moved with ↑ ↓), so only it counts as moved (migration 021).
+  if (b.moved !== undefined && b.moved !== null && (typeof b.moved !== 'string' || !(b.ids as string[]).includes(b.moved))) {
+    return { ok: false, status: 400, error: '"moved" must be one of the ids: the card that was dragged.' };
+  }
+  return { ok: true, column: b.column, ids: b.ids as string[], moved: typeof b.moved === 'string' ? b.moved : null };
 }
 
 /** Sorts cards by column (done, now, next, later), then by position. */

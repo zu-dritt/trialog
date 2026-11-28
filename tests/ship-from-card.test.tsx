@@ -11,7 +11,7 @@ const NOW = Date.parse('2026-11-27T18:00:00.000Z');
 const REPO = 'zu-dritt/trialog';
 const card = (note: string, over: Partial<RoadmapItem> = {}): RoadmapItem => ({
   id: 'rm_ship0000', column: 'now', position: 0, title: 'Header refresh', note, owner: 'claude', updated_by: 'claude',
-  updated_at: '2026-11-27T17:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null, ...over,
+  updated_at: '2026-11-27T17:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over,
 });
 const P = [
   { name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' },
