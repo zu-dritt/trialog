@@ -5,7 +5,7 @@
 // and does not merge or deploy anything. The chip says «shipped» only when that pull request is
 // known to be merged. It is stored as a 🚀 reaction (the same table and API as the other
 // reactions, so no schema change), and on these messages the 🚀 pill is shown as chips instead.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Message, Sender } from '../lib/core';
 import { shipChipText } from '../lib/build-it';
 import { labelOf, type Participant } from '../lib/shared';
@@ -48,28 +48,47 @@ interface Props {
   merged?: boolean;
 }
 
+/** True once the element has been on screen. Without IntersectionObserver (tests, old browsers): at once. */
+export function useSeen(el: { readonly current: Element | null }): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    if (seen || !el.current) return undefined;
+    if (typeof IntersectionObserver === 'undefined') { setSeen(true); return undefined; }
+    const io = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) setSeen(true); });
+    io.observe(el.current);
+    return () => io.disconnect();
+  }, [el, seen]);
+  return seen;
+}
+
 /** The button and the chips, in the row with the reaction pills. */
 export function ShipIt({ message, me, participants = [], onToggle, merged }: Props) {
   const goes = shipGoesOf(message);
   const mine = me !== null && goes.some((g) => g.name === me);
   const [knownMerged, setKnownMerged] = useState(merged === true);
+  const button = useRef<HTMLButtonElement>(null);
+  const seen = useSeen(button);
 
   useEffect(() => {
     if (merged === true) { setKnownMerged(true); return; }
     if (merged === false) { setKnownMerged(false); return; }
     // Asked even without a go: a merged PR greys the button out (the roadmap card «Ship it button
     // greys out once the PR has already shipped»). loadPr is cached, and the hovercard asks the same.
+    // Only once the button is on screen, so opening a room with dozens of PRs doesn't ask for all of
+    // them at once (Grok's note on PR 163). A go always asks, for the «shipped» chip.
     const n = pullRequestNumbers(message.text)[0];
     if (n == null) return;
     const peeked = peekedPr(n);
     if (peeked) { setKnownMerged(peeked.state === 'merged'); return; }
+    if (!seen && !goes.length) return;
     void loadPr(n).then((s) => { if (s?.state === 'merged') setKnownMerged(true); });
-  }, [merged, message.text]);
+  }, [merged, message.text, seen, goes.length]);
 
   const isMerged = merged ?? knownMerged;
   return (
     <>
       <button
+        ref={button}
         type="button"
         data-ship=""
         data-merged={isMerged ? '' : undefined}
