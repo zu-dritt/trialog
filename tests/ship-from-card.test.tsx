@@ -11,7 +11,7 @@ const NOW = Date.parse('2026-11-27T18:00:00.000Z');
 const REPO = 'zu-dritt/trialog';
 const card = (note: string, over: Partial<RoadmapItem> = {}): RoadmapItem => ({
   id: 'rm_ship0000', column: 'now', position: 0, title: 'Header refresh', note, owner: 'claude', updated_by: 'claude',
-  updated_at: '2026-11-27T17:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null, ...over,
+  updated_at: '2026-11-27T17:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over,
 });
 const P = [
   { name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' },
@@ -52,7 +52,7 @@ test('the page posts the go to the reviewer and puts the 🚀 on it', () => {
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /api\('\/api\/messages', \{ method: 'POST', body: JSON\.stringify\(\{ text: shipText\(card, prs\), \.\.\.\(card\.reviewer \? \{ to: card\.reviewer \} : \{\}\) \}\) \}\)/);
   assert.match(page, /api\(`\/api\/messages\/\$\{message\.id\}\/reactions\/\$\{encodeURIComponent\('🚀'\)\}`, \{ method: 'PUT' \}\)/);
-  assert.match(page, /addIdea, upload, ship \}\}/);
+  assert.match(page, /addIdea, upload, ship, build, edit, remove \}\}/);
 });
 
 test('a second click while the go is on its way posts nothing (Grok\'s nit on PR 106)', () => {

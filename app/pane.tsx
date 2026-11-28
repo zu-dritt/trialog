@@ -9,11 +9,15 @@ import type { Attachment, DecisionCard, DecisionStance, ReadPosition, Room } fro
 import { MAIN_ROOM, MAX_ATTACHMENTS_PER_MESSAGE, attachmentLabel, colorOf, labelOf, formatSeen, type Participant } from '../lib/shared';
 import { createSseParser, type SseEvent } from '../lib/sse';
 import { eitherSignal, watchNap } from './nap';
+import { ACTIVITY_EVENTS, HUB_REST_AFTER_MS, REST_POLL_MS, paceFor } from './roadmap-pace';
 import { ACCEPT, DraftChips, MessageImages, localScale, uploadRequest, useImageLoader, withoutSent, type Draft } from './attachments';
 import { ComposerTools, draftFor, draftScope, readDraft, useBoxHeight, useViewportHeight, writeDraft } from './composer';
 import { DecisionBadge, isDecision } from './decision';
 import { PinnedBar } from './pinned-bar';
 import { Guard } from './guard';
+import { HealthChips } from './health';
+import { OpenDecisionChips } from './open-decisions';
+import { PrsTodayChips } from './prs-today';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
 import { leadingHandle } from './mentions';
@@ -25,8 +29,9 @@ import {
   composedIntent, pickSelection, quoteNotice, sameQuote, tooLong, useQuotableSelection, withComment, type Quote, type QuoteChip,
 } from './quote';
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
-import { ShortcutsHelp, stepTo, useShortcuts } from './shortcuts';
-import { SHIP_EMOJI, ShipIt } from './ship';
+import { ShortcutsHelp, shortcutButton, stepTo, useShortcuts } from './shortcuts';
+import { useDictation } from './dictation';
+import { SHIP_EMOJI, ShipIt, alreadySaid, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
 import { ReplyButton, ReplyContext, ReplyingTo } from './replies';
@@ -92,6 +97,7 @@ export function RoomPane({
   onMissingRoom,
   seek,
   onJumped,
+  onGoToMessage,
   picker,
   lead = false,
   roomInfo,
@@ -118,6 +124,8 @@ export function RoomPane({
   onMissingRoom: (missing: string) => void;
   seek?: { room: string; id: number } | null;
   onJumped?: () => void;
+  /** Jump to a message, possibly in another room (the page looks up which). Used by the open-decisions chip. */
+  onGoToMessage?: (id: number) => void;
   picker?: React.ReactNode;
   /** The leading pane also loads who takes part, follows storage from other windows, and reports live status. */
   lead?: boolean;
@@ -140,6 +148,8 @@ export function RoomPane({
   openRoomsRef.current = openRooms;
   const streamToken = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
+  // «Speak» in the iPhone app: the words land in the box as you say them (app/dictation.ts).
+  const dictation = useDictation(draft, setDraft);
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
@@ -245,6 +255,17 @@ export function RoomPane({
     // The open stream's own switch: a nap (the tab hidden for 15 minutes) ends it, so the database can sleep.
     let conn = new AbortController();
     const nap = watchNap(document, () => conn.abort());
+    // A visible hub nobody is at rests (playground #1004): after HUB_REST_AFTER_MS without a movement
+    // on the page or a new message, the stream ends and one look every REST_POLL_MS follows, so the
+    // database can sleep at night. Any movement wakes it at once, and it catches up.
+    let lastActive = Date.now();
+    let wakeUp: (() => void) | null = null;
+    const stirred = () => { lastActive = Date.now(); wakeUp?.(); };
+    const onVisible = () => { if (!document.hidden) stirred(); };
+    for (const type of ACTIVITY_EVENTS) window.addEventListener(type, stirred, { passive: true });
+    document.addEventListener('visibilitychange', onVisible);
+    const resting = () => paceFor(document.hidden, Date.now(), lastActive, HUB_REST_AFTER_MS) === 'rest';
+    const restCheck = setInterval(() => { if (resting()) conn.abort(); }, 30_000);
     lastId.current = 0;
     setMessages([]);
     setPinned([]);
@@ -276,6 +297,8 @@ export function RoomPane({
 
     const addMessages = (incoming: Message[]) => {
       if (!incoming.length) return;
+      // A new message (not a re-sent one with a reaction or a vote) means someone is talking: stay live.
+      if (lastId.current && incoming[incoming.length - 1].id > lastId.current) lastActive = Date.now();
       lastId.current = Math.max(lastId.current, incoming[incoming.length - 1].id);
       // What arrives while this room is open counts as seen there. The list is per room, so the
       // other pane's room is not moved.
@@ -408,6 +431,19 @@ export function RoomPane({
           await nap.awake(abort.signal);
           if (stopped) return;
         }
+        if (resting()) {
+          if (lead) setStatus?.('live · resting while nobody is here');
+          try {
+            await pollOnce();
+          } catch (e) {
+            if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
+          }
+          if (!stopped && resting()) {
+            await new Promise<void>((resolve) => { wakeUp = resolve; void pause(REST_POLL_MS).then(resolve); });
+            wakeUp = null;
+          }
+          continue;
+        }
         let clean = false;
         try {
           await loadParticipants();
@@ -417,9 +453,9 @@ export function RoomPane({
           if (stopped || errorMessage(e) === 'unauthorized' || leaveMissingRoom(e)) return;
         }
         if (stopped) return;
-        if (clean || nap.napping) continue;
+        if (clean || nap.napping || resting()) continue;
         const until = Date.now() + FALLBACK_MS;
-        while (!stopped && !nap.napping && Date.now() < until) {
+        while (!stopped && !nap.napping && !resting() && Date.now() < until) {
           try {
             await pollOnce();
             if (!stopped && lead) setStatus?.('live · polling');
@@ -432,7 +468,15 @@ export function RoomPane({
       }
     };
     void run();
-    return () => { stopped = true; abort.abort(); nap.stop(); if (lead) window.removeEventListener('storage', onStorage); };
+    return () => {
+      stopped = true;
+      abort.abort();
+      nap.stop();
+      clearInterval(restCheck);
+      for (const type of ACTIVITY_EVENTS) window.removeEventListener(type, stirred);
+      document.removeEventListener('visibilitychange', onVisible);
+      if (lead) window.removeEventListener('storage', onStorage);
+    };
   }, [token, api, room, lead, onMissingRoom, setMe, setParticipants, setRooms, setSeenChanged, setServerBuild, setSetupError, setStatus]);
 
   useEffect(() => { onHeard?.(messages, primed); }, [messages, primed, onHeard]);
@@ -650,6 +694,14 @@ export function RoomPane({
         startReply(m);
         return true;
       }
+      case 'ship':
+      case 'build': {
+        // s and b press the selected message's Ship it or Build it (playground #1057).
+        const button = shortcutButton(selected === null ? null : listRef.current?.querySelector(`#m-${selected}`), action);
+        if (!button) return false;
+        button.click();
+        return true;
+      }
       case 'compose': boxRef.current?.focus(); return true;
       case 'search': {
         // By a data attribute, not the label (PR 98 renamed it and «/» stopped working). On a phone the
@@ -731,9 +783,19 @@ export function RoomPane({
       const res = await api(path, { method: on ? 'PUT' : 'DELETE' });
       const data = (await res.json()) as { message: Message };
       if (on) onTour?.({ kind: 'reacted' });
-      if (data.message.room !== roomRef.current) return;
-      setMessages((list) => merge(list, [data.message]));
-      setPinned((list) => replaceMatching(list, [data.message]));
+      if (data.message.room === roomRef.current) {
+        setMessages((list) => merge(list, [data.message]));
+        setPinned((list) => replaceMatching(list, [data.message]));
+      }
+      // A human's go on an agent's message is also a short message to that agent, so it wakes them
+      // (a reaction wakes nobody; playground #1023).
+      const notice = on && emoji === SHIP_EMOJI ? shipNotice(m, me, participants) : null;
+      if (notice && me && !alreadySaid(messages, notice, me)) {
+        const body = { text: notice.text, to: notice.to, reply_to: notice.reply_to, ...(notice.room === MAIN_ROOM ? {} : { room: notice.room }) };
+        const sent = await api('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const { message } = (await sent.json()) as { message: Message };
+        if (message.room === roomRef.current) setMessages((list) => merge(list, [message]));
+      }
     } catch (e) {
       if (errorMessage(e) !== 'unauthorized') setNotice(errorMessage(e));
     }
@@ -1039,7 +1101,11 @@ export function RoomPane({
               e.preventDefault();
               addImages(files, true);
             }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+              // Esc: out of the box, the draft kept, so j, k and the other keys work again (playground #1058).
+              else if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur(); }
+            }}
             className={`${FIELD} block min-h-[60px] w-full resize-none ${handle.kind === 'unknown' ? 'border-bad' : ''}`}
             aria-describedby={handle.kind === 'none' ? undefined : `handle-${room}`}
           />
@@ -1065,6 +1131,7 @@ export function RoomPane({
               )}
             </p>
           )}
+          {dictation.error && <p role="alert" className="text-xs text-bad">{dictation.error}</p>}
           <input
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
@@ -1073,12 +1140,24 @@ export function RoomPane({
             to={to} onTo={setTo} recipients={participants.map((p) => ({ name: p.name, label: shown(p.name) }))}
             emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
             image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
+            dictate={dictation.available ? { listening: dictation.listening, onToggle: dictation.toggle } : undefined}
             decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
             send={{ disabled: !canSend, label: uploading ? 'Uploading…' : 'Send' }}
             // In split view the ring is shown once, in the leading pane: the guard is the hub's, not the room's.
             guard={lead && token ? <Guard api={api} participants={participants} /> : undefined}
+            health={lead && token ? <HealthChips api={api} participants={participants} /> : undefined}
+            openDecisions={lead && token && me ? (
+              <OpenDecisionChips
+                api={api}
+                me={me}
+                participants={participants}
+                onJump={(id) => { if (onGoToMessage) onGoToMessage(id); else void goToMessage(id); }}
+                onAgree={async (cardId) => { await recordDecisionPosition(cardId, 'agree', null); }}
+              />
+            ) : undefined}
+            prsToday={lead && token ? <PrsTodayChips api={api} /> : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>

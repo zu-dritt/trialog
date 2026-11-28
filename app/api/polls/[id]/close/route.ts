@@ -3,6 +3,7 @@ import { RATE_LIMIT_PER_MIN, isPollId } from '../../../../../lib/core';
 import { authenticate, error, json, safe } from '../../../../../lib/http';
 import { PollError, getStore } from '../../../../../lib/store';
 import { postGuardNotice } from '../../../../../lib/guard-hub';
+import { notifyPushForMessage, schedulePush } from '../../../../../lib/push';
 import { getWakeup } from '../../../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,7 @@ export const POST = safe(async (request: Request, { params }: { params: Promise<
       await postGuardNotice(store, result.message);
       const job = getWakeup(store)?.onMessage(result.message);
       if (job) waitUntil(job);
+      schedulePush(notifyPushForMessage(store, result.message));
     }
     return json({ poll: result.poll, message: result.message });
   } catch (e) {

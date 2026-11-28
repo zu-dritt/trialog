@@ -1,5 +1,6 @@
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
 import { loadRoster } from '../../../lib/participants';
+import { notifyPushForRoadmap, schedulePush } from '../../../lib/push';
 import { parseNewItem, parseOrder } from '../../../lib/roadmap';
 import { AttachmentLinkError, getStore } from '../../../lib/store';
 
@@ -29,13 +30,15 @@ export const POST = safe(async (request: Request) => {
   if (input.owner && input.owner !== me && loadRoster().participants.find((p) => p.name === me)?.kind !== 'human') {
     return error(403, 'Agents add cards for themselves or for no one. Leave "owner" out, and the owner claims it.');
   }
+  const store = await getStore();
   let item;
   try {
-    item = await (await getStore()).addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top, reviewer: input.reviewer });
+    item = await store.addRoadmapItem({ column: input.column, title: input.title, note: input.note, owner: input.owner, by: me, description: input.description, attachments: input.attachments, top: input.top, reviewer: input.reviewer });
   } catch (e) {
     if (e instanceof AttachmentLinkError) return error(e.reason === 'already linked' ? 409 : e.reason === 'not yours' ? 403 : 404, e.message);
     throw e;
   }
+  if (item) schedulePush(notifyPushForRoadmap(store, item, null));
   return item ? json({ item }, 201) : error(409, 'The roadmap is full (200 cards). Remove some done cards first.');
 });
 
@@ -47,6 +50,6 @@ export const PUT = safe(async (request: Request) => {
   if (bad) return bad;
   const input = parseOrder(body);
   if (!input.ok) return error(input.status, input.error);
-  const items = await (await getStore()).reorderRoadmap(input.column, input.ids, me);
+  const items = await (await getStore()).reorderRoadmap(input.column, input.ids, me, input.moved);
   return items ? json({ items }) : error(409, 'The cards changed in the meantime: «ids» must be exactly the cards now in that column. Reload and try again.');
 });

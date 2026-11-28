@@ -4,6 +4,7 @@ import { authenticate, error, json, readJson, safe } from '../../../../lib/http'
 import { loadRoster } from '../../../../lib/participants';
 import { DecisionError, getStore } from '../../../../lib/store';
 import { postGuardNotice } from '../../../../lib/guard-hub';
+import { notifyPushForMessage, schedulePush } from '../../../../lib/push';
 import { getWakeup } from '../../../../lib/webhook';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +12,8 @@ export const runtime = 'nodejs';
 
 function fail(e: unknown): Response {
   if (e instanceof DecisionError) {
-    return error(e.reason === 'not found' ? 404 : 400, e.message);
+    const status = e.reason === 'not found' ? 404 : e.reason === 'forbidden' ? 403 : 400;
+    return error(status, e.message);
   }
   throw e;
 }
@@ -28,10 +30,10 @@ export const PUT = safe(async (request: Request, { params }: { params: Promise<{
   if (bad) return bad;
   const input = parseDecisionPosition(body);
   if (!input.ok) return error(input.status, input.error);
-  const { names } = loadRoster();
+  const { names, participants } = loadRoster();
   const store = await getStore();
   try {
-    const result = await store.recordDecisionPosition(id, me, input.stance, input.note, names);
+    const result = await store.recordDecisionPosition(id, me, input.stance, input.note, names, undefined, participants);
     if (result.status === 'rate_limited') {
       return error(429, `Rate limit: at most ${RATE_LIMIT_PER_MIN} messages per minute per sender. Wait a moment.`, { 'Retry-After': '60' });
     }
@@ -40,6 +42,7 @@ export const PUT = safe(async (request: Request, { params }: { params: Promise<{
       await postGuardNotice(store, result.reply);
       const job = getWakeup(store)?.onMessage(result.reply);
       if (job) waitUntil(job);
+      schedulePush(notifyPushForMessage(store, result.reply));
     }
     return json({ decision: result.decision, message: result.message, reply: result.reply });
   } catch (e) {

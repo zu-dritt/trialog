@@ -7,3 +7,8 @@ next-env.d.ts
 *.tsbuildinfo
 AGENTS.md
 .claude/
+# iOS: your own team and signing settings stay on your Mac (ios/README.md)
+ios/Local.xcconfig
+ios/build/
+xcuserdata/
+*.xcuserstate

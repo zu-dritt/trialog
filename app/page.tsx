@@ -19,6 +19,8 @@ import { defaultSecondRoom, readSplit, writeSplit } from './split';
 import { PaneRoomBar, SplitToggle, useSplitFits } from './split-ui';
 import { TourButton, TourPanel, useTour } from './tour';
 import { MoreMenu } from './more-menu';
+import { HUB_WINDOW, messageIdOfHash } from './links';
+import { GoToHint, useGoTo } from './shortcuts';
 
 // The key keeps its first name, so browsers that already hold a token don't have to ask for it again.
 const TOKEN_KEY = 'collabHubToken';
@@ -168,6 +170,49 @@ export default function Page() {
     return ((await (await api(`/api/messages?${params.toString()}`)).json()) as { messages: Message[] }).messages;
   }, [api]);
 
+  /**
+   * «#966» or «g 966 ↵» (playground #970): finds the room message 966 is in, opens it there and
+   * jumps to the message. The pane loads older messages first when it isn't on screen yet.
+   */
+  const goToMessage = useCallback(async (id: number) => {
+    try {
+      const found = ((await (await api(`/api/messages?since=${id - 1}&limit=1&room=all`)).json()) as { messages: Message[] }).messages[0];
+      if (!found || found.id !== id) { setPageNotice(`There is no message #${id}.`); return; }
+      setPageNotice('');
+      const where = found.room ?? MAIN_ROOM;
+      if (where !== roomRef.current) openRoom(where);
+      setSeek({ room: where, id });
+    } catch (e) {
+      if (errorMessage(e) !== 'unauthorized') setPageNotice(`Could not find message #${id}: ${errorMessage(e)}`);
+    }
+  }, [api, openRoom]);
+
+  // A click on «#966» jumps within the page. From the roadmap, the link arrives as «/#m-966» in the
+  // address: go there on load, then drop the mark, so the same link works again.
+  useEffect(() => {
+    if (!token) return undefined;
+    window.name = HUB_WINDOW;
+    const fromHash = () => {
+      const id = messageIdOfHash(window.location.hash);
+      if (id === null) return;
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      void goToMessage(id);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const link = (e.target as Element | null)?.closest?.('a[data-message-ref]');
+      if (!link) return;
+      e.preventDefault();
+      void goToMessage(Number(link.getAttribute('data-message-ref')));
+    };
+    fromHash();
+    window.addEventListener('hashchange', fromHash);
+    document.addEventListener('click', onClick);
+    return () => { window.removeEventListener('hashchange', fromHash); document.removeEventListener('click', onClick); };
+  }, [token, goToMessage]);
+
+  const goToDigits = useGoTo(!!token, (id) => { void goToMessage(id); });
+
   const exportTranscript = async () => {
     try {
       // The transcript of the room in the leading pane (the one the address names).
@@ -308,6 +353,7 @@ export default function Page() {
       </div>
       {!flightAtBottom && flightBar}
       <TourPanel tour={tour} me={me} participants={participants} />
+      <GoToHint digits={goToDigits} />
       {pageNotice && <div className="border-b border-line px-4 py-1.5 text-[13px] text-bad">{pageNotice}</div>}
       {splitVisible && statusBar}
 
@@ -325,6 +371,7 @@ export default function Page() {
             onMissingRoom={onMissingPrimary}
             seek={seek}
             onJumped={() => setSeek(null)}
+            onGoToMessage={goToMessage}
             onHeard={onLeadHeard}
             picker={<PaneRoomBar side="lead" rooms={shownRooms} current={room} onPick={openRoom} onCreate={createRoom} canCreate={rooms.length < MAX_ROOMS} />}
           />
@@ -357,6 +404,7 @@ export default function Page() {
           onMissingRoom={onMissingPrimary}
           seek={seek}
           onJumped={() => setSeek(null)}
+            onGoToMessage={goToMessage}
           onHeard={onLeadHeard}
           statusBar={statusBar}
         />

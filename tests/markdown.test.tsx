@@ -70,7 +70,9 @@ test('«PR 62» links the pull request when the hub knows its repository; #62 st
   assert.ok(!out.includes('/pull/5'), 'APR 5 is a word, no reference');
   assert.ok(!out.includes('/pull/9'), 'code stays code');
   assert.ok(!out.includes('/pull/3'), 'a link keeps its own address');
-  assert.match(out, /Not #62/);
+  // #62 is a message number, not a pull request: it jumps to message 62 (playground #970).
+  assert.match(out, /Not <a href="\/#m-62"[^>]*>#62<\/a>/);
+  assert.ok(!/pull\/62"[^>]*>#62/.test(out), '#62 is no pull request');
   // Without a repository, nothing becomes a link.
   assert.ok(!renderToStaticMarkup(<MessageBody text="PR 62" repo={null} />).includes('<a'));
 });

@@ -14,7 +14,7 @@ const NOW = Date.parse('2026-11-27T19:00:00.000Z');
 const HUMANS = ['david', 'Orchestrator'];
 const card = (note: string): RoadmapItem => ({
   id: 'rm_red00000', column: 'now', position: 0, title: 'Ship it on cards', note, owner: 'claude', updated_by: 'claude',
-  updated_at: '2026-11-27T18:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null,
+  updated_at: '2026-11-27T18:50:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: 'grok', raised_by: null, moved_by: null, moved_at: null, entered_next_at: null,
 });
 
 test('allMerged: every PR the text names is merged, and it names at least one', () => {

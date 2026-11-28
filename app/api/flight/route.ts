@@ -1,5 +1,6 @@
 import { parseFlightInput } from '../../../lib/core';
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
+import { notifyPushForFlight, schedulePush } from '../../../lib/push';
 import { getStore } from '../../../lib/store';
 
 export const dynamic = 'force-dynamic';
@@ -25,5 +26,8 @@ export const PUT = safe(async (request: Request) => {
   const input = parseFlightInput(body);
   if (!input.ok) return error(input.status, input.error);
   const store = await getStore();
-  return json({ flight: await store.setFlight({ participant: me, state: input.state, text: input.text }) });
+  const before = (await store.listFlights()).find((f) => f.participant === me) ?? null;
+  const flight = await store.setFlight({ participant: me, state: input.state, text: input.text });
+  schedulePush(notifyPushForFlight(store, flight, before));
+  return json({ flight });
 });

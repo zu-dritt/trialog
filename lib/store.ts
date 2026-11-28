@@ -14,6 +14,8 @@ import {
   type Attachment, type Author, type DecisionCard, type DecisionPosition, type DecisionStance, type ImageType, type Flight, type FlightState, type Message, type ParticipantStatus, type Poll, type Reaction, type ReadPosition, type Room, type Sender,
 } from './core';
 import { decisionSqlPattern, isDecision } from './decision';
+import { canRecordDecisionPosition, decisionShouldMarkAgreed } from './open-decisions';
+import type { Participant } from './shared';
 import { ConfigError, DEFAULT_PARTICIPANTS, loadRoster, parseParticipants } from './participants';
 import { isDemo } from './demo';
 import type { StreakBreak } from './streak';
@@ -110,10 +112,11 @@ export class PollError extends Error {
   }
 }
 export class DecisionError extends Error {
-  constructor(readonly reason: 'not found' | 'note required') {
+  constructor(readonly reason: 'not found' | 'note required' | 'forbidden') {
     super({
       'not found': 'Decision card not found.',
       'note required': 'An Object needs a note that says why.',
+      'forbidden': 'Only the person this decision is addressed to may Agree or Object.',
     }[reason]);
     this.name = 'DecisionError';
   }
@@ -241,6 +244,20 @@ export type AddReactionResult =
   | { status: 'ok'; message: Message }
   | { status: 'not_found' }
   | { status: 'rate_limited' };
+export type PushPlatform = 'ios';
+export type PushEnv = 'sandbox' | 'production';
+/** A registered iPhone device token. `bundle_id` is the APNs topic for this device. */
+export interface PushDevice {
+  participant: Sender;
+  token: string;
+  platform: PushPlatform;
+  env: PushEnv;
+  bundle_id: string;
+  created_at: string;
+  last_seen_at: string;
+  disabled_at: string | null;
+}
+
 export interface Store {
   ensure(): Promise<void>;
   /**
@@ -340,12 +357,29 @@ export interface Store {
   setFlight(input: { participant: Sender; state: FlightState; text: string }): Promise<Flight>;
   /** Everyone's work in flight, with when each last wrote (within a day), by name. */
   listFlights(): Promise<Flight[]>;
+  /**
+   * Registers or updates an iPhone device token for this participant. Re-registering
+   * refreshes last_seen_at, may move the row to a new participant, and re-enables a disabled token.
+   */
+  upsertPushDevice(input: { participant: Sender; token: string; platform: PushPlatform; env: PushEnv; bundle_id: string }): Promise<PushDevice>;
+  /** Drops this participant's device with this token. Returns true when a row was there. */
+  deletePushDevice(participant: Sender, token: string): Promise<boolean>;
+  /** Marks a token disabled (Apple said it is gone). Returns true when a live row was updated. */
+  disablePushDevice(token: string): Promise<boolean>;
+  /** Active (not disabled) devices for this participant. */
+  listPushDevices(participant: Sender): Promise<PushDevice[]>;
   /** Ends the streak: who stepped in or asked for help, and why (lib/streak.ts). */
   addStreakBreak(input: { participant: Sender; reason: string }): Promise<StreakBreak>;
   /** Every break, oldest first. */
   listStreakBreaks(): Promise<StreakBreak[]>;
   /** The roadmap (lib/roadmap.ts), by column and position. */
   listRoadmap(): Promise<RoadmapItem[]>;
+  /**
+   * A short fingerprint of the whole roadmap: it changes whenever a card is added, removed, moved,
+   * reordered or edited. The roadmap's live stream asks for it every few seconds and reads the
+   * cards only when it changed (playground #970 → «Roadmap updates instantly»).
+   */
+  roadmapVersion(): Promise<string>;
   /** A new card at the end of its column; null when the roadmap is full. */
   /** Adds a card; `attachments` are the caller's own unlinked uploads (else AttachmentLinkError); `top` puts it first in its column. */
   addRoadmapItem(input: { column: RoadmapColumn; title: string; note: string; owner: string | null; by: Sender; description?: string; attachments?: readonly string[]; top?: boolean; reviewer?: string | null }): Promise<RoadmapItem | null>;
@@ -364,8 +398,20 @@ export interface Store {
   releaseRoadmapItem(id: string, by: Sender): Promise<ClaimResult>;
   /** The owner says how far it is (0–100, null to clear) and how, in a short line. Someone else's card: «taken». */
   setRoadmapProgress(id: string, by: Sender, progress: number | null, status: string | null, human?: boolean): Promise<ClaimResult>;
+  /**
+   * «🚀 Build it!» (playground #1185): a card in Next or Later goes to the top of Now, in one locked
+   * step. Anywhere else it is «started» and nothing changes, so a second go finds it already moved.
+   */
+  /**
+   * A participant's one pick in «Next» (migrations/021): the card they'd take next. A new pick
+   * replaces the old one; null clears it. False when the card doesn't exist or isn't in Next.
+   */
+  setRoadmapPick(participant: Sender, itemId: string | null): Promise<boolean>;
+  /** Every participant's pick, oldest first. A pick goes with its card when the card is deleted. */
+  listRoadmapPicks(): Promise<{ participant: string; item_id: string; picked_at: string }[]>;
+  startRoadmapItem(id: string, by: Sender): Promise<{ status: 'ok'; item: RoadmapItem; from: RoadmapColumn } | { status: 'started'; item: RoadmapItem } | { status: 'not_found' }>;
   /** Puts a column in the given order. `ids` must be exactly that column's cards; otherwise null and nothing changes. */
-  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender): Promise<RoadmapItem[] | null>;
+  reorderRoadmap(column: RoadmapColumn, ids: readonly string[], by: Sender, moved?: string | null): Promise<RoadmapItem[] | null>;
   /**
    * Creates a message and an attached poll in one transaction.
    * Returns null when the sender is over the message rate limit.
@@ -406,10 +452,11 @@ export interface Store {
   createDecision(input: NewDecision, roster?: readonly string[], limitPerMin?: number): Promise<{ message: Message; decision: DecisionCard } | null>;
   /**
    * Records or changes the caller's Agree or Object. `roster` is the current participants:
-   * when every one of them has agreed, the message is pinned and agreed_at is set.
+   * when the card should be marked agreed (`decisionShouldMarkAgreed`), the message is pinned and agreed_at is set.
+   * `participants`, when given, enforces that only the addressee may answer a human-addressed card.
    * Returns rate_limited when this sender has recorded 30 positions in the last minute (a no-op change is not counted).
    */
-  recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
+  recordDecisionPosition(cardId: string, participant: Sender, stance: DecisionStance, note: string | null, roster: readonly string[], limitPerMin?: number, participants?: readonly Participant[]): Promise<{ status: 'ok'; decision: DecisionCard; message: Message; reply: Message | null } | { status: 'rate_limited' }>;
   /** Every decision card of one room, or of every room when none is named. For since-poll. */
   listDecisions(room?: string | null): Promise<DecisionCard[]>;
   /**
@@ -772,6 +819,34 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS roadmap_pictures_item ON roadmap_pictures (roadmap_item_id, position)`,
   // Who raised each card (migrations/019-roadmap-raised-by.sql).
   `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS raised_by TEXT CONSTRAINT roadmap_items_raised_by_shape CHECK (raised_by ~ ${NAME_SHAPE})`,
+  // Device tokens for iPhone push (migrations/020-push-devices.sql).
+  `CREATE TABLE IF NOT EXISTS push_devices (
+     token        TEXT PRIMARY KEY,
+     participant  TEXT NOT NULL,
+     platform     TEXT NOT NULL,
+     env          TEXT NOT NULL,
+     bundle_id    TEXT NOT NULL,
+     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     disabled_at  TIMESTAMPTZ,
+     CONSTRAINT push_devices_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     CONSTRAINT push_devices_token_shape CHECK (token ~ '^[0-9a-fA-F]{64,200}$'),
+     CONSTRAINT push_devices_platform_check CHECK (platform IN ('ios')),
+     CONSTRAINT push_devices_env_check CHECK (env IN ('sandbox', 'production')),
+     CONSTRAINT push_devices_bundle_id_shape CHECK (bundle_id ~ '^[A-Za-z]([A-Za-z0-9-]{0,62}\\.)+[A-Za-z0-9-]{1,63}$' AND char_length(bundle_id) <= 255)
+   )`,
+  `CREATE INDEX IF NOT EXISTS push_devices_participant ON push_devices (participant) WHERE disabled_at IS NULL`,
+  // Why a card in Next is where it is (migrations/021-roadmap-moves-picks.sql): who last moved it
+  // (a drag, the column menu or Build it, never an edit), when it entered Next, and each
+  // participant's one pick.
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS moved_by TEXT CONSTRAINT roadmap_items_moved_by_shape CHECK (moved_by ~ ${NAME_SHAPE})`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS moved_at TIMESTAMPTZ`,
+  `ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS entered_next_at TIMESTAMPTZ`,
+  `CREATE TABLE IF NOT EXISTS roadmap_picks (
+     participant  TEXT PRIMARY KEY CONSTRAINT roadmap_picks_participant_shape CHECK (participant ~ ${NAME_SHAPE}),
+     item_id      TEXT NOT NULL REFERENCES roadmap_items (id) ON DELETE CASCADE,
+     picked_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
 ];
 export const SCHEMA_SQL = SCHEMA.join(';\n\n') + ';\n';
 
@@ -960,7 +1035,17 @@ const toFlight = (r: Row): Flight => ({
   updated_at: iso(r.updated_at) as string,
   last_message_at: iso(r.last_message_at) ?? null,
 });
-const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer, raised_by,
+const toPushDevice = (r: Row): PushDevice => ({
+  participant: r.participant as Sender,
+  token: String(r.token),
+  platform: r.platform as PushPlatform,
+  env: r.env as PushEnv,
+  bundle_id: String(r.bundle_id),
+  created_at: iso(r.created_at) as string,
+  last_seen_at: iso(r.last_seen_at) as string,
+  disabled_at: iso(r.disabled_at),
+});
+const ROADMAP_COLS = `id, col, position, title, note, owner, updated_by, updated_at, progress, status, progress_at, description, reviewer, raised_by, moved_by, moved_at, entered_next_at,
   (SELECT coalesce(json_agg(json_build_object('id', a.id, 'content_type', a.content_type,
             'width', a.width, 'height', a.height, 'bytes', a.bytes, 'scale', a.scale) ORDER BY p.position, a.id), '[]'::json)
      FROM roadmap_pictures p JOIN attachments a ON a.id = p.attachment_id WHERE p.roadmap_item_id = roadmap_items.id) AS attachments`;
@@ -981,6 +1066,9 @@ const toRoadmap = (r: Row): RoadmapItem => ({
   description: String(r.description ?? ''),
   reviewer: r.reviewer == null ? null : String(r.reviewer),
   raised_by: r.raised_by == null ? null : String(r.raised_by),
+  moved_by: r.moved_by == null ? null : String(r.moved_by),
+  moved_at: iso(r.moved_at) ?? null,
+  entered_next_at: iso(r.entered_next_at) ?? null,
   attachments: (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments ?? [])).map(toAttachment),
 });
 const toBreak = (r: Row): StreakBreak => ({
@@ -1114,7 +1202,8 @@ async function insertRoadmapItem(tx: RoadmapTx, { column, title, note, owner, by
   if (top) await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = $1::text`, [column]);
   const id = newRoadmapId();
   await tx.query(
-    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer, raised_by) VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $7::text)`,
+    `INSERT INTO roadmap_items (id, col, position, title, note, owner, updated_by, description, reviewer, raised_by, entered_next_at)
+     VALUES ($1::text, $2::text, $3::int, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text, $7::text, CASE WHEN $2::text = 'next' THEN now() END)`,
     [id, column, top ? 0 : Number(next), title, note, owner, by, description, reviewer],
   );
   for (const [position, aid] of attachments.entries()) {
@@ -1593,6 +1682,16 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       await ensure();
       return sortRoadmap((await db.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items`, [])).map(toRoadmap));
     },
+    async roadmapVersion() {
+      await ensure();
+      // One small row: the count and a hash over each card's column, place and last change. A
+      // reorder moves positions without touching updated_at, so the positions are in the hash too.
+      const [row] = await db.query(
+        `SELECT count(*)::int AS n, coalesce(md5(string_agg(id || ':' || col || ':' || position || ':' || (extract(epoch FROM updated_at) * 1000)::bigint, ',' ORDER BY id)), '') AS h FROM roadmap_items`,
+        [],
+      );
+      return `${Number(row?.n ?? 0)}|${String(row?.h ?? '')}`;
+    },
     async addRoadmapItem(input) {
       await ensure();
       return db.transaction(async (tx) => {
@@ -1619,14 +1718,21 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const item = toRoadmap(cur);
         const moved = change.column !== undefined && change.column !== item.column;
         let position = item.position;
-        if (moved) {
+        if (moved && change.column === 'done') {
+          // Done shows the newest first (playground #1086): a finished card goes on top.
+          await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = 'done'`, []);
+          position = 0;
+        } else if (moved) {
           const [{ next }] = await tx.query(`SELECT coalesce(max(position), -1) + 1 AS next FROM roadmap_items WHERE col = $1::text`, [change.column]);
           position = Number(next);
         }
         const [row] = await tx.query(
-          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text, reviewer = $9::text
+          `UPDATE roadmap_items SET col = $2::text, position = $3::int, title = $4::text, note = $5::text, owner = $6::text, updated_by = $7::text, updated_at = now(), description = $8::text, reviewer = $9::text,
+             moved_by = CASE WHEN $10::boolean THEN $7::text ELSE moved_by END,
+             moved_at = CASE WHEN $10::boolean THEN now() ELSE moved_at END,
+             entered_next_at = CASE WHEN $10::boolean AND $2::text = 'next' THEN now() ELSE entered_next_at END
            WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
-          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description, change.reviewer === undefined ? item.reviewer : change.reviewer],
+          [id, change.column ?? item.column, position, change.title ?? item.title, change.note ?? item.note, change.owner === undefined ? item.owner : change.owner, by, change.description ?? item.description, change.reviewer === undefined ? item.reviewer : change.reviewer, moved],
         );
         return toRoadmap(row);
       });
@@ -1687,7 +1793,41 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
       if (pictures.length) await blobs.delete(db, pictures);
       return gone;
     },
-    async reorderRoadmap(column, ids, by) {
+    async setRoadmapPick(participant, itemId) {
+      await ensure();
+      if (itemId === null) {
+        await db.query(`DELETE FROM roadmap_picks WHERE participant = $1::text`, [participant]);
+        return true;
+      }
+      const rows = await db.query(
+        `INSERT INTO roadmap_picks (participant, item_id) SELECT $1::text, id FROM roadmap_items WHERE id = $2::text AND col = 'next'
+         ON CONFLICT (participant) DO UPDATE SET item_id = excluded.item_id, picked_at = now() RETURNING participant`,
+        [participant, itemId],
+      );
+      return rows.length > 0;
+    },
+    async listRoadmapPicks() {
+      await ensure();
+      return (await db.query(`SELECT participant, item_id, picked_at FROM roadmap_picks ORDER BY picked_at, participant`, []))
+        .map((r) => ({ participant: String(r.participant), item_id: String(r.item_id), picked_at: iso(r.picked_at) as string }));
+    },
+    async startRoadmapItem(id, by) {
+      await ensure();
+      return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
+        const [cur] = await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE id = $1::text`, [id]);
+        if (!cur) return { status: 'not_found' as const };
+        const item = toRoadmap(cur);
+        if (item.column !== 'next' && item.column !== 'later') return { status: 'started' as const, item };
+        await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = 'now'`, []);
+        const [row] = await tx.query(
+          `UPDATE roadmap_items SET col = 'now', position = 0, updated_by = $2::text, updated_at = now(), moved_by = $2::text, moved_at = now() WHERE id = $1::text RETURNING ${ROADMAP_COLS}`,
+          [id, by],
+        );
+        return { status: 'ok' as const, item: toRoadmap(row), from: item.column };
+      });
+    },
+    async reorderRoadmap(column, ids, by, moved = null) {
       await ensure();
       return db.transaction(async (tx) => {
         await tx.query(`SELECT pg_advisory_xact_lock(hashtext('roadmap_items'))`, []);
@@ -1696,6 +1836,8 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         for (const [i, id] of ids.entries()) {
           await tx.query(`UPDATE roadmap_items SET position = $2::int, updated_by = $3::text, updated_at = now() WHERE id = $1::text AND position <> $2::int`, [id, i, by]);
         }
+        // Only the card that was dragged counts as moved; the others only made room (migration 021).
+        if (moved) await tx.query(`UPDATE roadmap_items SET moved_by = $2::text, moved_at = now() WHERE id = $1::text`, [moved, by]);
         return sortRoadmap((await tx.query(`SELECT ${ROADMAP_COLS} FROM roadmap_items WHERE col = $1::text`, [column])).map(toRoadmap));
       });
     },
@@ -1713,6 +1855,50 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         [],
       );
       return rows.map(toFlight);
+    },
+    async upsertPushDevice({ participant, token, platform, env, bundle_id }) {
+      await ensure();
+      const [row] = await db.query(
+        `INSERT INTO push_devices (participant, token, platform, env, bundle_id, created_at, last_seen_at, disabled_at)
+         VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, now(), now(), NULL)
+         ON CONFLICT (token) DO UPDATE
+           SET participant = EXCLUDED.participant,
+               platform = EXCLUDED.platform,
+               env = EXCLUDED.env,
+               bundle_id = EXCLUDED.bundle_id,
+               last_seen_at = now(),
+               disabled_at = NULL
+         RETURNING token, participant, platform, env, bundle_id, created_at, last_seen_at, disabled_at`,
+        [participant, token, platform, env, bundle_id],
+      );
+      return toPushDevice(row);
+    },
+    async deletePushDevice(participant, token) {
+      await ensure();
+      const rows = await db.query(
+        `DELETE FROM push_devices WHERE token = $1::text AND participant = $2::text RETURNING token`,
+        [token, participant],
+      );
+      return rows.length > 0;
+    },
+    async disablePushDevice(token) {
+      await ensure();
+      const rows = await db.query(
+        `UPDATE push_devices SET disabled_at = now() WHERE token = $1::text AND disabled_at IS NULL RETURNING token`,
+        [token],
+      );
+      return rows.length > 0;
+    },
+    async listPushDevices(participant) {
+      await ensure();
+      const rows = await db.query(
+        `SELECT token, participant, platform, env, bundle_id, created_at, last_seen_at, disabled_at
+         FROM push_devices
+         WHERE participant = $1::text AND disabled_at IS NULL
+         ORDER BY last_seen_at DESC, token`,
+        [participant],
+      );
+      return rows.map(toPushDevice);
     },
     async listStatuses() {
       await ensure();
@@ -1966,7 +2152,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         return { message: { ...toMessage(rows[0]), attachments: [], poll: null, decision, reactions: [] }, decision };
       });
     },
-    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN, participants = []) {
       await ensure();
       if (stance === 'object' && !note) throw new DecisionError('note required');
       return db.transaction(async (tx) => {
@@ -1974,6 +2160,12 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         await tx.query(`SELECT pg_advisory_xact_lock(${LOCK_ID})`, []);
         const [card] = await tx.query(`SELECT id, message_id, agreed_at FROM decision_cards WHERE id = $1::text FOR UPDATE`, [cardId]);
         if (!card) throw new DecisionError('not found');
+        const [messageRow] = await tx.query(`SELECT ${COLS} FROM messages WHERE id = $1::bigint`, [card.message_id]);
+        if (!messageRow) throw new DecisionError('not found');
+        const addressed = toMessage(messageRow);
+        if (!canRecordDecisionPosition(participant, addressed.recipient, participants)) {
+          throw new DecisionError('forbidden');
+        }
         const [already] = await tx.query(
           `SELECT stance, note FROM decision_positions WHERE card_id = $1::text AND participant = $2::text`,
           [cardId, participant],
@@ -2001,7 +2193,7 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const [cardRow] = await tx.query(`SELECT ${DECISION_JSON} AS decision FROM decision_cards c WHERE c.id = $1::text`, [cardId]);
         const decision = toDecision(cardRow.decision);
         if (!decision) throw new DecisionError('not found');
-        const agreed = decisionIsAgreed(decision, roster);
+        const agreed = decisionShouldMarkAgreed(decision, roster, addressed.recipient, participants);
         const wasAgreed = card.agreed_at != null;
         const [{ at }] = await tx.query(`SELECT now() AS at`, []);
         // When everyone has agreed, the card is a decision: pin it, using one timestamp so we can
@@ -2279,8 +2471,11 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
   const uploads = new Map<string, StoredAttachment & { created: number }>();
   const statuses = new Map<Sender, ParticipantStatus>();
   const flights = new Map<Sender, Omit<Flight, 'last_message_at'>>();
+  const pushDevices = new Map<string, PushDevice>();
   const streakBreaks: StreakBreak[] = [];
   const roadmap = new Map<string, RoadmapItem>();
+  // Each participant's one pick in Next (migrations/021). A pick whose card is gone is not listed.
+  const picks = new Map<string, { item_id: string; picked_at: string }>();
   const meta = ({ id, content_type, width, height, bytes, scale }: Attachment): Attachment => ({ id, content_type, width, height, bytes, scale });
   const noDb = { query: async () => [] }; // the memory blobs don't use a database
   return {
@@ -2499,6 +2694,10 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
     async listRoadmap() {
       return sortRoadmap([...roadmap.values()]).map((i) => ({ ...i }));
     },
+    async roadmapVersion() {
+      const cards = [...roadmap.values()].sort((a, b) => a.id.localeCompare(b.id));
+      return `${cards.length}|${cards.map((i) => `${i.id}:${i.column}:${i.position}:${i.updated_at}:${i.progress ?? ''}:${i.owner ?? ''}:${i.note}`).join(',')}`;
+    },
     async addRoadmapItem({ column, title, note, owner, by, description = '', attachments = [], top = false, reviewer = null }) {
       if (roadmap.size >= ROADMAP_MAX_ITEMS) return null;
       const pictures = attachments.map((aid) => {
@@ -2514,6 +2713,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
         id: newRoadmapId(), column, position: top ? 0 : inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0,
         title, note, owner: owner === null ? null : shaped(owner), updated_by: shaped(by), updated_at: new Date(now()).toISOString(),
         progress: null, status: '', progress_at: null, description, reviewer: reviewer === null ? null : shaped(reviewer), raised_by: shaped(by),
+        moved_by: null, moved_at: null, entered_next_at: column === 'next' ? new Date(now()).toISOString() : null,
         attachments: pictures.map(({ id, content_type, width, height, bytes, scale }) => ({ id, content_type, width, height, bytes, scale })),
       };
       for (const upload of pictures) upload.roadmap_item_id = item.id;
@@ -2531,8 +2731,18 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (!item) return null;
       if (change.column !== undefined && change.column !== item.column) {
         const inCol = [...roadmap.values()].filter((i) => i.column === change.column);
-        item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        if (change.column === 'done') {
+          // Done shows the newest first (playground #1086): a finished card goes on top.
+          for (const other of inCol) other.position += 1;
+          item.position = 0;
+        } else {
+          item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        }
         item.column = change.column;
+        // A move, not an edit (migrations/021): who moved it, and when it entered Next.
+        item.moved_by = shaped(by);
+        item.moved_at = new Date(now()).toISOString();
+        if (change.column === 'next') item.entered_next_at = item.moved_at;
       }
       if (change.title !== undefined) item.title = change.title;
       if (change.note !== undefined) item.note = change.note;
@@ -2577,15 +2787,78 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       item.updated_at = new Date(now()).toISOString();
       return { status: 'ok', item: { ...item } };
     },
-    async reorderRoadmap(column, ids, by) {
+    async setRoadmapPick(participant, itemId) {
+      const who = shaped(participant);
+      if (itemId === null) { picks.delete(who); return true; }
+      if (roadmap.get(itemId)?.column !== 'next') return false;
+      picks.set(who, { item_id: itemId, picked_at: new Date(now()).toISOString() });
+      return true;
+    },
+    async listRoadmapPicks() {
+      return [...picks.entries()].filter(([, p]) => roadmap.has(p.item_id))
+        .map(([participant, p]) => ({ participant, ...p }))
+        .sort((a, b) => a.picked_at.localeCompare(b.picked_at) || a.participant.localeCompare(b.participant));
+    },
+    async startRoadmapItem(id, by) {
+      const item = roadmap.get(id);
+      if (!item) return { status: 'not_found' as const };
+      if (item.column !== 'next' && item.column !== 'later') return { status: 'started' as const, item: { ...item, attachments: [...item.attachments] } };
+      const from = item.column;
+      for (const other of roadmap.values()) if (other.column === 'now') other.position += 1;
+      item.column = 'now';
+      item.position = 0;
+      item.updated_by = shaped(by);
+      item.updated_at = new Date(now()).toISOString();
+      item.moved_by = item.updated_by;
+      item.moved_at = item.updated_at;
+      return { status: 'ok' as const, item: { ...item, attachments: [...item.attachments] }, from };
+    },
+    async reorderRoadmap(column, ids, by, moved = null) {
       const have = [...roadmap.values()].filter((i) => i.column === column).map((i) => i.id);
       if (have.length !== ids.length || !ids.every((id) => have.includes(id))) return null;
       const at = new Date(now()).toISOString();
       ids.forEach((id, i) => { const item = roadmap.get(id)!; if (item.position !== i) { item.position = i; item.updated_by = shaped(by); item.updated_at = at; } });
+      // Only the card that was dragged counts as moved; the others only made room (migration 021).
+      const dragged = moved ? roadmap.get(moved) : undefined;
+      if (dragged) { dragged.moved_by = shaped(by); dragged.moved_at = at; }
       return sortRoadmap([...roadmap.values()].filter((i) => i.column === column)).map((i) => ({ ...i }));
     },
     async listFlights() {
       return [...flights.keys()].sort((a, b) => a.localeCompare(b)).map(flightOf);
+    },
+    async upsertPushDevice({ participant, token, platform, env, bundle_id }) {
+      const at = timestamp();
+      const previous = pushDevices.get(token);
+      const row: PushDevice = {
+        participant: shaped(participant),
+        token,
+        platform,
+        env,
+        bundle_id,
+        created_at: previous?.created_at ?? at,
+        last_seen_at: at,
+        disabled_at: null,
+      };
+      pushDevices.set(token, row);
+      return { ...row };
+    },
+    async deletePushDevice(participant, token) {
+      const row = pushDevices.get(token);
+      if (!row || row.participant !== participant) return false;
+      pushDevices.delete(token);
+      return true;
+    },
+    async disablePushDevice(token) {
+      const row = pushDevices.get(token);
+      if (!row || row.disabled_at) return false;
+      row.disabled_at = timestamp();
+      return true;
+    },
+    async listPushDevices(participant) {
+      return [...pushDevices.values()]
+        .filter((d) => d.participant === participant && !d.disabled_at)
+        .sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || a.token.localeCompare(b.token))
+        .map((d) => ({ ...d }));
     },
     async listStatuses() {
       const current = now();
@@ -2714,7 +2987,7 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const decision = assembleDecision(row);
       return { message: copy(message), decision };
     },
-    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN) {
+    async recordDecisionPosition(cardId, participant, stance, note, roster, limitPerMin = RATE_LIMIT_PER_MIN, participants = []) {
       shaped(participant);
       if (stance === 'object' && !note) throw new DecisionError('note required');
       const row = decisionRows.get(cardId);
@@ -2724,13 +2997,16 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       const same = existing && existing.stance === stance && existing.note === (note ?? null);
       const message = rows.find((m) => m.id === row.message_id);
       if (!message) throw new DecisionError('not found');
+      if (!canRecordDecisionPosition(participant, message.recipient, participants)) {
+        throw new DecisionError('forbidden');
+      }
       if (same) return { status: 'ok' as const, decision: assembleDecision(row), message: copy(message), reply: null };
       const cutoff = now() - 60_000;
       const recent = rows.filter((m) => m.sender === participant && Date.parse(m.created_at) > cutoff).length;
       if (recent >= limitPerMin) return { status: 'rate_limited' as const };
       positionRows.set(key, { card_id: cardId, participant, stance, note: note ?? null, updated_at: timestamp() });
       const current = assembleDecision(row);
-      const agreed = decisionIsAgreed(current, roster);
+      const agreed = decisionShouldMarkAgreed(current, roster, message.recipient, participants);
       const wasAgreed = row.agreed_at != null;
       if (agreed) {
         row.agreed_at = row.agreed_at ?? timestamp();

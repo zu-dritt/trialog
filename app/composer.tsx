@@ -175,12 +175,20 @@ export interface ComposerToolsProps {
   recipients: readonly { name: string; label: string }[];
   emoji: { open: boolean; onOpenChange: (open: boolean) => void; onInsert: (char: string, focusBox: boolean) => void; boxRef: RefObject<HTMLTextAreaElement | null> };
   image: { disabled: boolean; onPick: () => void };
+  /** Only inside the iPhone app (app/dictation.ts): «Speak» while idle, «Stop» while it listens. */
+  dictate?: { listening: boolean; onToggle: () => void };
   decision: { open: boolean; onToggle: () => void };
   poll: { open: boolean; onToggle: () => void };
   expand: { expanded: boolean; onToggle: () => void };
   send: { disabled: boolean; label: string };
   /** The loop and cost guard's ring (app/guard.tsx), after the size button. Only the leading pane has one. */
   guard?: ReactNode;
+  /** The agents' health chips (app/health.tsx), right of the ring. Only the leading pane has them. */
+  health?: ReactNode;
+  /** Open decisions waiting on the person signed in (app/open-decisions.tsx), right of the health chips. Leading pane only. */
+  openDecisions?: ReactNode;
+  /** Today's merged-PR count (app/prs-today.tsx), right of the open-decision chip. Leading pane only. */
+  prsToday?: ReactNode;
   /** The look of the recipient picker, and of every button in the row. */
   fieldClassName: string;
   toolClassName: string;
@@ -193,9 +201,10 @@ export interface ComposerToolsProps {
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, decision, poll, expand, send, guard, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, decision, poll, expand, send, guard, health, openDecisions, prsToday, fieldClassName, toolClassName }: ComposerToolsProps) {
+  const statusChips = Boolean(health || openDecisions || prsToday);
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="relative flex flex-wrap items-center gap-2">
       <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={`${fieldClassName} min-w-0 max-w-full`}>
         <option value="">to everyone</option>
         {recipients.map((r) => <option key={r.name} value={r.name}>to {r.label}</option>)}
@@ -205,6 +214,12 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
         type="button" className={toolClassName} onClick={image.onPick} disabled={image.disabled}
         title="Attach an image (PNG, JPEG or WebP). You can also paste one or drop it here."
       >Image</button>
+      {dictate && (
+        <button
+          type="button" data-dictate="" className={`${toolClassName} ${dictate.listening ? 'border-bad text-bad' : ''}`} onClick={dictate.onToggle}
+          aria-pressed={dictate.listening} title={dictate.listening ? 'Stop listening' : 'Speak: your words go into the box, you read them before Send'}
+        >{dictate.listening ? '■ Stop' : '🎤 Speak'}</button>
+      )}
       <button
         type="button" data-tour="decision" className={toolClassName} onClick={decision.onToggle}
         aria-pressed={decision.open} aria-expanded={decision.open} aria-controls={decision.open ? 'decision-composer' : undefined}
@@ -215,8 +230,12 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, decision, po
       >Poll</button>
       <ExpandButton expanded={expand.expanded} onToggle={expand.onToggle} className={toolClassName} />
       {guard}
-      <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>
-      <button type="submit" className={`${toolClassName} ml-auto flex-none md:ml-0`} disabled={send.disabled}>{send.label}</button>
+      {health}
+      {openDecisions}
+      {prsToday}
+      {/* With the chips the row is full on a computer: the keyboard hint moves into Send's tooltip. */}
+      {!statusChips && <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>}
+      <button type="submit" className={`${toolClassName} ml-auto flex-none ${statusChips ? '' : 'md:ml-0'}`} disabled={send.disabled} title={statusChips ? 'Enter sends · Shift+Enter for a new line' : undefined}>{send.label}</button>
     </div>
   );
 }

@@ -44,6 +44,7 @@ export const POST = safe(async (request: Request, { params }: { params: Promise<
   });
   if (result.status === 'not_found') return error(404, `No message #${id}.`);
   if (result.status === 'not_from_orchestrator') return error(400, 'Build it is for messages from the orchestrator.');
+  if (result.status === 'is_go') return error(400, 'This message is a go, not an idea: its card exists already.');
   if (result.status === 'names_pr') return error(400, 'This message names a pull request: use «🚀 Ship it!» instead.');
   if (result.status === 'full') return error(409, 'The roadmap is full (200 cards). Remove some done cards first.');
   return json({ item: result.item }, result.status === 'created' ? 201 : 200);

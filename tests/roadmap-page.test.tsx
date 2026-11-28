@@ -3,11 +3,11 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { RoadmapBoard, columnOf, placeAt } from '../app/roadmap-board';
+import { RoadmapBoard, buildText, buildable, columnOf, placeAt } from '../app/roadmap-board';
 import { todayLine, type RoadmapItem } from '../lib/roadmap';
 
 const card = (id: string, column: RoadmapItem['column'], position: number, over: Partial<RoadmapItem> = {}): RoadmapItem =>
-  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: null, raised_by: null, ...over });
+  ({ id, column, position, title: `T ${id}`, note: '', owner: null, updated_by: 'claude', updated_at: '2026-11-27T08:00:00.000Z', progress: null, status: '', progress_at: null, description: '', attachments: [], reviewer: null, raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over });
 
 test('a card lands where it is put, from its own column or another', () => {
   assert.deepEqual(placeAt(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
@@ -223,5 +223,55 @@ test('a card says who raised it first, so David knows whom to ask (playground #6
   const twice = renderToStaticMarkup(<RoadmapBoard items={[card('rm_twice000', 'now', 0, { owner: 'grok', reviewer: 'claude', raised_by: 'claude' })]} />);
   assert.equal([...twice.matchAll(/data-role="(raiser|reviewer)"/g)].length, 2, 'both shown (keys by role and name, Grok’s nit)');
   const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_raise000', 'next', 0, { raised_by: 'david', note: '#670' })]} participants={[{ name: 'david', kind: 'human', label: 'Orchestrator', color: 'green' }] as never} />);
-  assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · #670/);
+  assert.match(html, /<span data-role="raiser"[^>]*>Orchestrator<\/span> raised · <a href="\/#m-670"[^>]*>#670<\/a>/);
+});
+
+test('«🚀 Build it!» on cards in Next and Later, only for the orchestrator (#1185)', () => {
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'claude', kind: 'agent', label: 'Claude', color: 'purple' }] as never;
+  const items = [card('rm_now00000', 'now', 0), card('rm_next0000', 'next', 0), card('rm_later000', 'later', 0), card('rm_done0000', 'done', 0)];
+  const board = (me: string) => renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me={me} now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {}, build: async () => true }} />);
+  const buttons = (html: string) => [...html.matchAll(/data-build="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(buttons(board('david')), ['rm_next0000', 'rm_later000']);
+  assert.deepEqual(buttons(board('claude')), [], 'an agent has no go to give');
+  assert.equal(buildable({ column: 'now' }, true), false);
+  // The go names the card; with an owner it goes to them, without one the first claim wins.
+  assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: null }), '🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now). First claim wins.');
+  assert.equal(buildText({ id: 'rm_1', title: 'Two new sounds', owner: 'claude' }), '@claude 🚀 Build it! «Two new sounds» (roadmap card rm_1, now at the top of Now)');
+});
+
+test('a card in Next or Later opens for editing from its title; Save needs a title and a change (#1098)', async () => {
+  const { editState } = await import('../app/compose-idea');
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }] as never;
+  const items = [card('rm_now00000', 'now', 0), card('rm_next0000', 'next', 0), card('rm_later000', 'later', 0), card('rm_done0000', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me="david" now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {}, edit: async () => true, remove: async () => true }} />);
+  assert.deepEqual([...html.matchAll(/data-edit="([^"]+)"/g)].map((m) => m[1]), ['rm_next0000', 'rm_later000']);
+  const plain = renderToStaticMarkup(<RoadmapBoard items={items} participants={people} me="david" now={new Date('2026-11-28T09:00:00Z')} actions={{ place: () => {} }} />);
+  assert.ok(!plain.includes('data-edit='), 'without the actions, titles are plain text');
+  const was = { title: 'Sounds', description: 'Two.' };
+  assert.deepEqual(editState(was, 'Sounds', 'Two.', false), { ready: false, label: 'Save' }, 'nothing changed');
+  assert.deepEqual(editState(was, 'Two new sounds', 'Two.', false), { ready: true, label: 'Save' });
+  assert.deepEqual(editState(was, '  ', 'Two.', false), { ready: false, label: 'Save' }, 'a title is needed');
+  assert.deepEqual(editState(was, 'Sounds', 'Two, a chime.', true), { ready: false, label: 'Saving…' });
+});
+
+test('Delete asks in the edit window, not in the browser\'s box (#1306)', async () => {
+  const { EditCard } = await import('../app/compose-idea');
+  const src = readFileSync(new URL('../app/compose-idea.tsx', import.meta.url), 'utf8');
+  assert.ok(!src.includes('window.confirm'), 'no browser confirm box');
+  assert.match(src, /Keep it/);
+  assert.match(src, /Delete for good/);
+  const html = renderToStaticMarkup(<EditCard card={{ id: 'rm_x0000000', title: 'Two new sounds', description: '' }} onSave={async () => true} onDelete={async () => true} onClose={() => {}} />);
+  assert.match(html, /data-delete-card="rm_x0000000"/, 'first a plain Delete');
+  assert.ok(!html.includes('data-delete-for-good'), 'nothing is deleted by the first click');
+});
+
+test('a card in Next says who last placed or changed it, and when (#1327)', async () => {
+  const { whyHere, shortAge } = await import('../app/roadmap-board');
+  const people = [{ name: 'david', kind: 'human', label: 'David', color: 'blue' }, { name: 'grok', kind: 'agent', label: 'Grok', color: 'orange' }] as never;
+  const now = Date.parse('2026-11-28T10:00:00Z');
+  assert.equal(whyHere({ column: 'next', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), 'Last change: David · 12 min ago');
+  assert.equal(whyHere({ column: 'now', updated_by: 'david', updated_at: '2026-11-28T09:48:00Z' }, people, now), null, 'only in Next');
+  assert.deepEqual(['2026-11-28T10:00:00Z', '2026-11-28T08:58:00Z', '2026-11-25T10:00:00Z'].map((t) => shortAge(t, now)), ['just now', '1 h ago', '3 d ago']);
+  const html = renderToStaticMarkup(<RoadmapBoard items={[card('rm_next0000', 'next', 0, { updated_by: 'grok' })]} participants={people} now={new Date(now)} />);
+  assert.match(html, /data-why=""[^>]*>Last change: Grok · /);
 });

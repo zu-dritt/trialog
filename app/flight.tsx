@@ -7,8 +7,9 @@
 // On a phone only the dots and names fit; a tap on a name shows its text as a tooltip (title).
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { REPO, shortLabel } from './links';
-import { allMerged, settledByMerge, useMergedPrs } from './merged';
+import { HUB_WINDOW, REPO, messageHref, shortLabel, splitMessageRefs } from './links';
+import { allMerged, useMergedPrs } from './merged';
+import { flightSteps, waitingOn, type WaitOnHuman } from './waits';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
 export const FLIGHT_POLL_MS = 15_000;
@@ -57,36 +58,7 @@ export function flightSentence(f: Flight, now: number, shown: string): string {
   return `${shown}: ${WORD[tone]} «${f.text}» · ${flightAge(f.since, now)}`;
 }
 
-/**
- * What waits on a human: agents whose flight is «waiting» on that person. An agent says so by
- * starting its text with the human's name or label and a colon: «David: merge PR 36». The wait ends
- * by itself when the agent moves on (a new flight), so nothing has to be cleared by hand.
- */
-export interface WaitOnHuman { by: string; text: string; since: string }
-/**
- * A flight's text split into its steps: «David: merge PR 37; Grok: review PR 96» → one step for
- * David, one for Grok. A step starts with «Name:» (optionally «waiting for/on Name:»). The colon
- * must be followed by a space, so an address (https://…) never starts a step. Text without a name
- * is one step with name null.
- */
-export function flightSteps(text: string): { name: string | null; text: string }[] {
-  const named = /^\s*(?:waiting\s+(?:for|on)\s+)?@?([A-Za-z][\w .'-]{0,39}):\s+(.+)$/is;
-  return text.split(/;\s+(?=(?:waiting\s+(?:for|on)\s+)?@?[A-Za-z][\w .'-]{0,39}:\s)/i).map((part) => {
-    const m = named.exec(part);
-    return m ? { name: m[1].trim(), text: m[2].trim() } : { name: null, text: part.trim() };
-  }).filter((step) => step.text);
-}
-
-export function waitingOn(flights: readonly Flight[], human: Pick<Participant, 'name' | 'label'>, merged: ReadonlySet<number> = new Set(), repo: string | null = REPO): WaitOnHuman[] {
-  const names = [human.name, human.label].filter(Boolean).map((n) => String(n).toLowerCase());
-  return flights.flatMap((f) => {
-    if (f.state !== 'waiting' || f.participant === human.name) return [];
-    // Only the steps addressed to this human wait on them; «Grok: review PR 96» in the same flight does not (#743).
-    // A step about PRs that are all merged is done, whatever the note still says (#813).
-    return flightSteps(f.text).filter((step) => step.name !== null && names.includes(step.name.toLowerCase()) && !settledByMerge(step.text, merged, repo))
-      .map((step) => ({ by: f.participant, text: step.text, since: f.since }));
-  });
-}
+export { flightSteps, waitingOn, type WaitOnHuman } from './waits';
 
 /** A participant named in a step, by name or label, for its colour. */
 const named = (name: string, participants: readonly Participant[]): Participant | undefined =>
@@ -117,7 +89,10 @@ export function FlightText({ text, hidden = false }: { text: string; hidden?: bo
   const parts = text.split(/(https?:\/\/[^\s<>«»"]+[^\s<>«»".,;:!?)])/);
   return <>{parts.map((p, i) => (i % 2
     ? <a key={i} href={p} tabIndex={hidden ? -1 : undefined} target="_blank" rel="noopener noreferrer" title={p} className="underline decoration-dotted underline-offset-2">{flightLinkLabel(p)}</a>
-    : p))}</>;
+    : <Fragment key={i}>{splitMessageRefs(p).map((q, j) => (typeof q === 'string'
+      ? q
+      // «#936» in a note or a wait: the hub at that message (playground #970).
+      : <a key={j} href={messageHref(q.id)} target={HUB_WINDOW} data-message-ref={q.id} tabIndex={hidden ? -1 : undefined} title={`Go to message ${q.typed}`} className="underline decoration-dotted underline-offset-2">{q.typed}</a>))}</Fragment>))}</>;
 }
 
 /** The words for a human's entry: what waits on them, or that nothing does. */

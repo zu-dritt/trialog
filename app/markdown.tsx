@@ -13,7 +13,7 @@ import { createContext, useContext, useMemo, type ComponentPropsWithoutRef } fro
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitMentions } from './mentions';
-import { REPO, REPO_PREFIXES, cardText, isExternal, pullRequestUrl, repoForPrefix, shortLabel, splitPullRequests } from './links';
+import { HUB_WINDOW, REPO, REPO_PREFIXES, cardText, isExternal, messageHref, messageIdOfHash, pullRequestUrl, repoForPrefix, shortLabel, splitMessageRefs, splitPullRequests } from './links';
 import { PrLink, prNumberOf } from './pr-card';
 
 const LINK_REL = 'noopener noreferrer nofollow';
@@ -28,6 +28,11 @@ function Link({ node: _node, href, children, ...props }: ComponentPropsWithoutRe
   // A bare address (its text is the address itself) reads short. A link that leaves the hub gets a
   // hovercard (on hover and keyboard focus) with the site and the rest of the address; it is drawn by
   // CSS from data-card (.hovercard in globals.css), so no extra text lands in the message.
+  // «#966»: a jump to that message in the hub (playground #970), in the hub's own tab.
+  const ref = href.startsWith('/#') ? messageIdOfHash(href.slice(1)) : null;
+  if (ref !== null) {
+    return <a {...props} href={href} target={HUB_WINDOW} data-message-ref={ref} title={`Go to message #${ref}`}>{children}</a>;
+  }
   const bare = textOf(children) === href;
   const external = isExternal(href);
   // A pull request of this hub's repository: its own hovercard with the PR's summary (app/pr-card.tsx).
@@ -142,11 +147,29 @@ export function remarkPullRequests(repo: string | null, prefixes: Readonly<Recor
   return () => (tree: MdNode) => { walk(tree); };
 }
 
+/**
+ * Turns «#966» in the text into a link that jumps to message 966 (playground #970). Like
+ * remarkPullRequests, it leaves links and code alone, so «PR #116» stays the pull request's link.
+ */
+export function remarkMessageRefs() {
+  const walk = (node: MdNode) => {
+    if (!node.children || node.type === 'link' || node.type === 'linkReference') return;
+    node.children = node.children.flatMap((child): MdNode[] => {
+      if (child.type !== 'text' || !child.value || !/#\d/.test(child.value)) { walk(child); return [child]; }
+      return splitMessageRefs(child.value).map((part): MdNode => (typeof part === 'string'
+        ? { type: 'text', value: part }
+        : { type: 'link', url: messageHref(part.id), children: [{ type: 'text', value: part.typed }] } as MdNode));
+    });
+  };
+  return () => (tree: MdNode) => { walk(tree); };
+}
+
 export function MessageBody({ text, names = [], repo = REPO, prefixes = REPO_PREFIXES }: { text: string; names?: readonly string[]; repo?: string | null; prefixes?: Readonly<Record<string, string>> }) {
   const plugins = useMemo(() => [
     remarkGfm,
     ...(names.length ? [remarkMentions(names)] : []),
     remarkPullRequests(repo, prefixes),
+    remarkMessageRefs(),
   ], [names, repo, prefixes]);
   return <ReactMarkdown remarkPlugins={plugins} components={mdComponents}>{text}</ReactMarkdown>;
 }

@@ -20,7 +20,9 @@ test('a change needs something to change; an order needs every id once', () => {
   assert.deepEqual(parseItemChange({ column: 'done' }, NAMES), { ok: true, change: { column: 'done' } });
   assert.deepEqual(parseItemChange({ owner: null }, NAMES), { ok: true, change: { owner: null } });
   assert.equal(parseItemChange({}, NAMES).ok, false);
-  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] });
+  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'] }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: null });
+  assert.deepEqual(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: 'rm_bbbbbbbb' }), { ok: true, column: 'next', ids: ['rm_aaaaaaaa', 'rm_bbbbbbbb'], moved: 'rm_bbbbbbbb' });
+  assert.equal(parseOrder({ column: 'next', ids: ['rm_aaaaaaaa'], moved: 'rm_bbbbbbbb' }).ok, false, 'the dragged card is one of the ids');
   for (const bad of [{ column: 'next', ids: ['rm_aaaaaaaa', 'rm_aaaaaaaa'] }, { column: 'next', ids: ['nope'] }, { column: 'x', ids: [] }, { column: 'next' }]) {
     assert.equal(parseOrder(bad).ok, false, JSON.stringify(bad));
   }
@@ -48,7 +50,7 @@ async function sameRules(store: Store) {
   const moved = await store.updateRoadmapItem(a.id, { column: 'done', note: 'shipped' }, 'claude');
   assert.equal(moved?.column, 'done');
   assert.equal(moved?.note, 'shipped');
-  assert.deepEqual(await titles(), ['done:D', 'done:A', 'next:C', 'next:B'], 'a new column puts the card at its end');
+  assert.deepEqual(await titles(), ['done:A', 'done:D', 'next:C', 'next:B'], 'a finished card goes on top of Done (playground #1086); other columns add at the end');
   assert.equal(await store.updateRoadmapItem('rm_00000000', { title: 'x' }, 'claude'), null);
   assert.equal(await store.deleteRoadmapItem(b.id), true);
   assert.equal(await store.deleteRoadmapItem(b.id), false);
@@ -330,4 +332,152 @@ test('Grok\'s nits on PR 78: no side door for owners on POST; a claim that keeps
   const page = readFileSync(new URL('../app/roadmap/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /\[\.\.\.note\]\.length > ROADMAP_NOTE_MAX/, 'a too-long note is refused before the round trip');
   assert.match(page, /res\.status === 409 && data\.owner\)[^]*else if \(res\.status === 409\) setError\(data\.error/, 'a done card says so, not «Already …’s»');
+});
+
+test('a claim or progress moves a card into Now; Done stays Done; clearing progress moves nothing (playground #1081)', async () => {
+  const claimRoute = (await import('../app/api/roadmap/[id]/claim/route')) as unknown as { POST: Handler; DELETE: Handler };
+  const progressRoute = (await import('../app/api/roadmap/[id]/progress/route')) as unknown as { PUT: Handler };
+  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+  const add = async (column: string, title: string) => ((await (await list.POST(req('david', 'POST', { column, title }))).json()) as { item: RoadmapItem }).item;
+  const columnOf = async (id: string) => ((await (await list.GET(req('david', 'GET'))).json()) as { items: RoadmapItem[] }).items.find((i) => i.id === id)!.column;
+
+  const fromNext = await add('next', 'Claimed from Next');
+  const claimed = await claimRoute.POST(req('claude', 'POST', {}, `/api/roadmap/${fromNext.id}/claim`), ctx(fromNext.id));
+  assert.equal(((await claimed.json()) as { item: RoadmapItem }).item.column, 'now', 'the answer already says Now');
+  assert.equal(await columnOf(fromNext.id), 'now');
+
+  const fromLater = await add('later', 'Progress from Later');
+  await claimRoute.DELETE(req('claude', 'DELETE', undefined, `/api/roadmap/${fromNext.id}/claim`), ctx(fromNext.id));
+  const humanProgress = await progressRoute.PUT(req('david', 'PUT', { progress: 20, status: 'started' }, `/api/roadmap/${fromLater.id}/progress`), ctx(fromLater.id));
+  assert.equal(((await humanProgress.json()) as { item: RoadmapItem }).item.column, 'now');
+
+  const cleared = await add('next', 'Progress cleared');
+  await progressRoute.PUT(req('david', 'PUT', { progress: null }, `/api/roadmap/${cleared.id}/progress`), ctx(cleared.id));
+  assert.equal(await columnOf(cleared.id), 'next', 'clearing the bar is no sign of work');
+
+  const done = await add('done', 'Already done');
+  await progressRoute.PUT(req('david', 'PUT', { progress: 100 }, `/api/roadmap/${done.id}/progress`), ctx(done.id));
+  assert.equal(await columnOf(done.id), 'done', 'Done stays Done');
+});
+
+async function doneNewestFirst(store: Store) {
+  const a = (await store.addRoadmapItem({ column: 'now', title: 'Finished first', note: '', owner: null, by: 'claude' }))!;
+  const b = (await store.addRoadmapItem({ column: 'now', title: 'Finished second', note: '', owner: null, by: 'grok' }))!;
+  const c = (await store.addRoadmapItem({ column: 'next', title: 'Finished third', note: '', owner: null, by: 'claude' }))!;
+  await store.updateRoadmapItem(a.id, { column: 'done' }, 'claude');
+  await store.updateRoadmapItem(b.id, { column: 'done' }, 'grok');
+  await store.updateRoadmapItem(c.id, { column: 'done' }, 'claude');
+  const done = (await store.listRoadmap()).filter((i) => i.column === 'done').map((i) => i.title);
+  assert.deepEqual(done, ['Finished third', 'Finished second', 'Finished first'], 'the newest finished card is on top');
+  // Moving out of Done and editing a done card leave the order alone.
+  await store.updateRoadmapItem(b.id, { note: 'live (PR 1)' }, 'grok');
+  assert.deepEqual((await store.listRoadmap()).filter((i) => i.column === 'done').map((i) => i.title)[1], 'Finished second');
+  // Other columns still add at the end.
+  const d = (await store.addRoadmapItem({ column: 'now', title: 'Back to work', note: '', owner: null, by: 'claude' }))!;
+  await store.updateRoadmapItem(d.id, { column: 'next' }, 'claude');
+  const next = (await store.listRoadmap()).filter((i) => i.column === 'next');
+  assert.equal(next[next.length - 1].title, 'Back to work');
+}
+
+test('Done shows the newest first (memory) (playground #1086)', async () => { await doneNewestFirst(createMemoryStore()); });
+test('Done shows the newest first (PGlite) (playground #1086)', async () => {
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await doneNewestFirst(store);
+});
+
+async function startRules(store: Store) {
+  const now = (await store.addRoadmapItem({ column: 'now', title: 'Running', note: '', owner: 'grok', by: 'grok' }))!;
+  const next = (await store.addRoadmapItem({ column: 'next', title: 'Sounds', note: '', owner: null, by: 'david' }))!;
+  const later = (await store.addRoadmapItem({ column: 'later', title: 'Retro', note: '', owner: null, by: 'david' }))!;
+  const first = await store.startRoadmapItem(next.id, 'david');
+  assert.equal(first.status, 'ok');
+  assert.deepEqual(first.status === 'ok' && [first.item.column, first.item.position, first.from, first.item.updated_by], ['now', 0, 'next', 'david']);
+  const nowOrder = (await store.listRoadmap()).filter((i) => i.column === 'now').map((i) => i.title);
+  assert.deepEqual(nowOrder, ['Sounds', 'Running'], 'at the top of Now, the running card below');
+  assert.equal((await store.startRoadmapItem(next.id, 'david')).status, 'started', 'a second go finds it moved');
+  assert.equal((await store.startRoadmapItem(now.id, 'david')).status, 'started');
+  assert.equal((await store.startRoadmapItem(later.id, 'david')).status, 'ok', 'Later works too');
+  assert.equal((await store.startRoadmapItem('rm_00000000', 'david')).status, 'not_found');
+}
+
+test('«🚀 Build it!» moves a card from Next or Later to the top of Now once (memory and PGlite)', async () => {
+  await startRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await startRules(store);
+});
+
+test('API: «🚀 Build it!» is the orchestrator\'s; it posts the go once and moves the card to Now', async () => {
+  const route = (await import('../app/api/roadmap/[id]/build-it/route')) as unknown as { POST: Handler };
+  const messages = (await import('../app/api/messages/route')) as unknown as { GET: Handler };
+  const card = ((await (await list.POST(req('david', 'POST', { column: 'next', title: 'Two new sounds' }))).json()) as { item: RoadmapItem }).item;
+  const ctx = { params: Promise.resolve({ id: card.id }) };
+  const path = `/api/roadmap/${card.id}/build-it`;
+  assert.equal((await route.POST(req(undefined, 'POST', undefined, path), ctx)).status, 401);
+  assert.equal((await route.POST(req('claude', 'POST', undefined, path), ctx)).status, 403, 'an agent has no go to give');
+  const res = await route.POST(req('david', 'POST', undefined, path), ctx);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { item: RoadmapItem; message: { sender: string; text: string } };
+  assert.equal(body.item.column, 'now');
+  assert.equal(body.message.sender, 'david');
+  assert.match(body.message.text, new RegExp(`^🚀 Build it! «Two new sounds» \\(roadmap card ${card.id}`));
+  const again = await route.POST(req('david', 'POST', undefined, path), ctx);
+  assert.equal(again.status, 409, 'a second go is refused');
+  const all = ((await (await messages.GET(req('david', 'GET', undefined, '/api/messages?limit=50'))).json()) as { messages: { text: string }[] }).messages;
+  assert.equal(all.filter((m) => m.text.includes(`roadmap card ${card.id}`)).length, 1, 'exactly one go in the stream');
+  assert.equal((await route.POST(req('david', 'POST', undefined, '/api/roadmap/rm_00000000/build-it'), { params: Promise.resolve({ id: 'rm_00000000' }) })).status, 404);
+});
+
+test('API: a full description with umlauts and emoji can be saved in an edit (#1098)', async () => {
+  const card = ((await (await list.POST(req('david', 'POST', { column: 'later', title: 'Grüsse' }))).json()) as { item: RoadmapItem }).item;
+  const description = 'Grüsse aus Zürich 🚀 '.repeat(200).slice(0, 4000);
+  const res = await one.PATCH(req('david', 'PATCH', { title: 'Grüsse, länger', description }, `/api/roadmap/${card.id}`), { params: Promise.resolve({ id: card.id }) });
+  assert.equal(res.status, 200, 'more than 4 KB of body for 4000 characters');
+  const item = ((await res.json()) as { item: RoadmapItem }).item;
+  assert.equal(item.title, 'Grüsse, länger');
+  assert.equal(item.description, description);
+});
+
+async function moveAndPickRules(store: Store) {
+  const a = (await store.addRoadmapItem({ column: 'next', title: 'A', note: '', owner: null, by: 'grok' }))!;
+  const b = (await store.addRoadmapItem({ column: 'next', title: 'B', note: '', owner: null, by: 'grok' }))!;
+  const later = (await store.addRoadmapItem({ column: 'later', title: 'L', note: '', owner: null, by: 'claude' }))!;
+  assert.ok(a.entered_next_at, 'a card added to Next says when it entered');
+  assert.equal(later.entered_next_at, null, 'not in Next: no time');
+  assert.deepEqual([a.moved_by, a.moved_at], [null, null], 'a new card has not been moved');
+  // An edit is not a move.
+  const edited = (await store.updateRoadmapItem(a.id, { title: 'A2' }, 'david'))!;
+  assert.deepEqual([edited.moved_by, edited.updated_by], [null, 'david']);
+  // A drag is a move, of the dragged card only: the others just made room.
+  const order = (await store.reorderRoadmap('next', [b.id, a.id], 'david', b.id))!;
+  assert.deepEqual(order.map((i) => [i.title, i.moved_by]), [['B', 'david'], ['A2', null]]);
+  assert.ok(order[0].moved_at);
+  // An order without a named card (an older client) moves nobody.
+  const plain = (await store.reorderRoadmap('next', [a.id, b.id], 'grok'))!;
+  assert.deepEqual(plain.map((i) => i.moved_by), [null, 'david']);
+  // The column menu is a move too, and entering Next sets the time.
+  const moved = (await store.updateRoadmapItem(later.id, { column: 'next' }, 'david'))!;
+  assert.equal(moved.moved_by, 'david');
+  assert.ok(moved.entered_next_at);
+  // Build it is a move.
+  const started = await store.startRoadmapItem(b.id, 'david');
+  assert.ok(started.status === 'ok' && started.item.moved_by === 'david');
+  // Picks: one per participant, only in Next, replaced, cleared, gone with the card.
+  assert.equal(await store.setRoadmapPick('claude', a.id), true);
+  assert.equal(await store.setRoadmapPick('grok', b.id), false, 'B is in Now now');
+  assert.equal(await store.setRoadmapPick('grok', 'rm_00000000'), false);
+  assert.equal(await store.setRoadmapPick('grok', later.id), true);
+  assert.equal(await store.setRoadmapPick('claude', later.id), true, 'a new pick replaces the old one');
+  assert.deepEqual((await store.listRoadmapPicks()).map((p) => `${p.participant}:${p.item_id}`).sort(), [`claude:${later.id}`, `grok:${later.id}`]);
+  assert.equal(await store.setRoadmapPick('grok', null), true);
+  assert.equal(await store.deleteRoadmapItem(later.id), true);
+  assert.deepEqual(await store.listRoadmapPicks(), [], 'a pick goes with its card');
+}
+
+test('moves and picks (migration 021): a drag, the column menu and Build it are moves, an edit is not; one pick each (memory and PGlite)', async () => {
+  await moveAndPickRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await moveAndPickRules(store);
 });

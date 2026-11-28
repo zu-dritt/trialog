@@ -8,7 +8,7 @@ import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, u
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
-import { ComposeIdea, type NewIdea } from './compose-idea';
+import { ComposeIdea, EditCard, type CardEdit, type NewIdea } from './compose-idea';
 import { REPO, pullRequestNumbers } from './links';
 import { allMerged, settledByMerge } from './merged';
 import type { Attachment } from '../lib/shared';
@@ -61,7 +61,16 @@ export interface BoardActions {
   upload?: (file: Blob, pasted: boolean) => Promise<Attachment>;
   /** «🚀 Ship it!» from a card: posts the go as a message with the 🚀 on it; true when sent. */
   ship?: (card: RoadmapItem, prs: readonly number[]) => Promise<boolean>;
+  /** «🚀 Build it!» on a card in Next or Later (playground #1184/#1185): posts the go and moves the card to the top of Now; true when sent. */
+  build?: (card: RoadmapItem) => Promise<boolean>;
+  /** Changes a card's title and text (a card in Next or Later, playground #1098); true when saved. */
+  edit?: (id: string, change: CardEdit) => Promise<boolean>;
+  /** Deletes a card; true when it is gone. */
+  remove?: (id: string) => Promise<boolean>;
 }
+
+/** Cards that can be edited: not yet started (Next or Later). Now and Done are history in the making. */
+export const editable = (card: Pick<RoadmapItem, 'column'>): boolean => card.column === 'next' || card.column === 'later';
 
 /**
  * The pull requests a card can be shipped as, from the board (playground #617): a card in review,
@@ -88,6 +97,33 @@ export function boardStatus(card: Pick<RoadmapItem, 'column' | 'note' | 'owner' 
 /** The message a Ship it from the board posts; the 🚀 on it is the go, as on any message. */
 export function shipText(card: Pick<RoadmapItem, 'title'>, prs: readonly number[]): string {
   return `🚀 Ship it! ${prs.map((n) => `PR ${n}`).join(', ')} (from the roadmap card «${card.title}»)`;
+}
+
+export { buildText } from '../lib/build-it';
+
+/** Whether a card gets the Build it button: the orchestrator's, on a card not yet started (Next or Later). */
+export function buildable(card: Pick<RoadmapItem, 'column'>, human: boolean): boolean {
+  return human && (card.column === 'next' || card.column === 'later');
+}
+
+/** «just now», «12 min», «3 h», «2 d»: short enough for one line on a card. */
+export function shortAge(iso: string, now: number): string {
+  const min = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/**
+ * Why a card in «Next» stands where it does (playground #1327, slice 1 of #1337), from what a card
+ * already stores: who last placed or changed it, and when. A card that waits on a human already
+ * says so with its red light. Slice 2 (a migration, hub decision 1338) will tell a drag from an
+ * edit, and add picks and «Oldest».
+ */
+export function whyHere(card: Pick<RoadmapItem, 'column' | 'updated_by' | 'updated_at'>, participants: readonly Participant[], now: number): string | null {
+  if (card.column !== 'next') return null;
+  return `Last change: ${labelOf(card.updated_by, participants)} · ${shortAge(card.updated_at, now)}`;
 }
 
 /**
@@ -157,6 +193,9 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   // A go on its way: a second click before the first answer must not post a second go (Grok's nit).
   const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
   const human = participants.some((p) => p.name === me && p.kind === 'human');
+  // The card open in the edit window, if any.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editCard = editing ? items.find((i) => i.id === editing) ?? null : null;
   const drop = (e: DragEvent, column: RoadmapColumn, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/plain');
@@ -165,6 +204,10 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
   };
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
+      {editCard && actions?.edit && actions.remove && (
+        <EditCard key={editCard.id} card={editCard} busy={busy} onClose={() => setEditing(null)}
+          onSave={(change) => actions.edit!(editCard.id, change)} onDelete={() => actions.remove!(editCard.id)} />
+      )}
       {ROADMAP_COLUMNS.map((column) => {
         const cards = columnOf(items, column);
         return (
@@ -190,7 +233,10 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                   <div className="flex items-start gap-2">
                     <span className="w-5 flex-none pt-0.5 text-right text-xs tabular-nums text-muted">{index + 1}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold leading-snug">{card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
+                      <div className="text-sm font-semibold leading-snug">{actions?.edit && editable(card)
+                        ? <button type="button" data-edit={card.id} draggable={false} onClick={() => setEditing(card.id)} title="Edit or delete this card"
+                            className="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline hover:decoration-dotted">{card.title} <span aria-hidden="true" className="text-xs font-normal text-muted">✎</span></button>
+                        : card.title}{(() => { const st = boardStatus(card, at, humans, merged); return st && <CardLed status={st} />; })()}</div>
                       {(card.note || card.owner || card.reviewer || card.raised_by) && (
                         <div className="mt-0.5 text-xs text-muted">
                           {cardRoles(card, participants).map((r, i) => (
@@ -199,6 +245,13 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                           {(card.owner || card.reviewer || card.raised_by) && card.note && ' · '}<FlightText text={card.note} />
                         </div>
                       )}
+                      {(() => {
+                        const why = whyHere(card, participants, at);
+                        return why && (
+                          <div data-why="" title="Who last placed or changed this card. Coming next: a drag shown apart from an edit, and each agent's pick."
+                            className="mt-0.5 whitespace-nowrap text-[11px] text-muted">{why}</div>
+                        );
+                      })()}
                       <ProgressBar card={card} now={at} />
                       <CardDetails card={card} load={loadImage} />
                       {(() => {
@@ -220,6 +273,18 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                           </button>
                         );
                       })()}
+                      {actions?.build && buildable(card, human) && (
+                        <button type="button" data-build={card.id} disabled={busy || sending.has(card.id)} draggable={false}
+                          onClick={() => {
+                            if (sending.has(card.id)) return;
+                            setSending((s) => new Set(s).add(card.id));
+                            void actions.build!(card).finally(() => setSending((s) => { const n = new Set(s); n.delete(card.id); return n; }));
+                          }}
+                          title="Your go: posts «🚀 Build it!» for this card in the hub, which wakes the agents, and moves the card to the top of Now."
+                          className="mt-1.5 mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#3fb950] bg-[#3fb950]/15 px-2 py-0.5 text-xs font-semibold text-[#56d364] hover:bg-[#3fb950]/25 disabled:opacity-50">
+                          🚀 Build it!
+                        </button>
+                      )}
                       {(() => {
                         // A card that waits on a human, with an address in its note: one click to where it is unblocked.
                         const href = unblockHref(card, boardStatus(card, at, humans, merged));

@@ -10,7 +10,8 @@ export const STREAK_REASON_MAX_LENGTH = 200;
 export const STREAK_CACHE_MS = 5 * 60_000;
 const MAX_PAGES = 5;
 
-export interface Merge { number: number; title: string; merged_at: string }
+/** `branch` is the pull request's own branch (head), when GitHub says; «claude/push-logs» shows who wrote it. */
+export interface Merge { number: number; title: string; merged_at: string; branch?: string }
 export interface StreakBreak { id: number; participant: string; reason: string; created_at: string }
 
 /** One point of the timeline: the streak right after a merge or a break. */
@@ -70,7 +71,6 @@ export function parseStreakBreak(body: unknown): { ok: true; reason: string } | 
   return { ok: true, reason };
 }
 
-/** Merged pull requests into `base`, oldest first, from GitHub's public API (up to 500). */
 /**
  * Optional: a GitHub token (read-only is enough) lifts the limit from 60 to 5,000 requests an hour.
  * TRIALOG_GITHUB_TOKEN; without it the public API is used.
@@ -80,17 +80,22 @@ export function githubHeaders(env: Record<string, string | undefined> = process.
   return { Accept: 'application/vnd.github+json', 'User-Agent': 'trialog-hub', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 }
 
-export async function fetchMerges(repo: string, base: string, fetchImpl: typeof fetch = fetch, headers: Record<string, string> = githubHeaders()): Promise<Merge[]> {
+/** Merged pull requests, oldest first (up to 500). `base` limits the list to that branch; `null` reads every base. */
+export async function fetchMerges(repo: string, base: string | null, fetchImpl: typeof fetch = fetch, headers: Record<string, string> = githubHeaders()): Promise<Merge[]> {
   const merges: Merge[] = [];
+  const baseQ = base ? `&base=${encodeURIComponent(base)}` : '';
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `https://api.github.com/repos/${repo}/pulls?state=closed&base=${encodeURIComponent(base)}&per_page=100&page=${page}`;
+    const url = `https://api.github.com/repos/${repo}/pulls?state=closed${baseQ}&per_page=100&page=${page}`;
     const res = await fetchImpl(url, { headers, cache: 'no-store' });
     if (res.status === 403 || res.status === 429) throw new Error(`GitHub's hourly limit is reached (${res.status}); set TRIALOG_GITHUB_TOKEN to raise it`);
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
     const rows = (await res.json()) as unknown;
     if (!Array.isArray(rows)) throw new Error('GitHub answered something that is not a list');
-    for (const r of rows as { number?: unknown; title?: unknown; merged_at?: unknown }[]) {
-      if (typeof r.number === 'number' && typeof r.merged_at === 'string') merges.push({ number: r.number, title: String(r.title ?? ''), merged_at: r.merged_at });
+    for (const r of rows as { number?: unknown; title?: unknown; merged_at?: unknown; head?: { ref?: unknown } | null }[]) {
+      if (typeof r.number === 'number' && typeof r.merged_at === 'string') {
+        const branch = typeof r.head?.ref === 'string' ? r.head.ref : undefined;
+        merges.push({ number: r.number, title: String(r.title ?? ''), merged_at: r.merged_at, ...(branch ? { branch } : {}) });
+      }
     }
     if (rows.length < 100) break;
   }
@@ -99,11 +104,11 @@ export async function fetchMerges(repo: string, base: string, fetchImpl: typeof 
 
 const cache = new Map<string, { at: number; merges: Merge[] }>();
 
-/** fetchMerges with a five-minute cache per repository and branch; on a failure the last good list is used. */
-export async function cachedMerges(repo: string, base: string, now = Date.now(), fetchImpl: typeof fetch = fetch): Promise<{ merges: Merge[]; problem: string | null }> {
-  const key = `${repo}\0${base}`;
+/** fetchMerges with a cache per repository and branch (`maxAge`, default five minutes); on a failure the last good list is used. */
+export async function cachedMerges(repo: string, base: string | null, now = Date.now(), fetchImpl: typeof fetch = fetch, maxAge = STREAK_CACHE_MS): Promise<{ merges: Merge[]; problem: string | null }> {
+  const key = `${repo}\0${base ?? ''}`;
   const hit = cache.get(key);
-  if (hit && now - hit.at < STREAK_CACHE_MS) return { merges: hit.merges, problem: null };
+  if (hit && now - hit.at < maxAge) return { merges: hit.merges, problem: null };
   try {
     const merges = await fetchMerges(repo, base, fetchImpl);
     cache.set(key, { at: now, merges });

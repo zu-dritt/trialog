@@ -14,7 +14,15 @@ import {
 import { MAX_TEXT_BYTES } from '../lib/shared';
 import { parseMessageInput } from '../lib/core';
 
-const html = (text: string) => renderToStaticMarkup(<MessageBody text={text} />);
+/** The «#45» of «Grok in #45» jumps to the quoted message (playground #970); it reads as plain «#45» here. */
+const JUMP = /<a href="\/#m-(\d+)" target="trialog-hub" data-message-ref="\1" title="Go to message #\1">(#\1)<\/a>/g;
+const html = (text: string) => renderToStaticMarkup(<MessageBody text={text} />).replace(JUMP, '$2');
+
+test('the heading of a quote links to the quoted message, in the hub tab', () => {
+  const out = renderToStaticMarkup(<MessageBody text={quoteSelection('Grok', 45, 'hello')} />);
+  assert.match(out, /<a href="\/#m-45" target="trialog-hub" data-message-ref="45" title="Go to message #45">#45<\/a>/);
+  assert.equal((out.match(/<a /g) ?? []).length, 1, 'and nothing else becomes a link');
+});
 /** What a reader sees of rendered HTML: the text, with tags gone and entities decoded. */
 const visible = (markup: string) => markup
   .replace(/<br\s*\/?>\n?/g, '\n').replace(/<\/p>\s*<p>/g, '\n\n').replace(/<[^>]+>/g, '')

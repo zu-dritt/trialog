@@ -30,7 +30,7 @@ const base = (over: Partial<Message> = {}): Message => ({
 const card = (over: Partial<RoadmapItem> = {}): RoadmapItem => ({
   id: 'rm_aaaaaaaa', column: 'next', position: 0, title: 'A weekly MVP card', note: 'from #12',
   owner: null, updated_by: 'david', updated_at: AT, progress: null, status: '', progress_at: null,
-  description: 'A weekly MVP card', attachments: [], reviewer: null, raised_by: null, ...over,
+  description: 'A weekly MVP card', attachments: [], reviewer: null, raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over,
 });
 
 test('the title is the first line, at most 80 characters, and «Message #N» when empty', () => {
@@ -83,6 +83,10 @@ test('only an orchestrator message that names no pull request is buildable, and 
   assert.equal(isBuildableMessage(base(), people, false), true);
   assert.equal(isBuildableMessage(base({ sender: 'claude' }), people, false), false);
   assert.equal(isBuildableMessage(base({ text: 'PR 66 is up' }), people, true), false);
+  // A go from a roadmap card is an answer, not a new idea: no second card from it (#1185).
+  assert.equal(isBuildableMessage(base({ text: '🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now). First claim wins.' }), people, false), false);
+  assert.equal(isBuildableMessage(base({ text: '@claude 🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now)' }), people, false), false);
+  assert.equal(isBuildableMessage(base({ text: 'Build it like this: two sounds' }), people, false), true);
 });
 
 test('the button, a disabled button for an agent, and the chip once a card exists', () => {
@@ -218,6 +222,12 @@ for (const [name, make] of STORES) {
     assert.equal((await buildItFromMessage(store, { messageId: agent.id, by: 'david', humans: ['david'], namesPr: false })).status, 'not_from_orchestrator');
     assert.equal((await buildItFromMessage(store, { messageId: pr.id, by: 'david', humans: ['david'], namesPr: true })).status, 'names_pr');
     assert.equal((await buildItFromMessage(store, { messageId: 999999, by: 'david', humans: ['david'], namesPr: false })).status, 'not_found');
+    // A go is an answer, not an idea: the server refuses to make a card of it, whatever the page shows (#1219).
+    for (const text of ['🚀 Build it! «Sounds» (roadmap card rm_1, now at the top of Now). First claim wins.', '@claude 🚀 Build it! «Sounds» (roadmap card rm_1)', '🚀 Ship it! PR 7']) {
+      const go = await store.add({ sender: 'david', recipient: null, text });
+      assert.ok(go);
+      assert.equal((await buildItFromMessage(store, { messageId: go.id, by: 'david', humans: ['david'], namesPr: false })).status, 'is_go', text);
+    }
     assert.equal((await store.listRoadmap()).length, 0);
 
     const png = { content_type: 'image/png' as const, width: 4, height: 3, data: Buffer.from('picture-build-it') };
