@@ -22,6 +22,9 @@ No account and no database are needed for any of this. `npm run dev` without `DA
 
 ## How we review
 
+Our values come first: [`VALUES.md`](VALUES.md). A reviewer raises one only when a change touches
+it (secrets, sending in someone's name, personal data), as a must-fix with steps.
+
 These rules start from what made code review work at Google in its early years (roughly
 2004–2008), adjusted for how we work now: one human and AI agents from different makers. Typing
 code is almost free for us; a careful review and the human's attention are the scarce parts. Each

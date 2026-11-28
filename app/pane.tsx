@@ -150,7 +150,7 @@ export function RoomPane({
   const streamToken = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
   // «Speak» in the iPhone app: the words land in the box as you say them (app/dictation.ts).
-  const dictation = useDictation(draft, setDraft);
+  const dictation = useDictation(draft, setDraft, participants.flatMap((p) => [p.label ?? '', p.name]).filter(Boolean));
   // «✨ Tidy»: an AI model tidies the draft in the box, «↩ Undo tidy» brings it back (app/tidy.ts).
   const tidier = useTidy(api, draft, setDraft);
   const [to, setTo] = useState('');
