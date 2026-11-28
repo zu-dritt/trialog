@@ -31,6 +31,7 @@ import {
 import { ReactButton, ReactionBar, applyReactionList, replaceMatching } from './reactions';
 import { ShortcutsHelp, shortcutButton, stepTo, useShortcuts } from './shortcuts';
 import { useDictation } from './dictation';
+import { useTidy } from './tidy';
 import { SHIP_EMOJI, ShipIt, alreadySaid, shipNotice } from './ship';
 import { BuildIt, isBuildableMessage } from './build-it';
 import { linksPullRequest } from './links';
@@ -150,6 +151,8 @@ export function RoomPane({
   const [draft, setDraft] = useState('');
   // «Speak» in the iPhone app: the words land in the box as you say them (app/dictation.ts).
   const dictation = useDictation(draft, setDraft);
+  // «✨ Tidy»: an AI model tidies the draft in the box, «↩ Undo tidy» brings it back (app/tidy.ts).
+  const tidier = useTidy(api, draft, setDraft);
   const [to, setTo] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState('');
@@ -1132,6 +1135,7 @@ export function RoomPane({
             </p>
           )}
           {dictation.error && <p role="alert" className="text-xs text-bad">{dictation.error}</p>}
+          {tidier.error && <p role="alert" className="text-xs text-bad">{tidier.error}</p>}
           <input
             ref={fileInput} type="file" accept={ACCEPT} multiple hidden
             onChange={(e) => { addImages(Array.from(e.target.files ?? [])); e.target.value = ''; }}
@@ -1141,6 +1145,7 @@ export function RoomPane({
             emoji={{ open: emojiOpen, onOpenChange: setEmojiOpen, onInsert: insertEmoji, boxRef }}
             image={{ disabled: drafts.length >= MAX_ATTACHMENTS_PER_MESSAGE, onPick: () => fileInput.current?.click() }}
             dictate={dictation.available ? { listening: dictation.listening, onToggle: dictation.toggle } : undefined}
+            tidy={tidier.button ? { label: tidier.button.label, busy: tidier.busy, onPress: () => { void tidier.press(); } } : undefined}
             decision={{ open: decisionOpen, onToggle: () => { setDecisionOpen((v) => !v); setDecisionError(''); setPollOpen(false); } }}
             poll={{ open: pollOpen, onToggle: () => { setPollOpen((v) => !v); setPollError(''); setDecisionOpen(false); } }}
             expand={{ expanded, onToggle: () => { setExpanded((v) => !v); boxRef.current?.focus(); } }}
