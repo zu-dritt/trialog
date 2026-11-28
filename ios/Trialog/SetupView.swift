@@ -52,7 +52,7 @@ struct SetupView: View {
 
     private func save() {
         guard let url = HubAccount.cleanHubURL(hub) else {
-            problem = "That doesn't look like a hub address. Try «hub.example.com»."
+            problem = "I can't use that as the hub's address. Copy it from your browser's address bar while the hub is open (like «hub.example.com»); https:// and the rest are fine."
             return
         }
         let cleaned = HubAccount.cleanToken(token)
