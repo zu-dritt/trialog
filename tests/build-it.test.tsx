@@ -30,7 +30,7 @@ const base = (over: Partial<Message> = {}): Message => ({
 const card = (over: Partial<RoadmapItem> = {}): RoadmapItem => ({
   id: 'rm_aaaaaaaa', column: 'next', position: 0, title: 'A weekly MVP card', note: 'from #12',
   owner: null, updated_by: 'david', updated_at: AT, progress: null, status: '', progress_at: null,
-  description: 'A weekly MVP card', attachments: [], reviewer: null, raised_by: null, ...over,
+  description: 'A weekly MVP card', attachments: [], reviewer: null, raised_by: null, moved_by: null, moved_at: null, entered_next_at: null, ...over,
 });
 
 test('the title is the first line, at most 80 characters, and «Message #N» when empty', () => {

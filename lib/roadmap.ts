@@ -36,6 +36,11 @@ export interface RoadmapItem {
   reviewer: string | null;
   /** Who added the card, or null for cards from before migrations/019 (playground #670). Never changed by an edit. */
   raised_by: string | null;
+  /** Who last moved the card (a drag, ↑ ↓, the column menu or Build it; never an edit), and when (migrations/021). Null before. */
+  moved_by: string | null;
+  moved_at: string | null;
+  /** When the card last entered «Next», or null (before migrations/021, or never in Next). */
+  entered_next_at: string | null;
 }
 
 type Fail = { ok: false; status: number; error: string };

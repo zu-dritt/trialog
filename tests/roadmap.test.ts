@@ -436,3 +436,43 @@ test('API: a full description with umlauts and emoji can be saved in an edit (#1
   assert.equal(item.title, 'Grüsse, länger');
   assert.equal(item.description, description);
 });
+
+async function moveAndPickRules(store: Store) {
+  const a = (await store.addRoadmapItem({ column: 'next', title: 'A', note: '', owner: null, by: 'grok' }))!;
+  const b = (await store.addRoadmapItem({ column: 'next', title: 'B', note: '', owner: null, by: 'grok' }))!;
+  const later = (await store.addRoadmapItem({ column: 'later', title: 'L', note: '', owner: null, by: 'claude' }))!;
+  assert.ok(a.entered_next_at, 'a card added to Next says when it entered');
+  assert.equal(later.entered_next_at, null, 'not in Next: no time');
+  assert.deepEqual([a.moved_by, a.moved_at], [null, null], 'a new card has not been moved');
+  // An edit is not a move.
+  const edited = (await store.updateRoadmapItem(a.id, { title: 'A2' }, 'david'))!;
+  assert.deepEqual([edited.moved_by, edited.updated_by], [null, 'david']);
+  // A drag (reorder) is: only the cards whose place changed.
+  const order = (await store.reorderRoadmap('next', [b.id, a.id], 'david'))!;
+  assert.deepEqual(order.map((i) => i.moved_by), ['david', 'david']);
+  assert.ok(order.every((i) => i.moved_at));
+  // The column menu is a move too, and entering Next sets the time.
+  const moved = (await store.updateRoadmapItem(later.id, { column: 'next' }, 'david'))!;
+  assert.equal(moved.moved_by, 'david');
+  assert.ok(moved.entered_next_at);
+  // Build it is a move.
+  const started = await store.startRoadmapItem(b.id, 'david');
+  assert.ok(started.status === 'ok' && started.item.moved_by === 'david');
+  // Picks: one per participant, only in Next, replaced, cleared, gone with the card.
+  assert.equal(await store.setRoadmapPick('claude', a.id), true);
+  assert.equal(await store.setRoadmapPick('grok', b.id), false, 'B is in Now now');
+  assert.equal(await store.setRoadmapPick('grok', 'rm_00000000'), false);
+  assert.equal(await store.setRoadmapPick('grok', later.id), true);
+  assert.equal(await store.setRoadmapPick('claude', later.id), true, 'a new pick replaces the old one');
+  assert.deepEqual((await store.listRoadmapPicks()).map((p) => `${p.participant}:${p.item_id}`).sort(), [`claude:${later.id}`, `grok:${later.id}`]);
+  assert.equal(await store.setRoadmapPick('grok', null), true);
+  assert.equal(await store.deleteRoadmapItem(later.id), true);
+  assert.deepEqual(await store.listRoadmapPicks(), [], 'a pick goes with its card');
+}
+
+test('moves and picks (migration 021): a drag, the column menu and Build it are moves, an edit is not; one pick each (memory and PGlite)', async () => {
+  await moveAndPickRules(createMemoryStore());
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await moveAndPickRules(store);
+});
