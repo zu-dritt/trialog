@@ -1687,7 +1687,11 @@ export function createSqlStore(db: Db, blobs: Blobs = createSqlBlobs(), { welcom
         const item = toRoadmap(cur);
         const moved = change.column !== undefined && change.column !== item.column;
         let position = item.position;
-        if (moved) {
+        if (moved && change.column === 'done') {
+          // Done shows the newest first (playground #1086): a finished card goes on top.
+          await tx.query(`UPDATE roadmap_items SET position = position + 1 WHERE col = 'done'`, []);
+          position = 0;
+        } else if (moved) {
           const [{ next }] = await tx.query(`SELECT coalesce(max(position), -1) + 1 AS next FROM roadmap_items WHERE col = $1::text`, [change.column]);
           position = Number(next);
         }
@@ -2648,7 +2652,13 @@ export function createMemoryStore({ blobs = createMemoryBlobs(), now = Date.now,
       if (!item) return null;
       if (change.column !== undefined && change.column !== item.column) {
         const inCol = [...roadmap.values()].filter((i) => i.column === change.column);
-        item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        if (change.column === 'done') {
+          // Done shows the newest first (playground #1086): a finished card goes on top.
+          for (const other of inCol) other.position += 1;
+          item.position = 0;
+        } else {
+          item.position = inCol.length ? Math.max(...inCol.map((i) => i.position)) + 1 : 0;
+        }
         item.column = change.column;
       }
       if (change.title !== undefined) item.title = change.title;
