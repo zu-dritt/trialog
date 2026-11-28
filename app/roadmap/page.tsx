@@ -1,8 +1,8 @@
 'use client';
 
 // /roadmap: the interactive roadmap. It uses the token the hub page saved in this browser; without
-// one it sends the reader to the hub to sign in first. It reads the cards every 20 seconds, so it
-// stays current while it is open next to the hub.
+// one it sends the reader to the hub to sign in first. The cards arrive live (/api/roadmap/stream),
+// so a move by anyone shows within a couple of seconds while it is open next to the hub.
 import { useCallback, useEffect, useState } from 'react';
 import { RoadmapBoard, columnOf, placeAt, shipText } from '../roadmap-board';
 import { useMergedPrs } from '../merged';
@@ -11,9 +11,23 @@ import type { Attachment, Participant } from '../../lib/shared';
 import { uploadRequest, useImageLoader } from '../attachments';
 import { FlightBar } from '../flight';
 import type { NewIdea } from '../compose-idea';
+import { eitherSignal, watchNap } from '../nap';
+import { createSseParser, type SseEvent } from '../../lib/sse';
 
 const TOKEN_KEY = 'collabHubToken';
+/** Only when the live stream can't be had: how often the page asks for the cards instead. */
 const POLL_MS = 20_000;
+/** A stream that lasted less than this failed, rather than ran its course. */
+const STREAM_MIN_MS = 10_000;
+
+/** Waits `ms`, or less when `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); signal.removeEventListener('abort', done); resolve(); };
+    const t = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+}
 
 export default function RoadmapPage() {
   const [token, setToken] = useState<string | null>(null);
@@ -43,8 +57,45 @@ export default function RoadmapPage() {
     if (!token) return undefined;
     void load();
     void api('/api/participants').then((d) => { const p = d as { me?: string; participants: Participant[] }; setParticipants(p.participants); setMe(p.me ?? null); }).catch(() => {});
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, POLL_MS);
-    return () => clearInterval(timer);
+    // The cards arrive live (/api/roadmap/stream), a second or two after any change. A tab hidden
+    // for a while naps, as the hub does, so the database can sleep. When the stream can't be had,
+    // the page asks every 20 seconds until it can.
+    const abort = new AbortController();
+    let conn: AbortController | null = null;
+    const nap = watchNap(document, () => conn?.abort());
+    const run = async () => {
+      while (!abort.signal.aborted) {
+        if (nap.napping) await nap.awake(abort.signal);
+        if (abort.signal.aborted) return;
+        const opened = Date.now();
+        try {
+          conn = new AbortController();
+          const res = await fetch('/api/roadmap/stream', { cache: 'no-store', headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' }, signal: eitherSignal(abort.signal, conn.signal) });
+          if (res.status === 401) { setToken(''); return; }
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          const parser = createSseParser((event: SseEvent) => {
+            if (event.event === 'roadmap') { setItems((JSON.parse(event.data) as { items: RoadmapItem[] }).items); setError(''); }
+          });
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parser.push(decoder.decode(value, { stream: true }));
+          }
+        } catch {
+          if (abort.signal.aborted) return;
+        }
+        // A stream that ran its course (4 minutes) or napped: straight back. One that failed at once: poll a while.
+        if (nap.napping || Date.now() - opened >= STREAM_MIN_MS) continue;
+        for (const until = Date.now() + POLL_MS * 3; !abort.signal.aborted && !nap.napping && Date.now() < until;) {
+          if (!document.hidden) await load();
+          await pause(POLL_MS, abort.signal);
+        }
+      }
+    };
+    void run();
+    return () => { abort.abort(); nap.stop(); };
   }, [token, load, api]);
 
   useEffect(() => {

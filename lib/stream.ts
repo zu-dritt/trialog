@@ -310,3 +310,93 @@ export function createEventStream(options: StreamOptions): ReadableStream<Uint8A
     },
   });
 }
+
+/** How often the roadmap's stream asks for the roadmap's fingerprint: often enough to feel instant. */
+export const ROADMAP_INTERVAL_MS = 2_000;
+
+export interface RoadmapStreamOptions {
+  store: Store;
+  signal?: AbortSignal;
+  intervalMs?: number;
+  heartbeatMs?: number;
+  maxMs?: number;
+  now?: () => number;
+}
+
+/**
+ * The roadmap page's live stream (it used to ask every 20 seconds). Events, each with JSON data:
+ *   roadmap   {"items": [RoadmapItem, …]}   every card, at the start and after every change
+ *   bye       {"reason": "…"}              the server is ending the stream; reconnect
+ *   error     {"message": "…"}             something failed; the stream ends
+ * Each tick reads one small fingerprint row (Store.roadmapVersion); the cards are read only when it changed.
+ */
+export function createRoadmapStream(options: RoadmapStreamOptions): ReadableStream<Uint8Array> {
+  const { store, signal } = options;
+  const intervalMs = options.intervalMs ?? ROADMAP_INTERVAL_MS;
+  const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+  const maxMs = options.maxMs ?? MAX_STREAM_MS;
+  const now = options.now ?? Date.now;
+  const encoder = new TextEncoder();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  let onAbort: (() => void) | undefined;
+  const stop = () => {
+    closed = true;
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+  };
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const write = (text: string) => { if (!closed) controller.enqueue(encoder.encode(text)); };
+      const end = () => {
+        if (closed) return;
+        stop();
+        try { controller.close(); } catch { /* already closed by the client */ }
+      };
+      const fail = (e: unknown) => {
+        console.error('[trialog] roadmap stream failed:', e instanceof Error ? e.message : e);
+        write(sseEvent('error', { message: 'Server error. Reconnect in a moment.' }));
+        end();
+      };
+      onAbort = end;
+      if (signal?.aborted) return end();
+      signal?.addEventListener('abort', onAbort);
+      let version = '';
+      try {
+        // The fingerprint before the cards: a change in between is picked up by the first tick.
+        version = await store.roadmapVersion();
+        write(sseEvent('roadmap', { items: await store.listRoadmap() }));
+      } catch (e) {
+        return fail(e);
+      }
+      const started = now();
+      let lastWrite = now();
+      const tick = async () => {
+        if (closed) return;
+        try {
+          if (now() - started >= maxMs) {
+            write(sseEvent('bye', { reason: 'time limit' }));
+            return end();
+          }
+          const next = await store.roadmapVersion();
+          if (closed) return;
+          if (next !== version) {
+            version = next;
+            write(sseEvent('roadmap', { items: await store.listRoadmap() }));
+            lastWrite = now();
+          } else if (now() - lastWrite >= heartbeatMs) {
+            write(SSE_PING);
+            lastWrite = now();
+          }
+        } catch (e) {
+          return fail(e);
+        }
+        if (!closed) timer = setTimeout(() => void tick(), intervalMs);
+      };
+      timer = setTimeout(() => void tick(), intervalMs);
+    },
+    cancel() {
+      stop();
+    },
+  });
+}
