@@ -310,3 +310,22 @@ test('«c» opens Compose, but not while typing in a field or with a modifier (#
   assert.match(html, /shortcut: c/);
   assert.match(html, /<kbd[^>]*>c<\/kbd>/);
 });
+
+test('⧉ Duplicate: the same title with «(copy)», description and pictures, no note; from Now it goes to the top of Next', async () => {
+  const { duplicateOf } = await import('../app/roadmap-board');
+  const pic = { id: 'att_1', type: 'image/png', size: 1, width: 1, height: 1 } as never;
+  assert.deepEqual(duplicateOf(card('a', 'next', 0, { title: 'Sound 3', description: 'A soft chime', attachments: [pic], note: 'Claude: on it' })),
+    { column: 'next', title: 'Sound 3 (copy)', description: 'A soft chime', attachments: ['att_1'], top: false });
+  assert.deepEqual(duplicateOf(card('b', 'now', 0, { title: 'Two new sounds' })), { column: 'next', title: 'Two new sounds (copy)', description: '', attachments: [], top: true });
+  const long = duplicateOf(card('c', 'later', 0, { title: 'x'.repeat(80) })).title;
+  assert.equal([...long].length, 80, 'stays within the title limit');
+  assert.ok(long.endsWith('… (copy)'));
+});
+
+test('the ⧉ button: small, on Now, Next and Later, never on Done, and only with the action', () => {
+  const items = [card('rm_n', 'now', 0), card('rm_x', 'next', 0), card('rm_l', 'later', 0), card('rm_d', 'done', 0)];
+  const html = renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {}, duplicate: async () => null }} />);
+  for (const id of ['rm_n', 'rm_x', 'rm_l']) assert.match(html, new RegExp(`data-duplicate="${id}"`));
+  assert.ok(!html.includes('data-duplicate="rm_d"'));
+  assert.ok(!renderToStaticMarkup(<RoadmapBoard items={items} actions={{ place: () => {} }} />).includes('data-duplicate'));
+});

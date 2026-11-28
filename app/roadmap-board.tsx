@@ -4,7 +4,7 @@
 // column or another; on a phone or with the keyboard, use ↑ and ↓, and the column menu. Every
 // change goes to the hub at once, so whoever looks next sees the same order.
 import { Fragment, useState, type DragEvent } from 'react';
-import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
+import { DAY_END_HOUR, DAY_START_HOUR, ROADMAP_COLUMNS, ROADMAP_TITLE_MAX, cardStatus, todayLine, unblockHref, type CardStatus, type RoadmapColumn, type RoadmapItem, type TodayLine } from '../lib/roadmap';
 import { colorOf, labelOf, type Participant } from '../lib/shared';
 import { FlightText, flightAge, flightLinkLabel } from './flight';
 import { MessageImages, type LoadImage } from './attachments';
@@ -67,6 +67,20 @@ export interface BoardActions {
   edit?: (id: string, change: CardEdit) => Promise<boolean>;
   /** Deletes a card; true when it is gone. */
   remove?: (id: string) => Promise<boolean>;
+  /** «⧉ Duplicate» (the orchestrator's idea): adds the copy duplicateOf describes; its id, or null. */
+  duplicate?: (card: RoadmapItem) => Promise<string | null>;
+}
+
+/**
+ * The copy a «⧉ Duplicate» adds, to start a similar card faster: the same title with «(copy)», the
+ * same description and pictures, no note, no owner. It goes right below the original; a copy of a
+ * card in Now goes to the top of Next instead, because nobody is working on it yet.
+ */
+export function duplicateOf(card: Pick<RoadmapItem, 'column' | 'title' | 'description' | 'attachments'>): { column: RoadmapColumn; title: string; description: string; attachments: string[]; top: boolean } {
+  const suffix = ' (copy)';
+  const title = [...card.title].length + suffix.length > ROADMAP_TITLE_MAX ? `${[...card.title].slice(0, ROADMAP_TITLE_MAX - suffix.length - 1).join('')}…${suffix}` : `${card.title}${suffix}`;
+  const fromNow = card.column === 'now';
+  return { column: fromNow ? 'next' : card.column, title, description: card.description, attachments: card.attachments.map((a) => a.id), top: fromNow };
 }
 
 /** Cards that can be edited: not yet started (Next or Later). Now and Done are history in the making. */
@@ -318,6 +332,12 @@ export function RoadmapBoard({ items, participants = [], actions, busy = false, 
                       <span className="flex flex-none flex-col gap-0.5">
                         <button type="button" disabled={busy || index === 0} onClick={() => actions.place(card.id, column, index - 1)} aria-label={`Move «${card.title}» up`} className="cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg disabled:opacity-30">↑</button>
                         <button type="button" disabled={busy || index === cards.length - 1} onClick={() => actions.place(card.id, column, index + 1)} aria-label={`Move «${card.title}» down`} className="cursor-pointer rounded border border-line bg-transparent px-1.5 text-xs leading-5 text-muted hover:text-fg disabled:opacity-30">↓</button>
+                        {actions.duplicate && column !== 'done' && (
+                          // Small and quiet, for the odd time it's needed (the card's own words).
+                          <button type="button" data-duplicate={card.id} disabled={busy} draggable={false} title={column === 'now' ? 'Duplicate: a copy goes to the top of Next' : 'Duplicate: a copy goes right below'} aria-label={`Duplicate «${card.title}»`}
+                            onClick={() => { void actions.duplicate!(card).then((id) => { if (id && column !== 'now' && actions.edit) setEditing(id); }); }}
+                            className="cursor-pointer rounded border border-transparent bg-transparent px-1.5 text-xs leading-5 text-muted opacity-50 hover:border-line hover:text-fg hover:opacity-100 disabled:opacity-20">⧉</button>
+                        )}
                       </span>
                     )}
                   </div>
