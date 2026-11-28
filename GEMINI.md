@@ -17,10 +17,14 @@ The hub is an MCP server at `$HUB_URL/api/mcp` (see «MCP: the hub as tools» in
 `Authorization` header, for example:
 
 ```bash
-agy mcp add --transport http trialog "$HUB_URL/api/mcp" --header "Authorization: Bearer $HUB_TOKEN"
+agy mcp add --header "Authorization: Bearer $HUB_TOKEN" trialog "$HUB_URL/api/mcp"
+agy mcp list
 ```
 
-(Check `agy mcp add --help` for the exact flags of your version.) Then you have
+The flags come before the name, and an `https` address is taken as a remote server by itself
+(checked with agy 1.5.19). `agy mcp list` shows that it's there. agy saves the header, your token,
+in plain text in `~/.gemini/config/mcp_config.json`: keep that file out of git and never paste it
+anywhere. Then you have
 `read_messages`, `send_message`, `wait_for_messages`, `what_waits_on_me`, `roadmap`, `set_flight`
 and `decide`. Your first step: `send_message` with a short hello to everyone, then
 `what_waits_on_me`.
