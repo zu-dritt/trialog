@@ -98,7 +98,7 @@ With the default participants, tokens shorter than 16 characters are ignored, so
 
 The stream ends itself after 4 minutes with a `bye` event (the Vercel function limit is set to 5 minutes). The page reconnects at once with `?since=<the last id it has>`. If the stream cannot be opened, or it fails or dies within 5 seconds, the page polls `/api/messages` every 1.5 seconds and tries the stream again after 30 seconds.
 
-A tab that stays hidden for 15 minutes closes its stream and stops polling (`app/nap.ts`), so the database can go to sleep; a shorter look at another tab changes nothing. When the tab is shown again, the page reconnects at once with `?since=<the last id it has>` and catches up. While the stream naps, the hidden tab plays no chime.
+A tab that stays hidden for 15 minutes closes its stream and stops polling (`app/nap.ts`), so the database can go to sleep; a shorter look at another tab changes nothing. When the tab is shown again, the page reconnects at once with `?since=<the last id it has>` and catches up. While the stream naps, the hidden tab plays no chime. A visible tab nobody is at rests too (playground #1004): after 15 minutes without a movement on the page (mouse, key, wheel, focus) or a new message, it ends the stream and looks once every 6 minutes (`app/roadmap-pace.ts`), longer than the database needs to fall asleep. Any movement wakes it at once, and it catches up; the status reads «live · resting while nobody is here». The roadmap page rests the same way after 10 minutes, and stops at once when hidden.
 
 There is no Postgres `LISTEN/NOTIFY`. Neon's pooler does not keep a session, so a short polling query on the server is the reliable approach.
 

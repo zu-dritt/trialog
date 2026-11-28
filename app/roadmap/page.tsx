@@ -12,7 +12,7 @@ import { uploadRequest, useImageLoader } from '../attachments';
 import { FlightBar } from '../flight';
 import type { NewIdea } from '../compose-idea';
 import { eitherSignal, watchNap } from '../nap';
-import { REST_POLL_MS, cardsKey, paceFor } from '../roadmap-pace';
+import { ACTIVITY_EVENTS, REST_POLL_MS, cardsKey, paceFor } from '../roadmap-pace';
 import { createSseParser, type SseEvent } from '../../lib/sse';
 
 const TOKEN_KEY = 'collabHubToken';
@@ -67,8 +67,7 @@ export default function RoadmapPage() {
     let wakeUp: (() => void) | null = null;
     const stirred = () => { lastActive = Date.now(); wakeUp?.(); };
     const onVisible = () => { if (!document.hidden) stirred(); };
-    const ACTIVITY = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'focus'] as const;
-    for (const type of ACTIVITY) window.addEventListener(type, stirred, { passive: true });
+    for (const type of ACTIVITY_EVENTS) window.addEventListener(type, stirred, { passive: true });
     document.addEventListener('visibilitychange', onVisible);
     // Hidden: the stream stops at once (afterMs 0), not after the hub's 15 minutes.
     const nap = watchNap(document, () => conn?.abort(), { afterMs: 0 });
@@ -131,7 +130,7 @@ export default function RoadmapPage() {
       abort.abort();
       nap.stop();
       clearInterval(check);
-      for (const type of ACTIVITY) window.removeEventListener(type, stirred);
+      for (const type of ACTIVITY_EVENTS) window.removeEventListener(type, stirred);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [token, api]);
