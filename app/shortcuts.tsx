@@ -4,9 +4,10 @@
 //   j / k   next (newer) / previous (older) message      r   reply to the selected message
 //   n       to the message box                           /   to search
 //   ?       this list                                    Esc close the list, then clear the selection
+//   g 966 ↵ go to message #966, in whichever room it is (playground #970)
 // They never fire while you type (in a text box, a field or anything editable), and never with
 // Ctrl, ⌘ or Alt held, so the browser's own shortcuts keep working.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ShortcutAction = 'next' | 'previous' | 'reply' | 'compose' | 'search' | 'help' | 'escape';
 
@@ -16,6 +17,7 @@ export const SHORTCUTS: readonly { keys: string; action: string }[] = [
   { keys: 'r', action: 'Reply to the selected message' },
   { keys: 'n', action: 'Write a message' },
   { keys: '/', action: 'Search' },
+  { keys: 'g 966 ↵', action: 'Go to message #966' },
   { keys: '?', action: 'Show these shortcuts' },
   { keys: 'Esc', action: 'Close this list, then clear the selection' },
 ];
@@ -76,6 +78,73 @@ export function useShortcuts(enabled: boolean, handle: (action: ShortcutAction) 
   }, [enabled]);
 }
 
+/**
+ * «g», then the number, then Enter: go to that message (playground #970). `digits` is null when no
+ * «g» is pending. Backspace takes a digit back; Esc, or any other key, gives up.
+ */
+export const GO_TO_MAX_DIGITS = 7;
+export function goToStep(digits: string | null, e: KeyLike): { digits: string | null; go?: number; handled: boolean } {
+  if (digits === null) {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || typing(e.target)) return { digits: null, handled: false };
+    return e.key === 'g' || e.key === 'G' ? { digits: '', handled: true } : { digits: null, handled: false };
+  }
+  // Focus moved into a text box meanwhile (a click, Tab): the keys are text now, not ours (Grok's should-fix on PR 120).
+  if (typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return { digits: null, handled: false };
+  if (/^\d$/.test(e.key)) return { digits: digits.length < GO_TO_MAX_DIGITS ? digits + e.key : digits, handled: true };
+  if (e.key === 'Backspace') return { digits: digits.slice(0, -1), handled: true };
+  if (e.key === 'Enter') {
+    const id = Number(digits);
+    return digits && id > 0 ? { digits: null, go: id, handled: true } : { digits: null, handled: true };
+  }
+  if (e.key === 'Escape') return { digits: null, handled: true };
+  if (e.key === 'Shift') return { digits, handled: false };
+  return { digits: null, handled: false };
+}
+
+/** How long a «g» waits for its number before it gives up. */
+export const GO_TO_TIMEOUT_MS = 6000;
+
+/**
+ * Listens for «g 966 ↵» on the page. Its listener runs before the others (capture), so while a
+ * number is being typed, Esc and the digits don't also reach j/k/Esc of the panes. Returns the digits
+ * typed so far (null: nothing pending), for a small hint on screen.
+ */
+export function useGoTo(enabled: boolean, onGo: (id: number) => void): string | null {
+  const [digits, setDigits] = useState<string | null>(null);
+  const state = useRef<string | null>(null);
+  const goRef = useRef(onGo);
+  goRef.current = onGo;
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const set = (d: string | null) => {
+      state.current = d;
+      setDigits(d);
+      clearTimeout(timer);
+      if (d !== null) timer = setTimeout(() => set(null), GO_TO_TIMEOUT_MS);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const step = goToStep(state.current, e);
+      if (step.digits !== state.current) set(step.digits);
+      if (step.handled) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (step.go !== undefined) goRef.current(step.go);
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('keydown', onKey, true); clearTimeout(timer); };
+  }, [enabled]);
+  return digits;
+}
+
+/** The hint while a «g» waits for its number. */
+export function GoToHint({ digits }: { digits: string | null }) {
+  if (digits === null) return null;
+  return (
+    <div role="status" data-go-to className="pointer-events-none fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-line bg-panel px-3 py-1.5 font-mono text-sm shadow-lg">
+      Go to #{digits}<span className="animate-pulse">▍</span> <span className="font-sans text-xs text-muted">↵ to go · Esc to cancel</span>
+    </div>
+  );
+}
+
 /** The «?» list. */
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   // A real dialog (Grok's nits on PR 79): focus moves into it and stays there, and Esc closes it
@@ -109,7 +178,7 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
           <tbody>
             {SHORTCUTS.map((s) => (
               <tr key={s.keys}>
-                <td className="w-16 py-1 pr-3"><kbd className="rounded border border-line bg-[#2a2f3a] px-1.5 py-0.5 font-mono text-xs">{s.keys}</kbd></td>
+                <td className="w-20 whitespace-nowrap py-1 pr-3"><kbd className="rounded border border-line bg-[#2a2f3a] px-1.5 py-0.5 font-mono text-xs">{s.keys}</kbd></td>
                 <td className="py-1">{s.action}</td>
               </tr>
             ))}

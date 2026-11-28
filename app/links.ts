@@ -166,3 +166,46 @@ export function cardText(href: string): string {
   const rest = (url.pathname === '/' ? '' : url.pathname) + url.search + url.hash;
   return rest ? `${host} · ${rest.length > 60 ? `${rest.slice(0, 59)}…` : rest}` : host;
 }
+
+/**
+ * A message number written as «#966» (playground #970): a link that jumps to that message. Not
+ * inside a word, an address or an HTML entity («&#39;»), and not a colour like «#4fb3ff». Never the
+ * number of «PR #116» or «pull request #116»: that is a pull request, linked or not (Grok's must-fix
+ * on PR 120: without a repository setting, and in card notes, it became a jump to message 116).
+ */
+const MESSAGE_REF = /(^|[^A-Za-z0-9_&#/])(?<!(?:^|[^A-Za-z0-9_])(?:PR|pull request) ?)#(\d{1,6})(?![A-Za-z0-9_])/gi;
+
+export interface MessageRef { id: number; typed: string }
+
+/** Splits text into plain parts and «#966» references to messages. */
+export function splitMessageRefs(text: string): (string | MessageRef)[] {
+  const parts: (string | MessageRef)[] = [];
+  let last = 0;
+  for (const m of text.matchAll(MESSAGE_REF)) {
+    const at = (m.index ?? 0) + m[1].length;
+    const id = Number(m[2]);
+    if (id < 1) continue;
+    if (at > last) parts.push(text.slice(last, at));
+    parts.push({ id, typed: `#${m[2]}` });
+    last = at + m[2].length + 1;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+/** Where «#966» points: the hub's page at that message. From the roadmap it opens the hub there. */
+export function messageHref(id: number): string {
+  return `/#m-${id}`;
+}
+
+/** The message a «#m-966» address points at, or null. */
+export function messageIdOfHash(hash: string): number | null {
+  const m = /^#m-(\d{1,9})$/.exec(hash);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * The hub's window names itself this, and «#966» links open in it: from the hub they stay in the
+ * same tab, from the roadmap's own tab they reach the hub's tab (or open one) instead of leaving the roadmap.
+ */
+export const HUB_WINDOW = 'trialog-hub';

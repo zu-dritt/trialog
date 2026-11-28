@@ -7,7 +7,7 @@
 // On a phone only the dots and names fit; a tap on a name shows its text as a tooltip (title).
 // «⇅» moves the strip between the top and right above the message box, where the eyes are.
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { REPO, shortLabel } from './links';
+import { HUB_WINDOW, REPO, messageHref, shortLabel, splitMessageRefs } from './links';
 import { allMerged, settledByMerge, useMergedPrs } from './merged';
 import { FLIGHT_QUIET_MINUTES, colorOf, labelOf, type Flight, type Participant } from '../lib/shared';
 
@@ -117,7 +117,10 @@ export function FlightText({ text, hidden = false }: { text: string; hidden?: bo
   const parts = text.split(/(https?:\/\/[^\s<>«»"]+[^\s<>«»".,;:!?)])/);
   return <>{parts.map((p, i) => (i % 2
     ? <a key={i} href={p} tabIndex={hidden ? -1 : undefined} target="_blank" rel="noopener noreferrer" title={p} className="underline decoration-dotted underline-offset-2">{flightLinkLabel(p)}</a>
-    : p))}</>;
+    : <Fragment key={i}>{splitMessageRefs(p).map((q, j) => (typeof q === 'string'
+      ? q
+      // «#936» in a note or a wait: the hub at that message (playground #970).
+      : <a key={j} href={messageHref(q.id)} target={HUB_WINDOW} data-message-ref={q.id} tabIndex={hidden ? -1 : undefined} title={`Go to message ${q.typed}`} className="underline decoration-dotted underline-offset-2">{q.typed}</a>))}</Fragment>))}</>;
 }
 
 /** The words for a human's entry: what waits on them, or that nothing does. */
