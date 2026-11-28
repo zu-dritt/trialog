@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from
 import { ROADMAP_DESCRIPTION_MAX, ROADMAP_PICTURES_MAX, ROADMAP_TITLE_MAX } from '../lib/roadmap';
 import type { Attachment } from '../lib/shared';
 import { ACCEPT, DraftChips, type Draft } from './attachments';
+import { typing } from './shortcuts';
 
 export interface NewIdea { title: string; description: string; attachments: string[] }
 
@@ -19,6 +20,11 @@ export interface ComposeProps {
   busy?: boolean;
   /** Starts open (for a picture or a test). */
   defaultOpen?: boolean;
+}
+
+/** «c» opens Compose (David, playground #1069, yes in #1403): a plain c, not while typing in a field. */
+export function isComposeKey(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; target?: EventTarget | null }): boolean {
+  return (e.key === 'c' || e.key === 'C') && !e.metaKey && !e.ctrlKey && !e.altKey && !typing(e.target ?? null);
 }
 
 /** What the Send button says, and whether it can be pressed. */
@@ -41,6 +47,17 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (open) titleRef.current?.focus(); }, [open]);
+  useEffect(() => {
+    if (open) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      // Another window (a card being edited) has the keyboard: leave it alone.
+      if (!isComposeKey(e) || document.querySelector('[role="dialog"]')) return;
+      e.preventDefault();
+      setOpen(true);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
   useEffect(() => {
     if (!open) return undefined;
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
@@ -78,9 +95,10 @@ export function ComposeIdea({ onAdd, upload, busy = false, defaultOpen = false }
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-compose="" aria-haspopup="dialog"
-        title="Write an idea in full, with pictures. It goes to the top of Later and wakes no one."
+        title="Write an idea in full, with pictures (shortcut: c). It goes to the top of Later and wakes no one."
         className="mx-2 mb-1 inline-flex cursor-pointer items-center gap-2 self-start rounded-2xl border border-line bg-[#e6e8ee] px-4 py-2 text-sm font-semibold text-[#0f1115] shadow hover:bg-white">
         <span aria-hidden="true">✎</span> Compose{(title || description || drafts.length) ? ' (draft)' : ''}
+        <kbd aria-hidden="true" className="rounded border border-[#0f1115]/30 px-1 font-mono text-[11px] font-normal text-[#0f1115]/60">c</kbd>
       </button>
       {open && (
         <div role="dialog" aria-modal="false" aria-label="New idea for the roadmap" data-compose-window=""
