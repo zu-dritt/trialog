@@ -10,6 +10,8 @@
 /** Protocol versions we answer to. The first one is what we offer when the client asks for another. */
 export const MCP_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26'] as const;
 export const MCP_SERVER = { name: 'trialog-hub', version: '1' };
+/** The most messages one POST may batch (Grok's review of PR 173: 600 calls in one POST fanned out). */
+export const MCP_BATCH_MAX = 20;
 
 /** How a tool reaches the hub: one API call, as the caller. */
 export type HubCall = (method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown) => Promise<{ status: number; data: unknown }>;
@@ -92,9 +94,12 @@ const fail = (id: Id, code: number, message: string): RpcResponse => ({ jsonrpc:
 function badArgs(tool: Tool, args: Record<string, unknown>): string | null {
   for (const name of tool.inputSchema.required ?? []) if (args[name] === undefined || args[name] === '') return `«${name}» is required`;
   for (const [name, value] of Object.entries(args)) {
-    const spec = tool.inputSchema.properties[name] as { type?: string; enum?: string[] } | undefined;
+    // Own properties only: «__proto__» or «constructor» are unknown arguments, not the object's own.
+    const spec = Object.hasOwn(tool.inputSchema.properties, name) ? tool.inputSchema.properties[name] as { type?: string; enum?: string[]; minimum?: number; maximum?: number } : undefined;
     if (!spec) return `unknown argument «${name}»`;
     if (spec.type === 'integer' && !Number.isInteger(value)) return `«${name}» must be a whole number`;
+    if (spec.type === 'integer' && spec.minimum !== undefined && (value as number) < spec.minimum) return `«${name}» must be at least ${spec.minimum}`;
+    if (spec.type === 'integer' && spec.maximum !== undefined && (value as number) > spec.maximum) return `«${name}» must be at most ${spec.maximum}`;
     if (spec.type === 'string' && typeof value !== 'string') return `«${name}» must be text`;
     if (spec.enum && !spec.enum.includes(value as string)) return `«${name}» must be one of ${spec.enum.join(', ')}`;
   }
@@ -134,7 +139,13 @@ export async function handleMcp(message: unknown, call: HubCall): Promise<RpcRes
       if (typeof args !== 'object' || Array.isArray(args)) return fail(id, -32602, 'arguments must be an object');
       const bad = badArgs(tool, args);
       if (bad) return reply(id, { content: [{ type: 'text', text: bad }], isError: true });
-      const res = await tool.run(args, call);
+      let res: { status: number; data: unknown };
+      try {
+        res = await tool.run(args, call);
+      } catch {
+        // A tool that throws answers this one call with an error, not the whole request with a 500.
+        return fail(id, -32603, `Internal error in ${tool.name}`);
+      }
       const isError = res.status >= 400;
       const text = isError ? `${res.status}: ${(res.data as { error?: string })?.error ?? 'the hub refused it'}` : JSON.stringify(res.data);
       return reply(id, { content: [{ type: 'text', text }], structuredContent: isError ? undefined : res.data, isError });
