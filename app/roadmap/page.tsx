@@ -221,6 +221,30 @@ export default function RoadmapPage() {
     }
   }, [api, load]);
 
+  // Editing a card in Next or Later (playground #1098): its title and text, or delete it.
+  const edit = useCallback(async (id: string, change: { title: string; description: string }): Promise<boolean> => {
+    setBusy(true);
+    try {
+      await api(`/api/roadmap/${id}`, { method: 'PATCH', body: JSON.stringify(change) });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not saved: ${e.message}`);
+      return false;
+    } finally { setBusy(false); void load(); }
+  }, [api, load]);
+  const remove = useCallback(async (id: string): Promise<boolean> => {
+    setBusy(true);
+    try {
+      await api(`/api/roadmap/${id}`, { method: 'DELETE' });
+      setError('');
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.message !== 'unauthorized') setError(`Not deleted: ${e.message}`);
+      return false;
+    } finally { setBusy(false); void load(); }
+  }, [api, load]);
+
   // A picture for the Compose window: the same upload as a message's (resized, scale noted).
   const upload = useCallback(async (file: Blob, pasted: boolean): Promise<Attachment> => {
     const request = await uploadRequest(file, pasted);
@@ -272,7 +296,7 @@ export default function RoadmapPage() {
         <FlightBar token={token} onUnauthorized={() => setToken('')} participants={participants} position="top" />
       </div>
       {error && <p role="alert" className="mb-2 text-sm text-bad">{error}</p>}
-      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build }} loadImage={loadImage} />
+      <RoadmapBoard merged={merged} items={items} participants={participants} me={me} busy={busy} actions={{ place: (id, c, i) => { void place(id, c, i); }, claim: (id, take) => { void claim(id, take); }, addIdea, upload, ship, build, edit, remove }} loadImage={loadImage} />
     </main>
   );
 }

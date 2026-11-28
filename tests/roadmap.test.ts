@@ -426,3 +426,13 @@ test('API: «🚀 Build it!» is the orchestrator\'s; it posts the go once and m
   assert.equal(all.filter((m) => m.text.includes(`roadmap card ${card.id}`)).length, 1, 'exactly one go in the stream');
   assert.equal((await route.POST(req('david', 'POST', undefined, '/api/roadmap/rm_00000000/build-it'), { params: Promise.resolve({ id: 'rm_00000000' }) })).status, 404);
 });
+
+test('API: a full description with umlauts and emoji can be saved in an edit (#1098)', async () => {
+  const card = ((await (await list.POST(req('david', 'POST', { column: 'later', title: 'Grüsse' }))).json()) as { item: RoadmapItem }).item;
+  const description = 'Grüsse aus Zürich 🚀 '.repeat(200).slice(0, 4000);
+  const res = await one.PATCH(req('david', 'PATCH', { title: 'Grüsse, länger', description }, `/api/roadmap/${card.id}`), { params: Promise.resolve({ id: card.id }) });
+  assert.equal(res.status, 200, 'more than 4 KB of body for 4000 characters');
+  const item = ((await res.json()) as { item: RoadmapItem }).item;
+  assert.equal(item.title, 'Grüsse, länger');
+  assert.equal(item.description, description);
+});
