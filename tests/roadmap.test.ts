@@ -48,7 +48,7 @@ async function sameRules(store: Store) {
   const moved = await store.updateRoadmapItem(a.id, { column: 'done', note: 'shipped' }, 'claude');
   assert.equal(moved?.column, 'done');
   assert.equal(moved?.note, 'shipped');
-  assert.deepEqual(await titles(), ['done:D', 'done:A', 'next:C', 'next:B'], 'a new column puts the card at its end');
+  assert.deepEqual(await titles(), ['done:A', 'done:D', 'next:C', 'next:B'], 'a finished card goes on top of Done (playground #1086); other columns add at the end');
   assert.equal(await store.updateRoadmapItem('rm_00000000', { title: 'x' }, 'claude'), null);
   assert.equal(await store.deleteRoadmapItem(b.id), true);
   assert.equal(await store.deleteRoadmapItem(b.id), false);
@@ -356,4 +356,30 @@ test('a claim or progress moves a card into Now; Done stays Done; clearing progr
   const done = await add('done', 'Already done');
   await progressRoute.PUT(req('david', 'PUT', { progress: 100 }, `/api/roadmap/${done.id}/progress`), ctx(done.id));
   assert.equal(await columnOf(done.id), 'done', 'Done stays Done');
+});
+
+async function doneNewestFirst(store: Store) {
+  const a = (await store.addRoadmapItem({ column: 'now', title: 'Finished first', note: '', owner: null, by: 'claude' }))!;
+  const b = (await store.addRoadmapItem({ column: 'now', title: 'Finished second', note: '', owner: null, by: 'grok' }))!;
+  const c = (await store.addRoadmapItem({ column: 'next', title: 'Finished third', note: '', owner: null, by: 'claude' }))!;
+  await store.updateRoadmapItem(a.id, { column: 'done' }, 'claude');
+  await store.updateRoadmapItem(b.id, { column: 'done' }, 'grok');
+  await store.updateRoadmapItem(c.id, { column: 'done' }, 'claude');
+  const done = (await store.listRoadmap()).filter((i) => i.column === 'done').map((i) => i.title);
+  assert.deepEqual(done, ['Finished third', 'Finished second', 'Finished first'], 'the newest finished card is on top');
+  // Moving out of Done and editing a done card leave the order alone.
+  await store.updateRoadmapItem(b.id, { note: 'live (PR 1)' }, 'grok');
+  assert.deepEqual((await store.listRoadmap()).filter((i) => i.column === 'done').map((i) => i.title)[1], 'Finished second');
+  // Other columns still add at the end.
+  const d = (await store.addRoadmapItem({ column: 'now', title: 'Back to work', note: '', owner: null, by: 'claude' }))!;
+  await store.updateRoadmapItem(d.id, { column: 'next' }, 'claude');
+  const next = (await store.listRoadmap()).filter((i) => i.column === 'next');
+  assert.equal(next[next.length - 1].title, 'Back to work');
+}
+
+test('Done shows the newest first (memory) (playground #1086)', async () => { await doneNewestFirst(createMemoryStore()); });
+test('Done shows the newest first (PGlite) (playground #1086)', async () => {
+  const store = createSqlStore(pgliteDb(new PGlite()));
+  await store.ensure();
+  await doneNewestFirst(store);
 });
