@@ -2,13 +2,24 @@
 
 // «⛔ n for you» in the header (lib/for-you.ts): what waits on the person signed in, in one list.
 // Hidden when nothing waits. A decision jumps to its message in the hub; a card opens the roadmap
-// (or the address in its note); an agent's wait just says what it needs. Asks every 30 seconds
-// while the tab is visible.
+// (or the address in its note); an agent's wait just says what it needs. Asks every 30 seconds,
+// also in a hidden tab until it naps (app/nap.ts), so the «Waiting on you» sound can ring there.
 import { useEffect, useRef, useState } from 'react';
 import type { ForYouItem } from '../lib/for-you';
+import { watchNap } from './nap';
 
 type ApiFn = (path: string, options?: RequestInit) => Promise<Response>;
 export const FOR_YOU_POLL_MS = 30_000;
+
+/** What makes a wait the same one between two polls: its message, card link or text. */
+export function waitKey(item: ForYouItem): string {
+  return item.message ? `decision:${item.message.id}` : `${item.kind}:${item.href ?? item.text}`;
+}
+
+/** How many items are new since the last poll. The first poll is what was already there: 0. */
+export function newWaits(seen: ReadonlySet<string> | null, items: readonly ForYouItem[]): number {
+  return seen ? items.filter((i) => !seen.has(waitKey(i))).length : 0;
+}
 
 export function forYouLabel(n: number): string {
   return `⛔ ${n} for you`;
@@ -35,17 +46,28 @@ export function ForYouList({ items, onMessage }: { items: readonly ForYouItem[];
   );
 }
 
-export function ForYouButton({ api, onMessage }: { api: ApiFn | null; onMessage: (room: string, id: number) => void }) {
+export function ForYouButton({ api, onMessage, onNew }: { api: ApiFn | null; onMessage: (room: string, id: number) => void; onNew?: () => void }) {
   const [items, setItems] = useState<ForYouItem[]>([]);
+  const seen = useRef<Set<string> | null>(null);
+  const heard = useRef(onNew);
+  heard.current = onNew;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!api) return undefined;
     let gone = false;
-    const load = () => api('/api/for-you').then((r) => r.json()).then((d: { items?: ForYouItem[] }) => { if (!gone && Array.isArray(d.items)) setItems(d.items); }, () => {});
+    seen.current = null;
+    const load = () => api('/api/for-you').then((r) => r.json()).then((d: { items?: ForYouItem[] }) => {
+      if (gone || !Array.isArray(d.items)) return;
+      if (newWaits(seen.current, d.items) > 0) heard.current?.();
+      seen.current = new Set(d.items.map(waitKey));
+      setItems(d.items);
+    }, () => {});
     void load();
-    const t = setInterval(() => { if (!document.hidden) void load(); }, FOR_YOU_POLL_MS);
-    return () => { gone = true; clearInterval(t); };
+    // A hidden tab keeps asking until it naps, so the database can still sleep at night.
+    const nap = watchNap(document, () => {});
+    const t = setInterval(() => { if (!nap.napping) void load(); }, FOR_YOU_POLL_MS);
+    return () => { gone = true; clearInterval(t); nap.stop(); };
   }, [api]);
   useEffect(() => {
     if (!open) return undefined;

@@ -3,7 +3,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { forYou } from '../lib/for-you';
-import { ForYouList, forYouLabel } from '../app/for-you';
+import { ForYouList, forYouLabel, newWaits, waitKey } from '../app/for-you';
 import type { RoadmapItem } from '../lib/roadmap';
 
 const people = [
@@ -57,4 +57,12 @@ test('the list in the header', () => {
   const html = renderToStaticMarkup(<ForYouList items={forYou({ ...base, me: 'david' })} onMessage={() => {}} />);
   assert.match(html, /data-kind="decision"[^]*<button/);
   assert.match(html, /href="\/roadmap#rm_wait0000" target="trialog-roadmap"/);
+});
+
+test('the sound rings only for a wait that is new since the last poll, never for what was there on load', () => {
+  const items = forYou({ ...base, me: 'david' });
+  assert.equal(newWaits(null, items), 0, 'the first poll is what was already there');
+  const seen = new Set(items.slice(0, 2).map(waitKey));
+  assert.equal(newWaits(seen, items), 1, 'the card that joined');
+  assert.equal(newWaits(new Set(items.map(waitKey)), items.slice(1)), 0, 'one went away: quiet');
 });
