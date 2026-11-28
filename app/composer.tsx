@@ -178,7 +178,7 @@ export interface ComposerToolsProps {
   /** Only inside the iPhone app (app/dictation.ts): «Speak» while idle, «Stop» while it listens. */
   dictate?: { listening: boolean; onToggle: () => void };
   /** «✨ Tidy» / «↩ Undo tidy» (app/tidy.ts); absent when the hub can't tidy or the box is empty. */
-  tidy?: { label: string; busy: boolean; onPress: () => void };
+  tidy?: { label: string; busy: boolean; onPress: () => void; /** Two or more: a picker next to the button (playground #1440). */ providers?: readonly { id: string; label: string }[]; provider?: string | null; onProvider?: (id: string) => void };
   decision: { open: boolean; onToggle: () => void };
   poll: { open: boolean; onToggle: () => void };
   expand: { expanded: boolean; onToggle: () => void };
@@ -227,6 +227,11 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, tid
           type="button" data-tidy="" className={toolClassName} onClick={tidy.onPress} disabled={tidy.busy}
           title="AI tidies the text in the box (punctuation, filler words). Nothing is sent: you read it first."
         >{tidy.label}</button>
+      )}
+      {tidy && tidy.providers && tidy.providers.length > 1 && tidy.onProvider && (
+        <select data-tidy-provider="" aria-label="Tidy with" title="Which AI tidies your text" value={tidy.provider ?? ''} onChange={(e) => tidy.onProvider!(e.target.value)} className={`${fieldClassName} max-w-[8rem]`}>
+          {tidy.providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
       )}
       <button
         type="button" data-tour="decision" className={toolClassName} onClick={decision.onToggle}
