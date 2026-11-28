@@ -187,6 +187,8 @@ export interface ComposerToolsProps {
   health?: ReactNode;
   /** Open decisions waiting on the person signed in (app/open-decisions.tsx), right of the health chips. Leading pane only. */
   openDecisions?: ReactNode;
+  /** Today's merged-PR count (app/prs-today.tsx), right of the open-decision chip. Leading pane only. */
+  prsToday?: ReactNode;
   /** The look of the recipient picker, and of every button in the row. */
   fieldClassName: string;
   toolClassName: string;
@@ -199,7 +201,8 @@ export interface ComposerToolsProps {
  * them in the same order, because nothing here sets a tab index: the order in the markup is both.
  * On a narrow screen the row wraps, and Send stays at the right of the last line.
  */
-export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, decision, poll, expand, send, guard, health, openDecisions, fieldClassName, toolClassName }: ComposerToolsProps) {
+export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, decision, poll, expand, send, guard, health, openDecisions, prsToday, fieldClassName, toolClassName }: ComposerToolsProps) {
+  const statusChips = Boolean(health || openDecisions || prsToday);
   return (
     <div className="relative flex flex-wrap items-center gap-2">
       <select value={to} onChange={(e) => onTo(e.target.value)} aria-label="Recipient" className={`${fieldClassName} min-w-0 max-w-full`}>
@@ -229,9 +232,10 @@ export function ComposerTools({ to, onTo, recipients, emoji, image, dictate, dec
       {guard}
       {health}
       {openDecisions}
+      {prsToday}
       {/* With the chips the row is full on a computer: the keyboard hint moves into Send's tooltip. */}
-      {!health && !openDecisions && <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>}
-      <button type="submit" className={`${toolClassName} ml-auto flex-none ${health || openDecisions ? '' : 'md:ml-0'}`} disabled={send.disabled} title={health || openDecisions ? 'Enter sends · Shift+Enter for a new line' : undefined}>{send.label}</button>
+      {!statusChips && <span className="ml-auto hidden text-xs text-muted md:inline">Enter sends · Shift+Enter for a new line</span>}
+      <button type="submit" className={`${toolClassName} ml-auto flex-none ${statusChips ? '' : 'md:ml-0'}`} disabled={send.disabled} title={statusChips ? 'Enter sends · Shift+Enter for a new line' : undefined}>{send.label}</button>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { PinnedBar } from './pinned-bar';
 import { Guard } from './guard';
 import { HealthChips } from './health';
 import { OpenDecisionChips } from './open-decisions';
+import { PrsTodayChips } from './prs-today';
 import { insertAtCursor } from './emoji';
 import { MentionColors, MessageBody } from './markdown';
 import { leadingHandle } from './mentions';
@@ -1156,6 +1157,7 @@ export function RoomPane({
                 onAgree={async (cardId) => { await recordDecisionPosition(cardId, 'agree', null); }}
               />
             ) : undefined}
+            prsToday={lead && token ? <PrsTodayChips api={api} /> : undefined}
             fieldClassName={FIELD} toolClassName={TOOL}
           />
         </form>

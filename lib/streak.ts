@@ -71,7 +71,6 @@ export function parseStreakBreak(body: unknown): { ok: true; reason: string } | 
   return { ok: true, reason };
 }
 
-/** Merged pull requests into `base`, oldest first, from GitHub's public API (up to 500). */
 /**
  * Optional: a GitHub token (read-only is enough) lifts the limit from 60 to 5,000 requests an hour.
  * TRIALOG_GITHUB_TOKEN; without it the public API is used.
@@ -81,10 +80,12 @@ export function githubHeaders(env: Record<string, string | undefined> = process.
   return { Accept: 'application/vnd.github+json', 'User-Agent': 'trialog-hub', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 }
 
-export async function fetchMerges(repo: string, base: string, fetchImpl: typeof fetch = fetch, headers: Record<string, string> = githubHeaders()): Promise<Merge[]> {
+/** Merged pull requests, oldest first (up to 500). `base` limits the list to that branch; `null` reads every base. */
+export async function fetchMerges(repo: string, base: string | null, fetchImpl: typeof fetch = fetch, headers: Record<string, string> = githubHeaders()): Promise<Merge[]> {
   const merges: Merge[] = [];
+  const baseQ = base ? `&base=${encodeURIComponent(base)}` : '';
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `https://api.github.com/repos/${repo}/pulls?state=closed&base=${encodeURIComponent(base)}&per_page=100&page=${page}`;
+    const url = `https://api.github.com/repos/${repo}/pulls?state=closed${baseQ}&per_page=100&page=${page}`;
     const res = await fetchImpl(url, { headers, cache: 'no-store' });
     if (res.status === 403 || res.status === 429) throw new Error(`GitHub's hourly limit is reached (${res.status}); set TRIALOG_GITHUB_TOKEN to raise it`);
     if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
@@ -103,11 +104,11 @@ export async function fetchMerges(repo: string, base: string, fetchImpl: typeof 
 
 const cache = new Map<string, { at: number; merges: Merge[] }>();
 
-/** fetchMerges with a five-minute cache per repository and branch; on a failure the last good list is used. */
-export async function cachedMerges(repo: string, base: string, now = Date.now(), fetchImpl: typeof fetch = fetch): Promise<{ merges: Merge[]; problem: string | null }> {
-  const key = `${repo}\0${base}`;
+/** fetchMerges with a cache per repository and branch (`maxAge`, default five minutes); on a failure the last good list is used. */
+export async function cachedMerges(repo: string, base: string | null, now = Date.now(), fetchImpl: typeof fetch = fetch, maxAge = STREAK_CACHE_MS): Promise<{ merges: Merge[]; problem: string | null }> {
+  const key = `${repo}\0${base ?? ''}`;
   const hit = cache.get(key);
-  if (hit && now - hit.at < STREAK_CACHE_MS) return { merges: hit.merges, problem: null };
+  if (hit && now - hit.at < maxAge) return { merges: hit.merges, problem: null };
   try {
     const merges = await fetchMerges(repo, base, fetchImpl);
     cache.set(key, { at: now, merges });
