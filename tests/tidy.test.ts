@@ -110,3 +110,13 @@ test('the picker shows only with two or more providers', async () => {
   assert.match(two, /data-tidy-provider=""[^>]*aria-label="Tidy with"/);
   assert.match(two, /<option value="xai" selected="">Grok<\/option>/);
 });
+
+test('the team\'s names go to the model, so «crack and Claude» becomes «Grok and Claude» (#1455)', async () => {
+  const { teamNames, tidySystem } = await import('../lib/tidy');
+  assert.deepEqual(teamNames(['Grok', 'grok', 'Claude', '', 'Orchestrator', 'david', '<script>', 'x'.repeat(41)]), ['Grok', 'Claude', 'Orchestrator', 'david']);
+  assert.match(tidySystem('message-1', ['Grok', 'Claude']), /People in this team: Grok, Claude\. Dictation often mishears their names/);
+  assert.doesNotMatch(tidySystem('message-1'), /People in this team/, 'no names, no line');
+  const f = fake({ text: 'Grok and Claude, you rock.' });
+  await tidy('crack and Claude you rock', f.client, ['Grok', 'Claude']);
+  assert.match(String((f.calls[0] as { system: string }).system), /People in this team: Grok, Claude/);
+});

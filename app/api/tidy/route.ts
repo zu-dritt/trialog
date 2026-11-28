@@ -1,4 +1,5 @@
 import { authenticate, error, json, readJson, safe } from '../../../lib/http';
+import { loadRoster } from '../../../lib/participants';
 import { TIDY_PER_MINUTE, availableProviders, pickProvider, underLimit } from '../../../lib/tidy';
 
 export const dynamic = 'force-dynamic';
@@ -28,7 +29,9 @@ export const POST = safe(async (request: Request) => {
   const provider = pickProvider(asked, available);
   if (!provider) return error(400, `"provider" must be one of: ${available.map((p) => p.id).join(', ')}.`);
   if (!underLimit(me)) return error(429, `At most ${TIDY_PER_MINUTE} tidies a minute. Your text is unchanged.`, { 'Retry-After': '60' });
-  const result = await provider.run(text);
+  // The team's names and labels, so a misheard name can be put right (playground #1455).
+  const names = loadRoster().participants.flatMap((p) => [p.label ?? '', p.name]);
+  const result = await provider.run(text, names);
   if (!result.ok) return error(result.status, result.error);
   console.log(`[tidy] ${me} provider=${provider.id} chars=${[...text].length} in=${result.usage.input_tokens} out=${result.usage.output_tokens}`);
   return json({ text: result.text, provider: provider.id });

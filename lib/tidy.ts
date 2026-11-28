@@ -14,8 +14,27 @@ export const TIDY_MAX_CHARS = 8000;
 export const TIDY_PER_MINUTE = 20;
 
 /** The system prompt for one request; `tag` wraps the message (random, so the text can't close it). */
-export function tidySystem(tag: string): string {
-  return TIDY_SYSTEM.replaceAll('<message>', `<${tag}>`);
+export function tidySystem(tag: string, names: readonly string[] = []): string {
+  const base = TIDY_SYSTEM.replaceAll('<message>', `<${tag}>`);
+  const known = teamNames(names);
+  // Dictation mishears names it doesn't know («crack and Claude» for «Grok and Claude», playground #1455).
+  return known.length
+    ? `${base}\nPeople in this team: ${known.join(', ')}. Dictation often mishears their names; where a word plainly stands for one of them, write the name.`
+    : base;
+}
+
+/** The names to tell the model and the phone's dictation: plain words, each once, at most 30. */
+export function teamNames(names: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    const n = raw.trim();
+    if (!n || n.length > 40 || !/^[\p{L}\p{N}][\p{L}\p{N} .'-]*$/u.test(n) || seen.has(n.toLowerCase())) continue;
+    seen.add(n.toLowerCase());
+    out.push(n);
+    if (out.length === 30) break;
+  }
+  return out;
 }
 
 export const TIDY_SYSTEM = [
@@ -36,7 +55,8 @@ export interface TidyProvider {
   label: string;
   /** Whether the hub has what this provider needs (its API key). */
   configured(env?: Record<string, string | undefined>): boolean;
-  run(text: string): Promise<TidyResult>;
+  /** `names`: the team's names, so a misheard one can be put right (playground #1455). */
+  run(text: string, names?: readonly string[]): Promise<TidyResult>;
 }
 
 export type TidyResult =
@@ -48,12 +68,12 @@ export type TidyResult =
  * tokens, far more than 8000 characters need (Grok's review of PR 154: a cut-off reply must not
  * happen, and is refused below if it does). The tag name is random per request (his nit).
  */
-export function tidyRequest(text: string, tag = `message-${randomBytes(4).toString('hex')}`): Anthropic.MessageCreateParamsNonStreaming {
+export function tidyRequest(text: string, tag = `message-${randomBytes(4).toString('hex')}`, names: readonly string[] = []): Anthropic.MessageCreateParamsNonStreaming {
   return {
     model: TIDY_MODEL,
     max_tokens: 16000,
     output_config: { effort: 'low' },
-    system: tidySystem(tag),
+    system: tidySystem(tag, names),
     messages: [{ role: 'user', content: `<${tag}>\n${text}\n</${tag}>` }],
   };
 }
@@ -78,12 +98,12 @@ export function checkText(text: string): TidyResult | null {
 }
 
 /** Tidy with Claude Haiku 5.5 (the Anthropic provider). */
-export async function tidy(text: string, client: Pick<Anthropic, 'messages'> = new Anthropic()): Promise<TidyResult> {
+export async function tidy(text: string, client: Pick<Anthropic, 'messages'> = new Anthropic(), names: readonly string[] = []): Promise<TidyResult> {
   const bad = checkText(text);
   if (bad) return bad;
   const input = text.trim();
   try {
-    const response = await client.messages.create(tidyRequest(input));
+    const response = await client.messages.create(tidyRequest(input, undefined, names));
     const tidied = tidiedText(response);
     if (!tidied) return { ok: false, status: 422, error: 'Claude could not tidy this one. Your text is unchanged.' };
     return { ok: true, text: tidied, usage: { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens } };
@@ -111,7 +131,7 @@ export const anthropicProvider: TidyProvider = {
   id: 'anthropic',
   label: 'Claude',
   configured: (env = process.env) => Boolean(env.ANTHROPIC_API_KEY?.trim()),
-  run: (text) => tidy(text),
+  run: (text, names = []) => tidy(text, undefined, names),
 };
 
 /** Every provider the hub knows, in the order the picker shows them. xAI is added next (#1441). */
