@@ -23,13 +23,25 @@ struct HubAccount: Equatable {
     /// The hub's address as typed: https only (http only for a hub on this Mac, for the Simulator),
     /// no path, query or login in it. «hub.example.com» becomes «https://hub.example.com/».
     static func cleanHubURL(_ typed: String) -> URL? {
-        var t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Pasted text often brings things along (playground #1140): invisible characters (zero-width
+        // spaces, word joiners), spaces or line breaks anywhere, and quotes, backticks or «…» around
+        // the address when it was copied from a message. All of that goes.
+        let kept = typed.unicodeScalars.filter {
+            $0.properties.generalCategory != .format && !CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+        var t = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: CharacterSet(charactersIn: "\"'`<>«»‹›“”‘’"))
         if !t.contains("://") { t = "https://" + t }
-        guard var parts = URLComponents(string: t), let host = parts.host, !host.isEmpty,
+        guard var parts = URLComponents(string: t), let rawHost = parts.host, !rawHost.isEmpty,
               parts.user == nil, parts.password == nil else { return nil }
+        // Lowercased, so it matches the page's own origin exactly (the token goes only there).
+        let host = rawHost.lowercased()
         let scheme = parts.scheme?.lowercased()
         let local = host == "localhost" || host == "127.0.0.1"
         guard scheme == "https" || (scheme == "http" && local) else { return nil }
+        // A hub on the internet has a dot in its name («hub.example.com»), not just a word.
+        guard local || host.contains(".") else { return nil }
+        parts.scheme = scheme
+        parts.host = host
         parts.path = "/"
         parts.query = nil
         parts.fragment = nil

@@ -44,3 +44,15 @@ the App ID you registered. `Shared.xcconfig` includes it.
    put it into the hub's Vercel settings, never into chat or this repository.
 3. Create the app in App Store Connect with that bundle id, then upload builds to TestFlight from
    Xcode (Product → Archive), or from the command line with an App Store Connect API key.
+
+## A new TestFlight build
+
+Raise `CURRENT_PROJECT_VERSION` in the project (App Store Connect refuses a number twice), then:
+
+```bash
+ios/scripts/testflight.sh
+```
+
+It archives, signs with the Apple account signed in to Xcode on this Mac, and uploads. Testers of the
+app's internal group get it after Apple's processing, about 5–15 minutes. A new tester accepts the
+TestFlight invitation **on the iPhone** (the mail's «View in TestFlight»), not on a computer.
